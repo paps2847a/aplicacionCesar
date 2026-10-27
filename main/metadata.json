@@ -1,0 +1,6 @@
+{
+  "name": "Casa x Casa POPURRÍ — Logística Territorial & Adhesiones",
+  "description": "Plataforma geoespacial e inteligente para coordinar recorridos casa por casa, micro-clusters de Café Hub, seguimiento conversacional por WhatsApp en 1 clic e integración con Google Workspace y Maps para Hacemos Popurrí (Partido Regeneración).",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

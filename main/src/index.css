@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+    background-color: #F7F6F0;
+  }
+
+  body {
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    background-color: #F7F6F0;
+    color: #262626;
+  }
+}
+
+/* Utilidades de Identidad Gráfica POPURRÍ */
+.popurri-highlight-blue {
+  background-color: #22ABFF;
+  color: #ffffff;
+  padding: 0.1rem 0.45rem;
+  font-weight: 800;
+}
+
+.popurri-highlight-yellow {
+  background-color: #FBF165;
+  color: #262626;
+  padding: 0.1rem 0.45rem;
+  font-weight: 800;
+}
+
+/* Utilidades responsivas para barras de navegación y tablas en mobile/desktop */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
