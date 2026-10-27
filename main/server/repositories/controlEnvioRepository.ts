@@ -103,3 +103,9 @@ export function getAllSentContactKeys(): Set<string> {
   }
   return keys;
 }
+
+export function getControlEnviosCount(): number {
+  const db = getDatabase();
+  const row = db.prepare('SELECT COUNT(*) as total FROM control_envios').get() as { total: number };
+  return row?.total || 0;
+}
