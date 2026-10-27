@@ -1367,12 +1367,17 @@ export function generarCorteEstrategicoLocal(
       ? calcularDuracionActivaRuta(paradasRutaSugerida)
       : duracionCafeHubMin;
 
-    const calcularFinReal = (iniStr: string, paradas: ParadaRuta[], durMin: number): string =>
-      esSede
-        ? '20:30'
-        : modalidadPreferida === 'PUERTA_A_PUERTA' && paradas.length > 0
+    const calcularFinReal = (iniStr: string, paradas: ParadaRuta[], durMin: number): string => {
+      if (esSede) return '20:30';
+      const fin = modalidadPreferida === 'PUERTA_A_PUERTA' && paradas.length > 0
         ? paradas[paradas.length - 1].horaFinVisita
         : sumarMinutosAHora(iniStr, durMin);
+      const finMin = horaAMinutosDelDia(fin);
+      if (finMin > 21 * 60 || finMin < 6 * 60) {
+        return '21:00';
+      }
+      return fin;
+    };
 
     let horaFinReal = calcularFinReal(horaInicioReal, paradasRutaSugerida, duracionTotalMinutos);
 

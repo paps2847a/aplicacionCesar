@@ -14,6 +14,7 @@ import {
   distanciaHaversineMetros,
   estimarMinutosCaminandoCABA,
   resolverCoordenadasPartidaPerfil,
+  normalizarBarrioCABA,
 } from '../geo/cabaLocations';
 import { seleccionarCafesHubPorCercaniaYFranja } from '../geo/cafesHub';
 import { obtenerPartesFechaHoraBA, sumarDiasAFechaBA } from '../calendar/availability';
@@ -83,7 +84,7 @@ export function construirMicroClusters(
   for (const c of candidatos) {
     const fechaContacto = resolverFechaObjetivoContacto(c, ahoraMs);
     const turnoContacto = obtenerTurnoMacroContacto(c);
-    const barrioContacto = (c.barrio || 'Palermo').trim();
+    const barrioContacto = normalizarBarrioCABA((c.barrio || 'Palermo').split('/')[0].trim());
     let mejorGrupo: (typeof gruposRaw)[number] | null = null;
     let menorMinutos = Infinity;
 
@@ -93,7 +94,7 @@ export function construirMicroClusters(
         continue;
       }
       // Nunca mezclar barrios distantes (ej: Palermo con Saavedra) en un mismo circuito
-      if (g.barrioBase.toLowerCase() !== barrioContacto.toLowerCase()) {
+      if (normalizarBarrioCABA(g.barrioBase) !== barrioContacto) {
         continue;
       }
       // Si el contacto tiene fecha explícita y el grupo ya tiene otra fecha explícita distinta, no mezclarlos

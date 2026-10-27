@@ -1,5 +1,5 @@
 import { buscarCafeHubMasCercano } from '../../data/cafesHubCatalog';
-import { geocodificarContactoLocal } from './cabaLocations';
+import { geocodificarContactoLocal, normalizarBarrioCABA } from './cabaLocations';
 import { ModoSaludoMismoDia } from '../../types';
 import {
   CafeHubCercanoCluster,
@@ -52,7 +52,7 @@ export function describirCafeConDistanciaDesdeContacto(
   fraseCafe: string;
   horarioCafe: string;
 } {
-  const barrioNorm = (contact.barrio || 'Palermo').trim();
+  const barrioNorm = normalizarBarrioCABA((contact.barrio || 'Palermo').split('/')[0].trim());
   const geoContacto =
     typeof contact.lat === 'number' && typeof contact.lng === 'number'
       ? { lat: contact.lat, lng: contact.lng }
