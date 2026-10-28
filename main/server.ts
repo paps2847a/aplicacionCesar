@@ -1063,7 +1063,24 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
   } else {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        watch: {
+          ignored: [
+            '**/data/**',
+            '**/wa_session/**',
+            '**/*.db',
+            '**/*.db-wal',
+            '**/*.db-shm',
+            '**/*.journal',
+            '**/*.tmp',
+            '**/*.log',
+            /[\\/]data[\\/]/,
+            /[\\/]wa_session[\\/]/,
+            /\.(db|db-wal|db-shm|tmp|journal)($|[?#])/,
+          ],
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
