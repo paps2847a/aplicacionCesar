@@ -7,6 +7,8 @@ import {
   Columns3,
   MapPin,
   ChevronRight,
+  ChevronDown,
+  ChevronsUpDown,
   Sparkles,
   Users,
   CheckCircle2,
@@ -48,6 +50,39 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   const [selectedBarrio, setSelectedBarrio] = useState<string>('Todos');
   const [activeStageFilter, setActiveStageFilter] = useState<MacroStageKey | 'TODOS'>('TODOS');
   const [viewMode, setViewMode] = useState<'lanes' | 'list' | 'board'>('lanes');
+
+  // Estado de etapas retraíbles (Por defecto TODAS retraídas a pedido del usuario)
+  const [expandedStages, setExpandedStages] = useState<Record<MacroStageKey, boolean>>({
+    nuevos: false,
+    conversacion: false,
+    agendados: false,
+    pausa: false,
+    adheridos: false,
+    descartados: false,
+  });
+
+  const toggleStage = useCallback((stageKey: MacroStageKey) => {
+    setExpandedStages((prev) => ({
+      ...prev,
+      [stageKey]: !prev[stageKey],
+    }));
+  }, []);
+
+  const areAllExpanded = useMemo(() => {
+    return Object.values(expandedStages).every(Boolean);
+  }, [expandedStages]);
+
+  const toggleAllStages = useCallback(() => {
+    const nextState = !Object.values(expandedStages).every(Boolean);
+    setExpandedStages({
+      nuevos: nextState,
+      conversacion: nextState,
+      agendados: nextState,
+      pausa: nextState,
+      adheridos: nextState,
+      descartados: nextState,
+    });
+  }, [expandedStages]);
 
   // Feedback Visual Toast
   const [feedbackToast, setFeedbackToast] = useState<{
@@ -227,7 +262,12 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
               key={stageKey}
               type="button"
               onClick={() => {
-                setActiveStageFilter(isSelected ? 'TODOS' : stageKey);
+                if (isSelected) {
+                  setActiveStageFilter('TODOS');
+                } else {
+                  setActiveStageFilter(stageKey);
+                  setExpandedStages((prev) => ({ ...prev, [stageKey]: true }));
+                }
               }}
               className={`group flex flex-col justify-between rounded-2xl border p-3.5 text-left transition-all duration-200 ${
                 isSelected
@@ -308,6 +348,21 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
             </button>
           )}
 
+          {/* Botón Plegar / Desplegar todas las etapas (Sólo en modo carriles) */}
+          {viewMode === 'lanes' && (
+            <button
+              type="button"
+              onClick={toggleAllStages}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition shadow-2xs"
+              title={areAllExpanded ? 'Plegar todas las etapas' : 'Desplegar todas las etapas'}
+            >
+              <ChevronsUpDown className="h-3.5 w-3.5 text-slate-400" />
+              <span className="hidden sm:inline">
+                {areAllExpanded ? 'Plegar todas' : 'Desplegar todas'}
+              </span>
+            </button>
+          )}
+
           {/* Switch de Vistas: Carriles Horizontales (Lanes) vs Lista (List) vs Tablero (Board) */}
           <div className="flex items-center rounded-xl bg-slate-100 p-1 border border-slate-200/60">
             <button
@@ -357,12 +412,13 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
 
       {/* 3. VISTAS PRINCIPALES */}
 
-      {/* VISTA 1: CARRILES HORIZONTALES POR ETAPA (Recomendada y espaciosa) */}
+      {/* VISTA 1: CARRILES HORIZONTALES POR ETAPA RETRAÍBLES (Por defecto retraídas) */}
       {viewMode === 'lanes' && (
-        <div className="space-y-6">
+        <div className="space-y-4">
           {MACRO_STAGES_ORDER.map((stageKey) => {
             const def = MACRO_STAGES[stageKey];
             const stageContacts = contactsByStage[stageKey];
+            const isExpanded = !!expandedStages[stageKey];
 
             // Si hay un filtro por etapa y no es esta, ocultar
             if (activeStageFilter !== 'TODOS' && activeStageFilter !== stageKey) {
@@ -372,46 +428,81 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
             return (
               <div
                 key={stageKey}
-                className="rounded-3xl border border-slate-200/80 bg-white/50 p-5 shadow-xs space-y-3"
+                className="rounded-3xl border border-slate-200/80 bg-white shadow-xs overflow-hidden transition-all duration-200 hover:shadow-sm"
               >
-                {/* Cabecera de la Etapa */}
-                <div className="flex items-center justify-between border-b border-slate-200/60 pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <span className={`h-3 w-3 rounded-full ${def.dotColor}`} />
-                    <h3 className="text-sm font-black text-slate-900 tracking-tight">
-                      {def.label}
-                    </h3>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-black text-slate-700">
-                      {stageContacts.length}
+                {/* Cabecera Clickeable para Desplegar / Retraer en un Clic */}
+                <button
+                  type="button"
+                  onClick={() => toggleStage(stageKey)}
+                  className="w-full flex items-center justify-between p-4 sm:p-5 text-left transition hover:bg-slate-50/80 select-none group focus:outline-hidden"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span
+                      className={`h-3.5 w-3.5 rounded-full ${def.dotColor} shrink-0 ring-4 ring-slate-100 group-hover:ring-slate-200/70 transition-all`}
+                    />
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h3 className="text-sm font-black text-slate-900 tracking-tight group-hover:text-emerald-700 transition-colors">
+                        {def.label}
+                      </h3>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-black text-slate-700 border border-slate-200/60">
+                        {stageContacts.length}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 hidden lg:block font-medium truncate">
+                      — {def.description}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 shrink-0 ml-3">
+                    <span className="text-[11px] font-bold text-slate-500 hidden sm:inline">
+                      {isExpanded ? 'Plegar etapa' : `Desplegar (${stageContacts.length})`}
                     </span>
-                  </div>
-
-                  <p className="text-xs text-slate-500 hidden sm:block font-medium">
-                    {def.description}
-                  </p>
-                </div>
-
-                {/* Contenedor de Tarjetas Horizontales */}
-                {stageContacts.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-xs text-slate-400 font-medium">
-                    Sin candidatos en la etapa {def.label}
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {stageContacts.map((c) => (
-                      <CandidateCard
-                        key={c.id}
-                        contact={c}
-                        layoutMode="horizontal"
-                        whatsAppReady={whatsAppReady}
-                        isSelected={selectedContact?.id === c.id}
-                        onSelect={(contact) => setSelectedContact(contact)}
-                        onStageChange={handleDirectStageChange}
-                        onSendDirectWA={onSendDirectWA}
+                    <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-slate-100 text-slate-600 group-hover:bg-slate-200/70 transition-colors">
+                      <ChevronDown
+                        className={`h-4 w-4 transition-transform duration-200 ${
+                          isExpanded ? 'rotate-180 text-emerald-600' : 'text-slate-500'
+                        }`}
                       />
-                    ))}
+                    </div>
                   </div>
-                )}
+                </button>
+
+                {/* Contenedor de Tarjetas Horizontales Desplegable */}
+                <AnimatePresence initial={false}>
+                  {isExpanded && (
+                    <motion.div
+                      key={`content-${stageKey}`}
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.22, ease: 'easeInOut' }}
+                      className="overflow-hidden border-t border-slate-100"
+                    >
+                      <div className="p-4 sm:p-5 bg-slate-50/40">
+                        {stageContacts.length === 0 ? (
+                          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-xs text-slate-400 font-medium">
+                            Sin candidatos en la etapa {def.label}
+                          </div>
+                        ) : (
+                          <div className="space-y-2.5">
+                            {stageContacts.map((c) => (
+                              <CandidateCard
+                                key={c.id}
+                                contact={c}
+                                layoutMode="horizontal"
+                                whatsAppReady={whatsAppReady}
+                                isSelected={selectedContact?.id === c.id}
+                                onSelect={(contact) => setSelectedContact(contact)}
+                                onStageChange={handleDirectStageChange}
+                                onSendDirectWA={onSendDirectWA}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             );
           })}
