@@ -18,6 +18,8 @@ import {
 } from './data/estatusPopurriData';
 import {
   aplicarResultadoEnvioAutoAContacto,
+  construirMicroClusters,
+  crearEnlaceWhatsApp,
   deduplicarEventosCalendar,
   exportarContactosACSV,
   fusionarContactosDesdeSheetsConControl,
@@ -33,6 +35,7 @@ import { PlanHoyModernView } from './components/corte/PlanHoyModernView';
 import { WhatsAppWebAutomationPanel } from './components/WhatsAppWebAutomationPanel';
 import { ModernSettingsView } from './components/config/ModernSettingsView';
 import { AutoFirstMessageModal } from './components/AutoFirstMessageModal';
+import { InteractiveMapPanel } from './components/InteractiveMapPanel';
 
 export default function App() {
   // 1. Navegación Principal Serena
@@ -168,6 +171,10 @@ export default function App() {
   const autoCampaignForPanel: AutoFirstMessageCampaign = useMemo(() => {
     return generarColaEnvioAutomaticoPrimerContacto(contacts, defaultAutoConfig, profile);
   }, [contacts, defaultAutoConfig, profile]);
+
+  const microClusters = useMemo(() => {
+    return construirMicroClusters(contacts, 15, 'Todos', profile, ahoraCorteMs);
+  }, [contacts, profile, ahoraCorteMs]);
 
   const todosLosBarrios = useMemo(() => {
     const set = new Set<string>();
@@ -481,6 +488,36 @@ export default function App() {
             onSendDirectWA={handleSendDirectWA}
             onOpenAutoWAModal={() => setShowAutoFirstMessageModal(true)}
           />
+        )}
+
+        {activeTab === 'mapa' && (
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6">
+            <InteractiveMapPanel
+              contacts={contacts}
+              clusters={microClusters}
+              profile={profile}
+              calendarEvents={calendarEvents}
+              onOpenWhatsApp={(c, text) => {
+                if (whatsAppStatus === 'READY') {
+                  void handleSendDirectWA(c.tel || c.telRaw, text || '', c.id, c.nombre, c.barrio);
+                } else {
+                  const url = crearEnlaceWhatsApp(c.tel || c.telRaw, text || '');
+                  window.open(url, '_blank');
+                }
+              }}
+              onSelectContactForEdit={() => {
+                setActiveTab('pipeline');
+              }}
+              onQuickStatusFromMap={(contactOrId, action) => {
+                const id = typeof contactOrId === 'string' ? contactOrId : contactOrId.id;
+                if (action === 'YA_ADHIRIO') {
+                  void handleUpdateContact(id, { adhirio: 'Sí', estadoFlujo: 'YA_ADHIRIO_FIRMA_OK' });
+                } else if (action === 'CONFIRMO_CAFE_HUB' || action === 'PASA_PUERTA_A_PUERTA') {
+                  void handleUpdateContact(id, { estadoFlujo: 'ENCUENTRO_CONFIRMADO' });
+                }
+              }}
+            />
+          </div>
         )}
 
         {activeTab === 'plan_hoy' && (

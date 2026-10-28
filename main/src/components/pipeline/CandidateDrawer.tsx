@@ -28,6 +28,7 @@ import {
 } from '../../domain/contacts/pipelineStages';
 import { generarMensajeContextual } from '../../domain/messaging/messageTemplates';
 import { crearEnlaceWhatsApp } from '../../domain/messaging/greetingsAndTone';
+import { formatAuditDate } from './CandidateCard';
 
 interface CandidateDrawerProps {
   contact: Contact | null;
@@ -78,6 +79,10 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
     }
   }, [contact, selectedTemplate, voiceProfile]);
 
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+
+  const auditDate = formatAuditDate(contact);
+
   const handleStageChange = async (targetStage: MacroStageKey) => {
     let nextEstado: EstadoFlujo = contact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP';
     let nextAdhirio = contact.adhirio;
@@ -113,22 +118,58 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
         break;
     }
 
+    const ahora = new Date();
+    const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+    const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    const auditText = `${ddmm} a las ${hhmm} hs`;
+    const targetDef = MACRO_STAGES[targetStage];
+
+    const baseCom = (contact.comentario || '')
+      .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+      .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+      .trim();
+    const newComentario = baseCom
+      ? `${baseCom} [Modificado el ${auditText} a "${targetDef.shortLabel}"]`
+      : `[Modificado el ${auditText} a "${targetDef.shortLabel}"]`;
+
     await onUpdateContact(contact.id, {
       estadoFlujo: nextEstado,
       adhirio: nextAdhirio,
       rsp: nextRsp,
       primerContactoEnviado: targetStage !== 'nuevos',
+      comentario: newComentario,
+      actualizadoEnAppAt: ahora.toISOString(),
     });
+
+    setFeedbackMsg(`✓ Etapa cambiada a "${targetDef.label}" (${auditText})`);
+    setTimeout(() => setFeedbackMsg(null), 3500);
   };
 
   const handleSaveDetails = async () => {
     setIsSavingDetails(true);
     try {
+      const ahora = new Date();
+      const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+      const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const auditText = `${ddmm} a las ${hhmm} hs`;
+
+      const baseCom = editComentario
+        .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+        .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+        .trim();
+      const newComentario = baseCom
+        ? `${baseCom} [Modificado el ${auditText}]`
+        : `[Modificado el ${auditText}]`;
+
       await onUpdateContact(contact.id, {
         calleOCruce: editCalle.trim(),
-        comentario: editComentario.trim(),
+        comentario: newComentario,
         barrio: editBarrio.trim(),
+        actualizadoEnAppAt: ahora.toISOString(),
       });
+
+      setFeedbackMsg(`✓ Datos guardados en auditoría (${auditText})`);
+      setTimeout(() => setFeedbackMsg(null), 3500);
     } finally {
       setIsSavingDetails(false);
     }
@@ -194,6 +235,12 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
               <p className="text-xs text-slate-500 mt-0.5">
                 {contact.barrio || 'CABA'} · Tel: {contact.tel || contact.telRaw || 'Sin número'}
               </p>
+              {auditDate && (
+                <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1 mt-0.5">
+                  <Clock className="h-2.5 w-2.5 text-slate-400" />
+                  <span>Auditoría: Modificado el {auditDate}</span>
+                </p>
+              )}
             </div>
 
             <button
@@ -203,6 +250,21 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
               <X className="h-5 w-5" />
             </button>
           </div>
+
+          {/* Feedback Visual Toast en Drawer */}
+          <AnimatePresence>
+            {feedbackMsg && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="bg-emerald-50 border-b border-emerald-200 px-6 py-2.5 text-xs font-bold text-emerald-800 flex items-center gap-2"
+              >
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                <span>{feedbackMsg}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="p-6 space-y-6">
             {/* 1. Línea de Vida (Pipeline Stepper Interactivo) */}

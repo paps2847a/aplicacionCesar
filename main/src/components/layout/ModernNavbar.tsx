@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Users,
+  MapPin,
   Calendar,
   Smartphone,
   Settings,
@@ -12,7 +13,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
-export type ModernTabType = 'pipeline' | 'plan_hoy' | 'whatsapp' | 'configuracion';
+export type ModernTabType = 'pipeline' | 'mapa' | 'plan_hoy' | 'whatsapp' | 'configuracion';
 
 interface ModernNavbarProps {
   activeTab: ModernTabType;
@@ -41,6 +42,11 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
       label: 'Candidatos & Etapas',
       icon: Users,
       badge: totalContacts,
+    },
+    {
+      id: 'mapa' as ModernTabType,
+      label: 'Mapa Territorial & Cafés',
+      icon: MapPin,
     },
     {
       id: 'plan_hoy' as ModernTabType,

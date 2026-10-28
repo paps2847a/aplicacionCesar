@@ -83,7 +83,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
   initialModoCola = 'PRIMER_CONTACTO',
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'config_cola' | 'whatsapp_web_directo' | 'monitor_resultados' | 'instructivo_python'
+    'config_cola' | 'whatsapp_web_directo' | 'monitor_resultados'
   >('config_cola');
 
   const [config, setConfig] = useState<AutoFirstMessageConfig>(() => {
@@ -658,7 +658,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
               }`}
             >
               <Clock className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-              <span>1. Cola ({campaign.items.length})</span>
+              <span>1. Configurar Cola ({campaign.items.length})</span>
             </button>
             <button
               onClick={() => setActiveTab('whatsapp_web_directo')}
@@ -669,7 +669,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
               }`}
             >
               <Smartphone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-              <span>⚡ WhatsApp Web Directo</span>
+              <span>2. ⚡ WhatsApp Web Directo</span>
             </button>
             <button
               onClick={() => setActiveTab('monitor_resultados')}
@@ -681,38 +681,21 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
             >
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
               <span>
-                2. Auditoría: OK ({stats.enviadosOk}) · Inexist. ({stats.inexistentes})
+                3. Auditoría: OK ({stats.enviadosOk}) · Inexist. ({stats.inexistentes})
               </span>
-            </button>
-            <button
-              onClick={() => setActiveTab('instructivo_python')}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-extrabold transition ${
-                activeTab === 'instructivo_python'
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'bg-white text-slate-700 hover:bg-slate-200 border border-slate-300'
-              }`}
-            >
-              <Terminal className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
-              <span>3. Bot Python (Opcional)</span>
             </button>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => setActiveTab('whatsapp_web_directo')}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-black text-white shadow-sm hover:bg-emerald-500 transition"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 sm:px-4 py-1.5 sm:py-2 text-[11px] sm:text-xs font-black text-white shadow-sm hover:bg-emerald-500 transition"
             >
               <Smartphone className="h-3.5 w-3.5 shrink-0" />
-              <span>Enviar con WhatsApp Web</span>
-            </button>
-            <button
-              onClick={handleDescargarScriptPython}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-black text-slate-950 shadow-sm hover:bg-amber-300 transition"
-            >
-              <Download className="h-3.5 w-3.5 shrink-0" />
-              <span>Descargar .py</span>
+              <span>Ejecutar con WhatsApp Web</span>
             </button>
           </div>
+        </div>
         </div>
 
         {/* Banner de aviso si existe */}
@@ -733,14 +716,21 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
           {/* TAB 1: CONFIGURACIÓN DE LAS 7 CAPAS ANTI-BLOQUEO Y COLA */}
           {activeTab === 'config_cola' && (
             <>
-              {/* Alerta Diagnóstico + Solución Stealth v2.0 para "Your account on linked devices is restricted right now" */}
-              <div className="rounded-xl border-2 border-amber-400 bg-amber-50/90 p-4 space-y-2.5 shadow-sm">
+              {/* Información de Automatización Nativa WhatsApp Web */}
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4 space-y-2 shadow-xs">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-start sm:items-center gap-2">
-                    <AlertTriangle className="h-5 w-5 text-amber-700 shrink-0 mt-0.5 sm:mt-0" />
-                    <h3 className="text-xs sm:text-sm font-black text-slate-900">
-                      🛡️ Por qué WhatsApp restringió el dispositivo vinculado tras el #167 y cómo lo resuelve Stealth v2.0
-                    </h3>
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-xs">
+                      <Smartphone className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-black text-slate-900">
+                        ⚡ Automatización Integrada con WhatsApp Web (whatsapp-web.js)
+                      </h3>
+                      <p className="text-[11px] text-slate-600 font-medium">
+                        Envío directo en segundo plano con simulación de tipeo humano, pausas automáticas de café y registro en SQLite.
+                      </p>
+                    </div>
                   </div>
                   {onCleanFalseErrors && (
                     <button
@@ -749,43 +739,15 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                         onCleanFalseErrors();
                         handleRegenerarCola();
                         setStatusNotice(
-                          'Se limpiaron los falsos errores de #168, #169 y #170 ocasionados cuando WhatsApp cerró la sesión vinculada.'
+                          'Se verificaron y limpiaron los estados de la cola de contactos.'
                         );
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-slate-900 text-amber-300 hover:bg-slate-800 text-[11px] font-extrabold shrink-0 flex items-center gap-1.5 shadow-sm"
+                      className="px-3 py-1.5 rounded-xl bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 text-[11px] font-extrabold shrink-0 flex items-center gap-1.5 shadow-2xs"
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
-                      Limpiar falsos errores (#168, #169...) en 1 Clic
+                      Revalidar cola
                     </button>
                   )}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px] text-slate-800 leading-relaxed">
-                  <div className="rounded-lg bg-white/95 p-2.5 border border-amber-200">
-                    <p className="font-extrabold text-slate-900">
-                      🔍 Qué detectó Meta en tu corrida de las 05:32 AM:
-                    </p>
-                    <ul className="list-disc pl-4 mt-1 space-y-0.5">
-                      <li>
-                        <strong>Recarga forzada (<code>page.goto</code>):</strong> Abrir cada chat recargando la URL <code>/send?phone=...</code> desconecta el WebSocket y dispara la alerta de bot en sesiones recién vinculadas.
-                      </li>
-                      <li>
-                        <strong>Madrugada (05:32 AM) + N° Internacional (<code>34623031115</code> España) + 516 caracteres con &quot;respondé Baja&quot;:</strong> Enviar un texto largo con pie de marketing a un número extranjero (<code>+34</code>) a las 5:32 AM tras vincular un QR activa el bloqueo preventivo de dispositivos vinculados (dura 6 a 24 hs).
-                      </li>
-                    </ul>
-                  </div>
-                  <div className="rounded-lg bg-emerald-950 text-emerald-50 p-2.5 border border-emerald-800">
-                    <p className="font-extrabold text-amber-300">
-                      ✅ Qué hacer ahora + Mejoras activas en Stealth v2.0:
-                    </p>
-                    <ul className="list-disc pl-4 mt-1 space-y-0.5 text-emerald-100">
-                      <li>
-                        <strong>Hoy (mientras dure el cartel en PC):</strong> No intentes re-escanear el QR por 24 hs. Tu celular principal no tiene ninguna restricción (podés enviar con 1 toque desde tu teléfono).
-                      </li>
-                      <li>
-                        <strong>Nuevo Script Stealth v2.0:</strong> Navega por el router interno SPA (<strong>cero <code>page.goto</code></strong>), usa tu Chrome real ocultando <code>navigator.webdriver</code>, envía <strong>Rompehielos Cortos (&lt;210 chars sin &quot;respondé Baja&quot;)</strong>, filtra números internacionales y tiene <strong>Freno de Emergencia (Circuit Breaker)</strong>.
-                      </li>
-                    </ul>
-                  </div>
                 </div>
               </div>
 
@@ -1450,159 +1412,6 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
               </div>
             </div>
           )}
-
-          {/* TAB 3: INSTRUCTIVO PASO A PASO PARA CONFIGURAR Y USAR PYTHON */}
-          {activeTab === 'instructivo_python' && (
-            <div className="space-y-5">
-              <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-4">
-                <div className="flex items-start gap-3">
-                  <HelpCircle className="h-5 w-5 text-indigo-700 shrink-0 mt-0.5" />
-                  <div className="text-xs text-indigo-950 space-y-1">
-                    <p className="font-black text-sm">
-                      ¿Cómo conviven el envío manual y el envío automatizado con Python?
-                    </p>
-                    <p>
-                      • <strong>Modo Manual (1 clic desde la tabla):</strong> Podés seguir usando el botón verde <strong>&quot;Enviar WA&quot;</strong> en cualquier fila cuando quieras mandar mensajes vos mismo; al hacer clic, el contacto pasa automáticamente a <em>&quot;2. 1er contacto enviado&quot;</em>.
-                    </p>
-                    <p>
-                      • <strong>Modo Automatizado (Python sin intervención tuya):</strong> Cuando quieras programar una tanda automática a una hora determinada (ej. <strong>{config.horaInicio}</strong>) con intervalos humanos no lineales, pausas de café y detección automática de números inexistentes, descargás el script <code>automatizador_wa_popurri.py</code> y lo corrés en tu computadora.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Paso 1 */}
-                <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-black text-amber-400">
-                      PASO 1 (Una sola vez)
-                    </span>
-                    <span className="text-xs font-bold text-slate-500">En tu computadora</span>
-                  </div>
-                  <h4 className="text-sm font-extrabold text-slate-900">
-                    Instalar Python 3 y las librerías Playwright + Requests
-                  </h4>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    Abrí la terminal de tu computadora (<strong>CMD / PowerShell</strong> en Windows o <strong>Terminal</strong> en Mac/Linux) y ejecutá estos dos comandos para instalar el navegador automatizado que mantiene tu sesión de WhatsApp Web abierta:
-                  </p>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 font-mono text-xs text-emerald-300">
-                      <span>pip install playwright requests</span>
-                      <button
-                        onClick={() => copyCommand('pip install playwright requests', 'cmd1')}
-                        className="inline-flex items-center gap-1 rounded bg-slate-800 px-2 py-1 text-[10px] font-sans font-bold text-white hover:bg-slate-700"
-                      >
-                        <Copy className="h-3 w-3" />
-                        {copiedCmd === 'cmd1' ? '¡Copiado!' : 'Copiar'}
-                      </button>
-                    </div>
-                    <div className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 font-mono text-xs text-emerald-300">
-                      <span>playwright install chromium</span>
-                      <button
-                        onClick={() => copyCommand('playwright install chromium', 'cmd2')}
-                        className="inline-flex items-center gap-1 rounded bg-slate-800 px-2 py-1 text-[10px] font-sans font-bold text-white hover:bg-slate-700"
-                      >
-                        <Copy className="h-3 w-3" />
-                        {copiedCmd === 'cmd2' ? '¡Copiado!' : 'Copiar'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Paso 2 */}
-                <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-black text-amber-400">
-                      PASO 2
-                    </span>
-                    <span className="text-xs font-bold text-slate-500">Desde esta ventana</span>
-                  </div>
-                  <h4 className="text-sm font-extrabold text-slate-900">
-                    Configurar la Hora de Inicio y Descargar el Script Preconfigurado
-                  </h4>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    En la pestaña 1 elegí la <strong>Hora de inicio</strong> (actual: <strong>{config.horaInicio}</strong>), el <strong>Nivel de Calentamiento (Warm-up)</strong> y hacé clic en el botón amarillo para descargar <code>automatizador_wa_popurri.py</code>. El archivo ya lleva adentro tu cola de <strong>{campaign.items.length} contactos pendientes de 1er mensaje</strong> (siempre menor a 45) y el vínculo con tu Google Sheets.
-                  </p>
-                  <button
-                    onClick={handleDescargarScriptPython}
-                    className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-amber-400 px-4 py-2.5 text-xs font-black text-slate-950 hover:bg-amber-300 transition shadow-sm"
-                  >
-                    <Download className="h-4 w-4" />
-                    Descargar automatizador_wa_popurri.py ahora
-                  </button>
-                </div>
-
-                {/* Paso 3 */}
-                <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-black text-amber-400">
-                      PASO 3
-                    </span>
-                    <span className="text-xs font-bold text-slate-500">Ejecución automática</span>
-                  </div>
-                  <h4 className="text-sm font-extrabold text-slate-900">
-                    Ejecutar el Script y dejar que envíe solo a la hora programada
-                  </h4>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    En la carpeta donde descargaste el archivo, corré el comando de abajo. Se abrirá una ventana de Chromium con WhatsApp Web (la primera vez escaneás el QR y queda guardado en la carpeta <code>sesion_whatsapp_popurri</code> para no volver a escanearlo):
-                  </p>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 font-mono text-xs text-emerald-300">
-                      <span>python automatizador_wa_popurri.py</span>
-                      <button
-                        onClick={() => copyCommand('python automatizador_wa_popurri.py', 'cmd3')}
-                        className="inline-flex items-center gap-1 rounded bg-slate-800 px-2 py-1 text-[10px] font-sans font-bold text-white hover:bg-slate-700"
-                      >
-                        <Copy className="h-3 w-3" />
-                        {copiedCmd === 'cmd3' ? '¡Copiado!' : 'Copiar'}
-                      </button>
-                    </div>
-                    <div className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 font-mono text-xs text-amber-300">
-                      <span>python automatizador_wa_popurri.py --empezar-ya</span>
-                      <button
-                        onClick={() =>
-                          copyCommand('python automatizador_wa_popurri.py --empezar-ya', 'cmd4')
-                        }
-                        className="inline-flex items-center gap-1 rounded bg-slate-800 px-2 py-1 text-[10px] font-sans font-bold text-white hover:bg-slate-700"
-                      >
-                        <Copy className="h-3 w-3" />
-                        {copiedCmd === 'cmd4' ? '¡Copiado!' : 'Copiar'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Paso 4 */}
-                <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-black text-amber-400">
-                      PASO 4
-                    </span>
-                    <span className="text-xs font-bold text-slate-500">Sincronización y Reporte</span>
-                  </div>
-                  <h4 className="text-sm font-extrabold text-slate-900">
-                    Actualización en Vivo en la App, Google Sheets y SQLite
-                  </h4>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    A medida que envía cada mensaje, el script de Python:
-                  </p>
-                  <ul className="text-xs text-slate-600 space-y-1 list-disc pl-4">
-                    <li>
-                      Marca el número inmediatamente en <code>control_enviados_popurri.db</code> (SQLite) como <strong>Enviado: Sí</strong> para que, si frenás el programa y lo reanudás, salte a los que ya recibieron el mensaje.
-                    </li>
-                    <li>
-                      Detecta si WhatsApp muestra el cartel de <em>&quot;El número no es válido&quot;</em> y lo marca como <strong>NÚMERO INEXISTENTE</strong> (cambiando su estado a <em>&quot;10. Descartado / Baja / N° inexistente&quot;</em> en Google Sheets).
-                    </li>
-                    <li>
-                      Actualiza en vivo esta App y tu Google Sheets (y además genera <code>reporte_envios_popurri.json</code> y <code>.csv</code> que podés importar en la Pestaña 2 en 1 clic).
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
 
         {/* Footer */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-6 py-3">

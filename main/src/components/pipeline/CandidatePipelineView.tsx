@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   Search,
   Filter,
   LayoutGrid,
   List,
+  Columns3,
   MapPin,
   ChevronRight,
   Sparkles,
@@ -11,9 +12,11 @@ import {
   CheckCircle2,
   Clock,
   Send,
+  Layers,
+  Check,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import type { Contact, VoiceProfile } from '../../types';
+import type { Contact, EstadoFlujo, VoiceProfile } from '../../types';
 import {
   getMacroStageForContact,
   MACRO_STAGES,
@@ -44,7 +47,27 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedBarrio, setSelectedBarrio] = useState<string>('Todos');
   const [activeStageFilter, setActiveStageFilter] = useState<MacroStageKey | 'TODOS'>('TODOS');
-  const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
+  const [viewMode, setViewMode] = useState<'lanes' | 'list' | 'board'>('lanes');
+
+  // Feedback Visual Toast
+  const [feedbackToast, setFeedbackToast] = useState<{
+    id: string;
+    message: string;
+    timestamp: string;
+  } | null>(null);
+
+  const showToast = useCallback((message: string) => {
+    const ahora = new Date();
+    const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    setFeedbackToast({
+      id: String(Date.now()),
+      message,
+      timestamp: hhmm,
+    });
+    setTimeout(() => {
+      setFeedbackToast(null);
+    }, 4000);
+  }, []);
 
   // Conteo dinámico por etapa
   const stageCounts = useMemo(() => {
@@ -107,7 +130,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
     });
   }, [contacts, searchQuery, selectedBarrio, activeStageFilter]);
 
-  // Agrupación por columnas para la vista Kanban
+  // Agrupación por etapas
   const contactsByStage = useMemo(() => {
     const groups: Record<MacroStageKey, Contact[]> = {
       nuevos: [],
@@ -124,9 +147,75 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
     return groups;
   }, [filteredContacts]);
 
+  // Handler para cambio directo de etapa con auditoría de fecha y hora
+  const handleDirectStageChange = useCallback(
+    async (contact: Contact, targetStage: MacroStageKey) => {
+      let nextEstado: EstadoFlujo = contact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP';
+      let nextAdhirio = contact.adhirio;
+      let nextRsp = contact.rsp;
+
+      switch (targetStage) {
+        case 'nuevos':
+          nextEstado = 'SIN_CONTACTAR_1ER_MSJ';
+          nextRsp = 'Nuevo';
+          nextAdhirio = 'Pendiente';
+          break;
+        case 'conversacion':
+          nextEstado = '1ER_MSJ_ENVIADO_SIN_RSP';
+          nextRsp = contact.rsp === 'Sí' ? 'Sí' : 'No';
+          nextAdhirio = 'Pendiente';
+          break;
+        case 'agendados':
+          nextEstado = 'ENCUENTRO_CONFIRMADO';
+          nextRsp = 'Sí';
+          nextAdhirio = 'Pendiente';
+          break;
+        case 'pausa':
+          nextEstado = 'POSTERGO_SALUD_O_VIAJE';
+          break;
+        case 'adheridos':
+          nextEstado = 'YA_ADHIRIO_FIRMA_OK';
+          nextAdhirio = 'Sí';
+          nextRsp = 'Sí';
+          break;
+        case 'descartados':
+          nextEstado = 'DESCARTADO_O_BAJA';
+          nextAdhirio = 'No';
+          break;
+      }
+
+      const ahora = new Date();
+      const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+      const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const auditText = `${ddmm} a las ${hhmm} hs`;
+      const targetDef = MACRO_STAGES[targetStage];
+
+      const baseCom = (contact.comentario || '')
+        .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+        .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+        .trim();
+      const newComentario = baseCom
+        ? `${baseCom} [Modificado el ${auditText} a "${targetDef.shortLabel}"]`
+        : `[Modificado el ${auditText} a "${targetDef.shortLabel}"]`;
+
+      await onUpdateContact(contact.id, {
+        estadoFlujo: nextEstado,
+        adhirio: nextAdhirio,
+        rsp: nextRsp,
+        primerContactoEnviado: targetStage !== 'nuevos',
+        comentario: newComentario,
+        actualizadoEnAppAt: ahora.toISOString(),
+      });
+
+      const nom = contact.primerNombre || contact.nombre || `Contacto #${contact.id}`;
+      showToast(`${nom} movido a "${targetDef.label}"`);
+    },
+    [onUpdateContact, showToast]
+  );
+
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6 space-y-6">
-      {/* 1. Barra Superior de Métricas de Etapa (KPI Cards) */}
+      {/* 1. Barra Superior de Métricas de Etapa (KPI Cards con filtro interactivo) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {MACRO_STAGES_ORDER.map((stageKey) => {
           const def = MACRO_STAGES[stageKey];
@@ -204,7 +293,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
             ))}
           </select>
 
-          {/* Reset filter button if active */}
+          {/* Botón limpiar filtros */}
           {(activeStageFilter !== 'TODOS' || selectedBarrio !== 'Todos' || searchQuery) && (
             <button
               onClick={() => {
@@ -219,38 +308,142 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
             </button>
           )}
 
-          {/* View Mode Toggle: Board vs List */}
+          {/* Switch de Vistas: Carriles Horizontales (Lanes) vs Lista (List) vs Tablero (Board) */}
           <div className="flex items-center rounded-xl bg-slate-100 p-1 border border-slate-200/60">
             <button
               type="button"
-              onClick={() => setViewMode('board')}
-              className={`rounded-lg p-1.5 transition ${
-                viewMode === 'board'
-                  ? 'bg-white text-slate-900 shadow-xs'
+              onClick={() => setViewMode('lanes')}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition ${
+                viewMode === 'lanes'
+                  ? 'bg-white text-slate-900 shadow-xs font-black'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
-              title="Vista Tablero Kanban"
+              title="Carriles amplios horizontales por etapa"
             >
-              <LayoutGrid className="h-4 w-4" />
+              <Layers className="h-3.5 w-3.5 text-emerald-600" />
+              <span className="hidden md:inline">Carriles Amplios</span>
             </button>
+
             <button
               type="button"
               onClick={() => setViewMode('list')}
-              className={`rounded-lg p-1.5 transition ${
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition ${
                 viewMode === 'list'
-                  ? 'bg-white text-slate-900 shadow-xs'
+                  ? 'bg-white text-slate-900 shadow-xs font-black'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
-              title="Vista Lista"
+              title="Lista horizontal continua"
             >
-              <List className="h-4 w-4" />
+              <List className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Lista</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode('board')}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition ${
+                viewMode === 'board'
+                  ? 'bg-white text-slate-900 shadow-xs font-black'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+              title="Tablero Kanban de 6 columnas"
+            >
+              <Columns3 className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Kanban</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* 3. Tablero Kanban (Vista Board) */}
-      {viewMode === 'board' ? (
+      {/* 3. VISTAS PRINCIPALES */}
+
+      {/* VISTA 1: CARRILES HORIZONTALES POR ETAPA (Recomendada y espaciosa) */}
+      {viewMode === 'lanes' && (
+        <div className="space-y-6">
+          {MACRO_STAGES_ORDER.map((stageKey) => {
+            const def = MACRO_STAGES[stageKey];
+            const stageContacts = contactsByStage[stageKey];
+
+            // Si hay un filtro por etapa y no es esta, ocultar
+            if (activeStageFilter !== 'TODOS' && activeStageFilter !== stageKey) {
+              return null;
+            }
+
+            return (
+              <div
+                key={stageKey}
+                className="rounded-3xl border border-slate-200/80 bg-white/50 p-5 shadow-xs space-y-3"
+              >
+                {/* Cabecera de la Etapa */}
+                <div className="flex items-center justify-between border-b border-slate-200/60 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className={`h-3 w-3 rounded-full ${def.dotColor}`} />
+                    <h3 className="text-sm font-black text-slate-900 tracking-tight">
+                      {def.label}
+                    </h3>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-black text-slate-700">
+                      {stageContacts.length}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-500 hidden sm:block font-medium">
+                    {def.description}
+                  </p>
+                </div>
+
+                {/* Contenedor de Tarjetas Horizontales */}
+                {stageContacts.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-xs text-slate-400 font-medium">
+                    Sin candidatos en la etapa {def.label}
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {stageContacts.map((c) => (
+                      <CandidateCard
+                        key={c.id}
+                        contact={c}
+                        layoutMode="horizontal"
+                        whatsAppReady={whatsAppReady}
+                        isSelected={selectedContact?.id === c.id}
+                        onSelect={(contact) => setSelectedContact(contact)}
+                        onStageChange={handleDirectStageChange}
+                        onSendDirectWA={onSendDirectWA}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* VISTA 2: LISTA HORIZONTAL CONTINUA */}
+      {viewMode === 'list' && (
+        <div className="space-y-2.5">
+          {filteredContacts.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center text-slate-500">
+              No se encontraron candidatos que coincidan con la búsqueda.
+            </div>
+          ) : (
+            filteredContacts.map((c) => (
+              <CandidateCard
+                key={c.id}
+                contact={c}
+                layoutMode="horizontal"
+                whatsAppReady={whatsAppReady}
+                isSelected={selectedContact?.id === c.id}
+                onSelect={(contact) => setSelectedContact(contact)}
+                onStageChange={handleDirectStageChange}
+                onSendDirectWA={onSendDirectWA}
+              />
+            ))
+          )}
+        </div>
+      )}
+
+      {/* VISTA 3: TABLERO KANBAN DE 6 COLUMNAS COMPACTAS */}
+      {viewMode === 'board' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 items-start">
           {MACRO_STAGES_ORDER.map((stageKey) => {
             const def = MACRO_STAGES[stageKey];
@@ -259,10 +452,10 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
             return (
               <div
                 key={stageKey}
-                className="flex flex-col rounded-2xl border border-slate-200/70 bg-slate-50/70 p-3 min-h-[450px]"
+                className="flex flex-col rounded-2xl border border-slate-200/80 bg-slate-50/60 p-3 shadow-2xs"
               >
-                {/* Column Header */}
-                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-200/60">
+                {/* Cabecera de Columna */}
+                <div className="flex items-center justify-between pb-3 px-1">
                   <div className="flex items-center gap-2">
                     <span className={`h-2.5 w-2.5 rounded-full ${def.dotColor}`} />
                     <h3 className="text-xs font-black text-slate-800">
@@ -274,19 +467,23 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                   </span>
                 </div>
 
-                {/* Contacts List in Column */}
+                {/* Lista de Tarjetas Compactas */}
                 <div className="space-y-3 overflow-y-auto max-h-[calc(100vh-280px)] pr-1">
                   {stageContacts.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
-                      Sin candidatos en esta etapa
+                      Sin candidatos
                     </div>
                   ) : (
                     stageContacts.map((c) => (
                       <CandidateCard
                         key={c.id}
                         contact={c}
+                        layoutMode="compact"
+                        whatsAppReady={whatsAppReady}
                         isSelected={selectedContact?.id === c.id}
                         onSelect={(contact) => setSelectedContact(contact)}
+                        onStageChange={handleDirectStageChange}
+                        onSendDirectWA={onSendDirectWA}
                       />
                     ))
                   )}
@@ -295,37 +492,43 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
             );
           })}
         </div>
-      ) : (
-        /* 4. Vista Lista Compacta */
-        <div className="space-y-2">
-          {filteredContacts.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center text-slate-500">
-              No se encontraron candidatos que coincidan con la búsqueda.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {filteredContacts.map((c) => (
-                <CandidateCard
-                  key={c.id}
-                  contact={c}
-                  isSelected={selectedContact?.id === c.id}
-                  onSelect={(contact) => setSelectedContact(contact)}
-                />
-              ))}
-            </div>
-          )}
-        </div>
       )}
 
-      {/* 5. Inspector Lateral / Candidate Drawer */}
+      {/* 4. Inspector Lateral / Candidate Drawer */}
       <CandidateDrawer
         contact={selectedContact}
         voiceProfile={voiceProfile}
         whatsAppReady={whatsAppReady}
         onClose={() => setSelectedContact(null)}
-        onUpdateContact={onUpdateContact}
+        onUpdateContact={async (id, updates) => {
+          await onUpdateContact(id, updates);
+          const nom = selectedContact?.primerNombre || selectedContact?.nombre || `Contacto #${id}`;
+          showToast(`${nom} actualizado en auditoría`);
+        }}
         onSendDirectWA={onSendDirectWA}
       />
+
+      {/* 5. Feedback Visual Flotante (Toast de Auditoría) */}
+      <AnimatePresence>
+        {feedbackToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 30, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-2xl border border-emerald-300 bg-white px-4 py-3 shadow-xl text-slate-800"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
+              <CheckCircle2 className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-black text-slate-900">{feedbackToast.message}</p>
+              <p className="text-[11px] text-slate-500 font-medium">
+                🕒 Registrado en auditoría a las {feedbackToast.timestamp} hs
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
