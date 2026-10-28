@@ -15,6 +15,7 @@ import type {
 } from './src/types';
 import { getDatabase } from './server/db';
 import { apiRouter } from './server/contactRoutes';
+import { whatsappRouter } from './server/routes/whatsappRoutes';
 import {
   getAllContacts,
   bulkUpsertContacts,
@@ -682,6 +683,9 @@ async function startServer() {
 
   // Registrar Rutas CRUD de Contactos, Eventos y Trazabilidad en SQLite
   app.use('/api', apiRouter);
+
+  // Registrar Rutas de Automatización Directa WhatsApp Web.js
+  app.use('/api/whatsapp', whatsappRouter);
 
   // 1. Ruta de Análisis de Corte con High Thinking (gemini-4-argon con fallback automático a gemini-3.8-flash)
   app.post('/api/gemini/corte', async (req, res) => {

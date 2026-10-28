@@ -14,12 +14,14 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Terminal,
   Upload,
   X,
   XCircle,
 } from 'lucide-react';
+import { WhatsAppWebAutomationPanel } from './WhatsAppWebAutomationPanel';
 import {
   AutoFirstMessageCampaign,
   AutoFirstMessageConfig,
@@ -80,9 +82,9 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
   onCleanFalseErrors,
   initialModoCola = 'PRIMER_CONTACTO',
 }) => {
-  const [activeTab, setActiveTab] = useState<'config_cola' | 'monitor_resultados' | 'instructivo_python'>(
-    'config_cola'
-  );
+  const [activeTab, setActiveTab] = useState<
+    'config_cola' | 'whatsapp_web_directo' | 'monitor_resultados' | 'instructivo_python'
+  >('config_cola');
 
   const [config, setConfig] = useState<AutoFirstMessageConfig>(() => {
     const cupoInicial = sortearCupoSeguroAntiBloqueo(7, 10);
@@ -656,7 +658,18 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
               }`}
             >
               <Clock className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-              <span>1. Cola y 7 Reglas ({campaign.items.length})</span>
+              <span>1. Cola ({campaign.items.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('whatsapp_web_directo')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-extrabold transition ${
+                activeTab === 'whatsapp_web_directo'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'bg-emerald-50 text-emerald-900 hover:bg-emerald-100 border border-emerald-300'
+              }`}
+            >
+              <Smartphone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              <span>⚡ WhatsApp Web Directo</span>
             </button>
             <button
               onClick={() => setActiveTab('monitor_resultados')}
@@ -680,17 +693,24 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
               }`}
             >
               <Terminal className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
-              <span>3. Instructivo Python</span>
+              <span>3. Bot Python (Opcional)</span>
             </button>
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setActiveTab('whatsapp_web_directo')}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-black text-white shadow-sm hover:bg-emerald-500 transition"
+            >
+              <Smartphone className="h-3.5 w-3.5 shrink-0" />
+              <span>Enviar con WhatsApp Web</span>
+            </button>
+            <button
               onClick={handleDescargarScriptPython}
               className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400 px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-black text-slate-950 shadow-sm hover:bg-amber-300 transition"
             >
               <Download className="h-3.5 w-3.5 shrink-0" />
-              <span>Descargar Script (.py)</span>
+              <span>Descargar .py</span>
             </button>
           </div>
         </div>
@@ -1225,7 +1245,17 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
             </>
           )}
 
-          {/* TAB 2: MONITOR DE RESULTADOS Y AUDITORÍA CON GOOGLE SHEETS */}
+          {/* TAB 2: WHATSAPP WEB DIRECTO (whatsapp-web.js) */}
+          {activeTab === 'whatsapp_web_directo' && (
+            <WhatsAppWebAutomationPanel
+              campaign={campaign}
+              config={config}
+              appsScriptUrl={appsScriptUrl}
+              onApplyItemResult={onApplyItemResult}
+            />
+          )}
+
+          {/* TAB 3: MONITOR DE RESULTADOS Y AUDITORÍA CON GOOGLE SHEETS */}
           {activeTab === 'monitor_resultados' && (
             <div className="space-y-5">
               {/* Tarjetas de estado del lote */}
