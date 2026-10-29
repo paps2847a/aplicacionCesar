@@ -45,7 +45,13 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   onSendDirectWA,
   onOpenAutoWAModal,
 }) => {
-  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+
+  // Mantener el contacto seleccionado sincronizado en tiempo real con la lista viva de contactos
+  const selectedContact = useMemo(() => {
+    if (!selectedContactId) return null;
+    return contacts.find((c) => String(c.id) === String(selectedContactId)) || null;
+  }, [contacts, selectedContactId]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedBarrio, setSelectedBarrio] = useState<string>('Todos');
   const [activeStageFilter, setActiveStageFilter] = useState<MacroStageKey | 'TODOS'>('TODOS');
@@ -491,8 +497,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                                 contact={c}
                                 layoutMode="horizontal"
                                 whatsAppReady={whatsAppReady}
-                                isSelected={selectedContact?.id === c.id}
-                                onSelect={(contact) => setSelectedContact(contact)}
+                                isSelected={selectedContactId === c.id}
+                                onSelect={(contact) => setSelectedContactId(contact.id)}
                                 onStageChange={handleDirectStageChange}
                                 onSendDirectWA={onSendDirectWA}
                               />
@@ -523,8 +529,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                 contact={c}
                 layoutMode="horizontal"
                 whatsAppReady={whatsAppReady}
-                isSelected={selectedContact?.id === c.id}
-                onSelect={(contact) => setSelectedContact(contact)}
+                isSelected={selectedContactId === c.id}
+                onSelect={(contact) => setSelectedContactId(contact.id)}
                 onStageChange={handleDirectStageChange}
                 onSendDirectWA={onSendDirectWA}
               />
@@ -571,8 +577,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                         contact={c}
                         layoutMode="compact"
                         whatsAppReady={whatsAppReady}
-                        isSelected={selectedContact?.id === c.id}
-                        onSelect={(contact) => setSelectedContact(contact)}
+                        isSelected={selectedContactId === c.id}
+                        onSelect={(contact) => setSelectedContactId(contact.id)}
                         onStageChange={handleDirectStageChange}
                         onSendDirectWA={onSendDirectWA}
                       />
@@ -590,7 +596,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         contact={selectedContact}
         voiceProfile={voiceProfile}
         whatsAppReady={whatsAppReady}
-        onClose={() => setSelectedContact(null)}
+        onClose={() => setSelectedContactId(null)}
         onUpdateContact={async (id, updates) => {
           await onUpdateContact(id, updates);
           const nom = selectedContact?.primerNombre || selectedContact?.nombre || `Contacto #${id}`;

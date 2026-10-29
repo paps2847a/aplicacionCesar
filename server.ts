@@ -33,6 +33,11 @@ import {
   setSetting,
   getAllSettings,
 } from './server/repositories/settingsRepository';
+import {
+  getEmbeddedAsset,
+  getEmbeddedIndexHtml,
+  hasEmbeddedFrontend,
+} from './server/embeddedAssets';
 
 import { INITIAL_CALENDAR_EVENTS } from './src/data/estatusPopurriData';
 import {
@@ -49,7 +54,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = fs.existsSync(path.join(__dirname, 'data'))
+  ? path.join(__dirname, 'data')
+  : path.join(process.cwd(), 'data');
 const SHARED_STATE_PATH = path.join(DATA_DIR, 'popurri_shared_state.json');
 const TMP_SHARED_STATE_PATH = path.join(os.tmpdir(), 'popurri_shared_state.json');
 
@@ -1045,7 +1052,8 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
     res.status(200).json({ ok: true, status: 'healthy' });
   });
 
-  const distPath = path.join(__dirname, 'dist');
+  const candidateDist = [path.join(__dirname, 'dist'), path.join(process.cwd(), 'dist')];
+  const diskDistPath = candidateDist.find((p) => fs.existsSync(path.join(p, 'index.html')));
   const isDevScript =
     process.env.NODE_ENV === 'development' ||
     process.env.npm_lifecycle_event === 'dev';
@@ -1053,12 +1061,37 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
     process.env.NODE_ENV === 'production' ||
     process.env.npm_lifecycle_event === 'start' ||
     Boolean(process.env.K_SERVICE) ||
+    Boolean(process.env.BUN_STANDALONE) ||
     !isDevScript;
 
-  if (isProd && fs.existsSync(path.join(distPath, 'index.html'))) {
-    app.use(express.static(distPath));
+  if (isProd && diskDistPath) {
+    app.use(express.static(diskDistPath));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(path.join(diskDistPath, 'index.html'));
+    });
+  } else if (isProd && hasEmbeddedFrontend()) {
+    // Modo 100% Autocontenido: El ejecutable sirve el frontend desde su propia memoria (sin requerir carpeta dist)
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+      if (req.path.startsWith('/api')) return next();
+
+      const asset = getEmbeddedAsset(req.path);
+      if (asset) {
+        res.setHeader('Content-Type', asset.contentType);
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        return res.send(asset.buffer);
+      }
+      next();
+    });
+
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) return next();
+      const index = getEmbeddedIndexHtml();
+      if (index) {
+        res.setHeader('Content-Type', index.contentType);
+        return res.send(index.buffer);
+      }
+      res.status(404).send('No frontend found');
     });
   } else {
     const { createServer: createViteServer } = await import('vite');

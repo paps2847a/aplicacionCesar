@@ -46,8 +46,9 @@ export function migrarContactosDesde167SinPrimerContacto(
     // 0a. Corregir contactos que SÍ recibieron el 1er mensaje automático pero quedaron anotados con el falso error
     // "[Intento auto fallido ... Tiempo de espera agotado al abrir el chat]"
     if (
-      /\[Intento auto fallido[^\]]*Tiempo de espera agotado al abrir el chat\]/i.test(comRaw) ||
-      (IDS_ENVIADOS_FALSO_TIMEOUT.has(numId) && /Intento auto fallido/i.test(comRaw))
+      !reparado.actualizadoEnAppAt &&
+      (/\[Intento auto fallido[^\]]*Tiempo de espera agotado al abrir el chat\]/i.test(comRaw) ||
+        (IDS_ENVIADOS_FALSO_TIMEOUT.has(numId) && /Intento auto fallido/i.test(comRaw)))
     ) {
       const comCorregido = comRaw
         .replace(
@@ -69,10 +70,11 @@ export function migrarContactosDesde167SinPrimerContacto(
     // 0b. Corregir contactos donde el navegador se cerró antes de enviar ("Target page, context or browser has been closed")
     // pero habían quedado marcados como primerContactoEnviado: true (#190, #191)
     if (
-      /\[Intento auto fallido[^\]]*(?:Target page, context or browser has been closed|browser has been closed)[^\]]*\]/i.test(
+      !reparado.actualizadoEnAppAt &&
+      (/\[Intento auto fallido[^\]]*(?:Target page, context or browser has been closed|browser has been closed)[^\]]*\]/i.test(
         comRaw
       ) ||
-      (IDS_CERRADOS_ANTES_DE_ENVIAR.has(numId) && (!comRaw || /Intento auto fallido/i.test(comRaw)))
+        (IDS_CERRADOS_ANTES_DE_ENVIAR.has(numId) && (!comRaw || /Intento auto fallido/i.test(comRaw))))
     ) {
       const comLimpio = comRaw.replace(/\[Intento auto fallido[^\]]*\]/gi, '').trim();
       const sinNom = esCeldaSinNombre(reparado.nombre);

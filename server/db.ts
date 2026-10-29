@@ -13,7 +13,9 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.resolve(__dirname, '../data');
+const DATA_DIR = fs.existsSync(path.resolve(__dirname, '../data'))
+  ? path.resolve(__dirname, '../data')
+  : path.resolve(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'popurri.db');
 const LEGACY_JSON_PATH = path.join(DATA_DIR, 'popurri_shared_state.json');
 const TMP_LEGACY_JSON_PATH = path.join(os.tmpdir(), 'popurri_shared_state.json');

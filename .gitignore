@@ -11,4 +11,7 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 *.tmp
+popurri-app*
+*.exe
+test-bundle.js
 

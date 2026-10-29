@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   MapPin,
   Clock,
@@ -35,22 +35,88 @@ interface CandidateCardProps {
   onSendDirectWA?: (phone: string, text: string, contactId: string, nombre: string, barrio: string) => Promise<boolean>;
 }
 
-export function formatAuditDate(contact: Contact): string | null {
-  if (contact.comentario) {
-    const match = contact.comentario.match(/\[Modificado el ([^\]]+)\]/);
-    if (match) return match[1];
-    const matchOld = contact.comentario.match(/\[Último cambio:? ([^\]]+)\]/);
-    if (matchOld) return matchOld[1];
+function parseCommentAuditDate(text: string): Date | null {
+  const match = text.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  if (!match) return null;
+  const dia = parseInt(match[1], 10);
+  const mes = parseInt(match[2], 10) - 1;
+  const anio = match[3] ? parseInt(match[3], 10) : new Date().getFullYear();
+
+  let horas = 0;
+  let minutos = 0;
+  const timeMatch = text.match(/(\d{1,2}):(\d{2})(?:\s*(a\.\s*m\.|p\.\s*m\.|am|pm))?/i);
+  if (timeMatch) {
+    horas = parseInt(timeMatch[1], 10);
+    minutos = parseInt(timeMatch[2], 10);
+    const ampm = timeMatch[3]?.toLowerCase();
+    if (ampm) {
+      if ((ampm.includes('p') || ampm.includes('pm')) && horas < 12) {
+        horas += 12;
+      } else if ((ampm.includes('a') || ampm.includes('am')) && horas === 12) {
+        horas = 0;
+      }
+    }
   }
+
+  const d = new Date(anio, mes, dia, horas, minutos);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+export function formatAuditDate(contact: Contact): string | null {
+  // 1. Extraer la última anotación de modificación en el comentario (la más reciente)
+  let lastCommentAudit: string | null = null;
+  if (contact.comentario) {
+    const matches = Array.from(
+      contact.comentario.matchAll(/\[(?:Modificado el|Último cambio:?)\s*([^\]]+)\]/gi)
+    );
+    if (matches.length > 0) {
+      lastCommentAudit = matches[matches.length - 1][1]
+        .replace(/^(?:Modificado el|Último cambio:?)\s*/i, '')
+        .trim();
+    }
+  }
+
+  // 2. Extraer fecha formateada de actualizadoEnAppAt
+  let appAuditDate: string | null = null;
+  let appDate: Date | null = null;
   if (contact.actualizadoEnAppAt) {
     const d = new Date(contact.actualizadoEnAppAt);
     if (!isNaN(d.getTime())) {
+      appDate = d;
       const ddmm = d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
       const hhmm = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-      return `${ddmm} a las ${hhmm} hs`;
+      appAuditDate = `${ddmm} a las ${hhmm} hs`;
     }
   }
-  return null;
+
+  // Si existe anotación en el comentario
+  if (lastCommentAudit) {
+    if (appDate) {
+      const commentDate = parseCommentAuditDate(lastCommentAudit);
+      if (commentDate) {
+        // Si appDate es estrictamente posterior (por más de 2 minutos) a la fecha del comentario,
+        // significa que hubo un movimiento posterior en la app
+        if (appDate.getTime() - commentDate.getTime() > 120_000) {
+          return appAuditDate;
+        }
+      } else {
+        // Si no pudimos parsear la hora del comentario, comparar día/mes
+        const matchDiaMes = lastCommentAudit.match(/^(\d{1,2})\/(\d{1,2})/);
+        if (matchDiaMes) {
+          const diaCom = parseInt(matchDiaMes[1], 10);
+          const mesCom = parseInt(matchDiaMes[2], 10);
+          const diaApp = appDate.getDate();
+          const mesApp = appDate.getMonth() + 1;
+          if (mesApp > mesCom || (mesApp === mesCom && diaApp > diaCom)) {
+            return appAuditDate;
+          }
+        }
+      }
+    }
+    return lastCommentAudit;
+  }
+
+  return appAuditDate;
 }
 
 export const CandidateCard: React.FC<CandidateCardProps> = ({
@@ -68,6 +134,47 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   const recAction = getRecommendedActionForContact(contact);
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [showStageMenu, setShowStageMenu] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
+  const menuContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showStageMenu) return;
+
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      if (menuContainerRef.current && !menuContainerRef.current.contains(e.target as Node)) {
+        setShowStageMenu(false);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowStageMenu(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown as EventListener);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown as EventListener);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showStageMenu]);
+
+  const toggleStageMenu = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!showStageMenu && menuContainerRef.current) {
+      const rect = menuContainerRef.current.getBoundingClientRect();
+      const spaceBelowWindow = window.innerHeight - rect.bottom;
+      const scrollParent = menuContainerRef.current.closest('.space-y-2\\.5, .space-y-4');
+      const spaceBelowParent = scrollParent
+        ? scrollParent.getBoundingClientRect().bottom - rect.bottom
+        : 999;
+      const minSpace = Math.min(spaceBelowWindow, spaceBelowParent);
+      setOpenUpward(minSpace < 250);
+    }
+    setShowStageMenu((prev) => !prev);
+  };
 
   const cleanComment = (contact.comentario || '')
     .replace(/\[Modificado el [^\]]+\]/g, '')
@@ -97,6 +204,8 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
         whileHover={{ y: -1 }}
         onClick={() => onSelect(contact)}
         className={`group relative cursor-pointer rounded-2xl border bg-white p-5 transition-all duration-200 ${
+          showStageMenu ? 'z-40' : 'z-0'
+        } ${
           isSelected
             ? 'border-emerald-500 ring-2 ring-emerald-500/20 shadow-md'
             : 'border-slate-200/90 shadow-[0_2px_8px_rgba(0,0,0,0.03)] hover:border-slate-300 hover:shadow-md'
@@ -196,25 +305,28 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
           {/* 4. Columna de Acciones Rápidas Directas */}
           <div className="flex flex-col sm:flex-row lg:flex-col items-end justify-between gap-2 shrink-0">
             {/* Stage Badge con Dropdown de cambio rápido */}
-            <div className="relative">
+            <div ref={menuContainerRef} className="relative">
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowStageMenu((prev) => !prev);
-                }}
+                onClick={toggleStageMenu}
                 className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1 text-xs font-black tracking-tight transition shadow-xs hover:opacity-90 ${stageDef.badgeBg} ${stageDef.badgeText} ${stageDef.badgeBorder}`}
               >
                 <span>{stageDef.label}</span>
-                <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                <ChevronDown
+                  className={`h-3.5 w-3.5 opacity-60 transition-transform duration-150 ${
+                    showStageMenu ? 'rotate-180' : ''
+                  }`}
+                />
               </button>
 
               {showStageMenu && (
                 <div
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute right-0 top-full mt-1.5 z-30 w-48 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
+                  className={`absolute right-0 z-50 w-52 rounded-2xl border border-slate-200/90 bg-white p-1.5 shadow-2xl transition-all ${
+                    openUpward ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+                  }`}
                 >
-                  <span className="px-2.5 py-1 text-[10px] font-black uppercase text-slate-400 block">
+                  <span className="px-2.5 py-1 text-[10px] font-black uppercase text-slate-400 block tracking-wider">
                     Mover a etapa:
                   </span>
                   {MACRO_STAGES_ORDER.map((stKey) => {
@@ -231,11 +343,14 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                         className={`w-full flex items-center justify-between rounded-xl px-2.5 py-1.5 text-xs font-bold text-left transition ${
                           isCur
                             ? 'bg-slate-100 text-slate-900 font-black'
-                            : 'text-slate-600 hover:bg-slate-50'
+                            : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                         }`}
                       >
-                        <span>{st.label}</span>
-                        {isCur && <Check className="h-3.5 w-3.5 text-emerald-600" />}
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2 w-2 rounded-full ${st.dotColor} shrink-0`} />
+                          <span>{st.label}</span>
+                        </div>
+                        {isCur && <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" />}
                       </button>
                     );
                   })}

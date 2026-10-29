@@ -24,9 +24,12 @@ import {
   Copy,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   Clock,
   CheckCircle2,
+  X,
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   BloqueAgendaRecomendado,
   CalendarEventItem,
@@ -229,6 +232,8 @@ export function InteractiveMapPanel({
   const [customRouteMessages, setCustomRouteMessages] = useState<Record<string, string>>({});
   const [expandedRouteStopId, setExpandedRouteStopId] = useState<string | null>(null);
   const [copiedMapMsgId, setCopiedMapMsgId] = useState<string | null>(null);
+  const [drawerCluster, setDrawerCluster] = useState<MicroCluster | null>(null);
+  const [changingCafeForClusterId, setChangingCafeForClusterId] = useState<string | null>(null);
 
   const uniqueCalendarEvents = useMemo(
     () => deduplicarEventosCalendar(calendarEvents),
@@ -643,179 +648,170 @@ export function InteractiveMapPanel({
   };
 
   return (
-    <div className="space-y-4 sm:space-y-6 min-w-0">
-      {/* Selector Rápido en Celular / Tablet (<1024px) cuando mode === 'full' */}
-      {mode === 'full' && (
-      <div className="lg:hidden bg-slate-900 text-white p-1.5 rounded-xl grid grid-cols-3 gap-1.5 shadow-sm">
-        <button
-          type="button"
-          onClick={() => setMobileMapSection('map_and_clusters')}
-          className={`py-2 px-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-colors ${
-            mobileMapSection === 'map_and_clusters'
-              ? 'bg-white text-slate-950 shadow-sm'
-              : 'text-slate-300 hover:text-white'
-          }`}
-        >
-          <MapPin className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">Mapa ({visibleContacts.length})</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobileMapSection('clusters_only')}
-          className={`py-2 px-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-colors ${
-            mobileMapSection === 'clusters_only'
-              ? 'bg-amber-400 text-slate-950 shadow-sm'
-              : 'text-amber-300 hover:text-amber-200'
-          }`}
-        >
-          <Coffee className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">Circuitos ({visibleClusters.length})</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobileMapSection('route_only')}
-          className={`py-2 px-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-colors ${
-            mobileMapSection === 'route_only'
-              ? 'bg-emerald-500 text-slate-950 shadow-sm'
-              : 'text-emerald-300 hover:text-emerald-200'
-          }`}
-        >
-          <Navigation className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">Ruta ({hojaDeRuta.length})</span>
-        </button>
-      </div>
-      )}
+    <div className="space-y-5 min-w-0">
+      {/* 1. Barra Unificada Superior: Métricas Territoriales + Filtros + Vista */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 sm:p-4 shadow-xs space-y-3">
+        {/* Fila Superior: Métricas Territoriales en Píldoras + Tab Switcher */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-slate-50 text-slate-800 border border-slate-200/70">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-2xs shadow-emerald-500/40" />
+              <span>{nonAdheredContacts.length} en Territorio</span>
+              <span className="text-slate-400 font-normal">({excludedOnlyBarrioCount} s/calle)</span>
+            </span>
 
-      {/* Controles de Filtro Geoespacial, Punto de Partida (Base o Evento Calendar) y Parámetros */}
-      <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-5 space-y-3 sm:space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] sm:text-xs font-bold bg-emerald-100 text-emerald-900">
-              En Mapa y Circuitos: {nonAdheredContacts.length} con Dirección/Punto en Col. G
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-slate-50 text-slate-800 border border-slate-200/70">
+              <span className="w-2 h-2 rounded-full bg-indigo-500 shadow-2xs shadow-indigo-500/40" />
+              <span>{visibleClusters.length} Circuitos</span>
             </span>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[11px] sm:text-xs font-medium bg-slate-100 text-slate-700">
-              Ocultos ({excludedOnlyBarrioCount} sólo con barrio, sin dirección en Col. G)
+
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-slate-50 text-slate-800 border border-slate-200/70">
+              <Coffee className="w-3.5 h-3.5 text-amber-600" />
+              <span>{visibleCafesHub.length} Cafés HUB</span>
             </span>
-            <span className="hidden md:inline text-xs text-slate-500">
-              Sólo se contemplan personas sin adherir con dirección/punto en Columna G y se agrupan respetando sus fechas.
-            </span>
+
+            <button
+              type="button"
+              onClick={() => setMobileMapSection('route_only')}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200/70 transition"
+              title="Ir a Hoja de Ruta"
+            >
+              <Navigation className="w-3.5 h-3.5 text-sky-600" />
+              <span>Ruta: {hojaDeRuta.length} paradas</span>
+              <span className="text-slate-400 font-mono text-[11px]">({horaSalida} hs)</span>
+            </button>
+          </div>
+
+          {/* Switcher de Vista */}
+          <div className="flex items-center rounded-xl border border-slate-200 bg-slate-100/80 p-0.5 shrink-0 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setMobileMapSection('map_and_clusters')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all ${
+                mobileMapSection !== 'route_only'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Mapa & Circuitos
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileMapSection('route_only')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
+                mobileMapSection === 'route_only'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>Hoja de Ruta</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                mobileMapSection === 'route_only'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-slate-200 text-slate-700'
+              }`}>
+                {hojaDeRuta.length}
+              </span>
+            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 items-end">
-          <div>
-            <label
-              htmlFor="map-barrio-filter"
-              className="block text-xs font-semibold text-slate-700 mb-1"
-            >
-              Filtrar por Barrio (Col. G)
-            </label>
-            <select
-              id="map-barrio-filter"
-              value={selectedBarrio}
-              onChange={(e) => setSelectedBarrio(e.target.value)}
-              className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
-            >
-              <option value="Todos">
-                Todos los barrios ({nonAdheredContacts.length} con dir. en Col. G)
-              </option>
-              {dynamicBarrios.map(([barrio, count]) => (
-                <option key={barrio} value={barrio}>
-                  {barrio} ({count} con dir. en Col. G)
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label
-              htmlFor="map-franja-filter"
-              className="block text-xs font-semibold text-slate-700 mb-1"
-            >
-              Franja Horaria Compatible
-            </label>
-            <select
-              id="map-franja-filter"
-              value={selectedFranja}
-              onChange={(e) => setSelectedFranja(e.target.value)}
-              className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
-            >
-              <option value="Todos">Todas las franjas</option>
-              <option value="Mañana">Mañana (08:30 a 12:30)</option>
-              <option value="Mediodía">Mediodía (12:00 a 15:00)</option>
-              <option value="Tarde">Tarde (15:00 a 18:00)</option>
-              <option value="Vespertino">Vespertino (18:00+)</option>
-            </select>
-          </div>
-
-          <div className="sm:col-span-2 lg:col-span-2">
-            <label
-              htmlFor="map-origen-select"
-              className="block text-xs font-semibold text-slate-700 mb-1"
-            >
-              Punto de Partida (Base o Dirección de Evento en Google Calendar)
-            </label>
-            <select
-              id="map-origen-select"
-              value={origenPersonalizadoId}
-              onChange={(e) => {
-                const val = e.target.value;
-                setOrigenPersonalizadoId(val);
-                if (val !== 'base') {
-                  const ev = uniqueCalendarEvents.find((item) => item.id === val);
-                  if (ev?.endTime) setHoraSalida(ev.endTime);
-                }
-              }}
-              className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
-            >
-              <option value="base">
-                Km 0 Base: {profile.direccionPartida}
-              </option>
-              {uniqueCalendarEvents.map((ev, evIdx) => (
-                <option
-                  key={`opt-cal-${ev.id}-${ev.fecha || ev.fechaISO || ''}-${ev.startTime || ''}-${evIdx}`}
-                  value={ev.id}
-                >
-                  Desde Evento Calendar ({ev.endTime} hs): {ev.summary} —{' '}
-                  {ev.location || 'CABA'}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label
-                htmlFor="map-hora-salida"
-                className="block text-xs font-semibold text-slate-700 mb-1"
+        {/* Fila Inferior: Filtros Territoriales y Capas */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+            {/* Barrio */}
+            <div className="relative min-w-[170px] sm:min-w-[190px]">
+              <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+              <select
+                id="map-barrio-filter"
+                value={selectedBarrio}
+                onChange={(e) => setSelectedBarrio(e.target.value)}
+                className="w-full pl-8 pr-7 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-slate-50/70 text-slate-800 hover:bg-slate-100/70 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 transition-colors cursor-pointer"
               >
-                Hora Salida
-              </label>
-              <input
-                id="map-hora-salida"
-                type="time"
-                value={horaSalida}
-                onChange={(e) => setHoraSalida(e.target.value)}
-                className="w-full px-2.5 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg bg-white text-slate-900 font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-slate-900"
-              />
+                <option value="Todos">
+                  Todos los barrios ({nonAdheredContacts.length})
+                </option>
+                {dynamicBarrios.map(([barrio, count]) => (
+                  <option key={barrio} value={barrio}>
+                    {barrio} ({count})
+                  </option>
+                ))}
+              </select>
             </div>
-            <div>
-              <label
-                htmlFor="map-buffer-min"
-                className="block text-xs font-semibold text-slate-700 mb-1"
+
+            {/* Franja Horaria */}
+            <div className="relative min-w-[130px] sm:min-w-[155px]">
+              <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+              <select
+                id="map-franja-filter"
+                value={selectedFranja}
+                onChange={(e) => setSelectedFranja(e.target.value)}
+                className="w-full pl-8 pr-7 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-slate-50/70 text-slate-800 hover:bg-slate-100/70 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 transition-colors cursor-pointer"
               >
-                Min/Parada
-              </label>
-              <input
-                id="map-buffer-min"
-                type="number"
-                min={10}
-                max={45}
-                value={bufferMinutos}
-                onChange={(e) => setBufferMinutos(Number(e.target.value) || 20)}
-                className="w-full px-2.5 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg bg-white text-slate-900 font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-slate-900"
-              />
+                <option value="Todos">Todas las franjas</option>
+                <option value="Mañana">Mañana (08:30 a 12:30)</option>
+                <option value="Mediodía">Mediodía (12:00 a 15:00)</option>
+                <option value="Tarde">Tarde (15:00 a 18:00)</option>
+                <option value="Vespertino">Vespertino (18:00+)</option>
+              </select>
             </div>
+
+            {/* Punto de Partida */}
+            <div className="relative min-w-[200px] flex-1">
+              <Navigation className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 pointer-events-none" />
+              <select
+                id="map-origen-select"
+                value={origenPersonalizadoId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setOrigenPersonalizadoId(val);
+                  if (val !== 'base') {
+                    const ev = uniqueCalendarEvents.find((item) => item.id === val);
+                    if (ev?.endTime) setHoraSalida(ev.endTime);
+                  }
+                }}
+                className="w-full pl-8 pr-7 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-slate-50/70 text-slate-800 hover:bg-slate-100/70 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 transition-colors cursor-pointer truncate"
+              >
+                <option value="base">
+                  Partida Base: {profile.direccionPartida}
+                </option>
+                {uniqueCalendarEvents.map((ev, evIdx) => (
+                  <option
+                    key={`opt-cal-${ev.id}-${ev.fecha || ev.fechaISO || ''}-${ev.startTime || ''}-${evIdx}`}
+                    value={ev.id}
+                  >
+                    Desde Calendar ({ev.endTime} hs): {ev.summary}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Acciones de Vista y Capas */}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Toggle Cafés HUB */}
+            <button
+              type="button"
+              onClick={() => setShowCafesHubLayer((v) => !v)}
+              className={`px-3 py-2 text-xs font-bold rounded-xl border flex items-center gap-1.5 transition-all shadow-2xs ${
+                showCafesHubLayer
+                  ? 'bg-amber-50 text-amber-900 border-amber-300'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              <Coffee className="w-3.5 h-3.5 text-amber-600" />
+              <span>Cafés HUB ({visibleCafesHub.length})</span>
+            </button>
+
+            {/* Toggle Modo Vista (Maps vs Esquema) */}
+            <button
+              type="button"
+              onClick={() => setUseGoogleMapsView((v) => !v)}
+              className="px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition-all shadow-2xs flex items-center gap-1.5"
+            >
+              <Layers className="w-3.5 h-3.5 text-slate-500" />
+              <span>{useGoogleMapsView ? 'Google Maps' : 'Nodos'}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -951,64 +947,44 @@ export function InteractiveMapPanel({
         </div>
       )}
 
-      {/* Grilla Principal: Mapa Interactivo (En mode === 'route_only' se oculta porque vive al final de la Pestaña 2) */}
-      {mode !== 'route_only' && (
-      <div
-        className={`grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start min-w-0 ${
-          mobileMapSection === 'route_only' ? 'hidden lg:grid' : 'grid'
-        }`}
-      >
+      {/* Grilla Principal: Mapa Interactivo y Circuitos (Aislada de Hoja de Ruta para evitar sobrecarga visual) */}
+      {mode !== 'route_only' && mobileMapSection !== 'route_only' && (
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start min-w-0">
         {/* Mapa Interactivo CABA (12 cols cuando mode === 'map_only', 7 cols cuando mode === 'full') */}
         <div
           className={`${
             mode === 'map_only' ? 'lg:col-span-12' : 'lg:col-span-7'
-          } min-w-0 bg-white border border-slate-200 rounded-xl overflow-hidden ${
+          } min-w-0 bg-white border border-slate-200/80 rounded-2xl overflow-hidden shadow-xs ${
             mobileMapSection === 'clusters_only' ? 'hidden lg:block' : 'block'
           }`}
         >
-          <div className="px-3.5 sm:px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
-            <div className="min-w-0 flex-1">
-              <h2 className="text-sm sm:text-base font-bold text-slate-900">
-                Mapa de Pendientes CABA — Puntos Céntricos Café Hub y Rutas Casa x Casa
-              </h2>
-              <p className="text-xs text-slate-500">
-                Mostrando únicamente los {visibleContacts.length} contactos que aún no adhirieron y tus eventos de Google Calendar
+          {/* Cabecera Limpia del Mapa */}
+          <div className="px-5 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-black text-slate-900 truncate">
+                  Cobertura Territorial & Puntos de Encuentro
+                </h2>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-800 border border-emerald-200/70">
+                  En vivo
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {visibleContacts.length} contactos pendientes con dirección · {visibleClusters.length} circuitos sugeridos
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-mono tabular-nums text-slate-600">
-                {visibleContacts.length} pendientes · {visibleClusters.length} circuitos · {visibleCafesHub.length} Cafés HUB
+
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs font-mono font-bold text-slate-600 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200/80">
+                {selectedBarrio === 'Todos' ? 'Toda CABA' : selectedBarrio}
               </span>
-              {onGoToRouteTab && (
-                <button
-                  type="button"
-                  onClick={onGoToRouteTab}
-                  className="px-2.5 py-1 text-xs font-bold border border-emerald-600 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 flex items-center gap-1 whitespace-nowrap shadow-sm"
-                >
-                  <Navigation className="w-3.5 h-3.5" />
-                  <span>Ir a 3. Hoja de Ruta ({hojaDeRuta.length} paradas)</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setShowCafesHubLayer((v) => !v)}
-                className={`px-2.5 py-1 text-xs font-semibold border rounded-md flex items-center gap-1 whitespace-nowrap ${
-                  showCafesHubLayer
-                    ? 'border-amber-400 bg-amber-50 text-amber-950'
-                    : 'border-slate-300 bg-slate-50 text-slate-600'
-                }`}
-              >
-                <Coffee className="w-3.5 h-3.5 text-amber-700" />
-                {showCafesHubLayer
-                  ? `Cafés HUB Activos (${visibleCafesHub.length})`
-                  : 'Mostrar Cafés HUB'}
-              </button>
               <button
                 type="button"
                 onClick={() => setUseGoogleMapsView((v) => !v)}
-                className="px-2.5 py-1 text-xs font-semibold border border-slate-300 rounded-md bg-slate-50 text-slate-800 hover:bg-slate-100 whitespace-nowrap"
+                className="px-2.5 py-1 text-xs font-bold rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-2xs"
+                title="Alternar entre Google Maps y Esquema de Nodos"
               >
-                {useGoogleMapsView ? 'Ver Esquema Nodos' : 'Ver Google Maps'}
+                {useGoogleMapsView ? 'Ver Nodos' : 'Ver Maps'}
               </button>
             </div>
           </div>
@@ -1188,10 +1164,10 @@ export function InteractiveMapPanel({
               </APIProvider>
             </div>
           ) : (
-            <div className="relative bg-slate-950 text-white">
+            <div className="relative bg-slate-50 text-slate-800">
               <svg
                 viewBox="0 0 800 480"
-                className="w-full h-[460px] block select-none"
+                className="w-full h-[460px] block select-none bg-slate-50"
                 role="img"
                 aria-label="Mapa geoespacial interactivo de contactos pendientes y circuitos en CABA"
               >
@@ -1205,12 +1181,12 @@ export function InteractiveMapPanel({
                     <path
                       d="M 40 0 L 0 0 0 40"
                       fill="none"
-                      stroke="rgba(148, 163, 184, 0.12)"
+                      stroke="rgba(203, 213, 225, 0.45)"
                       strokeWidth="1"
                     />
                   </pattern>
                 </defs>
-                <rect width="800" height="480" fill="#0f172a" />
+                <rect width="800" height="480" fill="#f8fafc" />
                 <rect width="800" height="480" fill="url(#caba-grid)" />
 
                 {/* Etiquetas dinámicas de todos los barrios con contactos pendientes */}
@@ -1224,17 +1200,18 @@ export function InteractiveMapPanel({
                       key={barrioName}
                       x={pt.x}
                       y={pt.y - 12}
-                      fill="rgba(148, 163, 184, 0.45)"
-                      fontSize="11"
+                      fill="#94a3b8"
+                      fontSize="10"
                       fontWeight="700"
                       textAnchor="middle"
+                      letterSpacing="0.05em"
                     >
                       {barrioName.toUpperCase()}
                     </text>
                   );
                 })}
 
-                {/* Círculos de Radio de Caminata de los Micro-Clusters (sólo no adheridos) */}
+                {/* Círculos de Radio de Caminata de los Micro-Clusters */}
                 {visibleClusters.map((cl) => {
                   const pt = projectToSvg(cl.centroLat, cl.centroLng);
                   const isFocused = activeClusterId === cl.id;
@@ -1247,21 +1224,23 @@ export function InteractiveMapPanel({
                       <circle
                         cx={pt.x}
                         cy={pt.y}
-                        r={cl.convieneCafeHub ? 42 : 24}
+                        r={isFocused ? (cl.convieneCafeHub ? 45 : 28) : (cl.convieneCafeHub ? 38 : 22)}
                         fill={
-                          cl.convieneCafeHub
-                            ? 'rgba(250, 204, 21, 0.12)'
-                            : 'rgba(56, 189, 248, 0.1)'
+                          isFocused
+                            ? 'rgba(16, 185, 129, 0.12)'
+                            : cl.convieneCafeHub
+                            ? 'rgba(245, 158, 11, 0.05)'
+                            : 'rgba(14, 165, 233, 0.05)'
                         }
-                        stroke={cl.convieneCafeHub ? '#facc15' : '#38bdf8'}
+                        stroke={isFocused ? '#10b981' : cl.convieneCafeHub ? '#f59e0b' : '#38bdf8'}
                         strokeWidth={isFocused ? 2 : 1}
-                        strokeDasharray={cl.convieneCafeHub ? 'none' : '4 4'}
+                        strokeDasharray={isFocused ? 'none' : '3 3'}
                       />
                       <circle
                         cx={pt.x}
                         cy={pt.y}
-                        r={5}
-                        fill={cl.convieneCafeHub ? '#facc15' : '#38bdf8'}
+                        r={isFocused ? 5.5 : 3.5}
+                        fill={isFocused ? '#10b981' : cl.convieneCafeHub ? '#f59e0b' : '#38bdf8'}
                       />
                     </g>
                   );
@@ -1280,7 +1259,7 @@ export function InteractiveMapPanel({
                           y1={p1.y}
                           x2={p2.x}
                           y2={p2.y}
-                          stroke="#38bdf8"
+                          stroke="#0284c7"
                           strokeWidth="2.5"
                           strokeDasharray={
                             tramo.modoTraslado === 'WALKING' ? '4 4' : 'none'
@@ -1298,24 +1277,15 @@ export function InteractiveMapPanel({
                   return (
                     <g key={`svg-cal-${ev.id}-${ev.fecha || ev.fechaISO || ''}-${ev.startTime || ''}-${evIdx}`}>
                       <rect
-                        x={pt.x - 6}
-                        y={pt.y - 6}
-                        width={12}
-                        height={12}
-                        rx={3}
+                        x={pt.x - 5}
+                        y={pt.y - 5}
+                        width={10}
+                        height={10}
+                        rx={2.5}
                         fill="#6366f1"
                         stroke="#ffffff"
                         strokeWidth="1.5"
                       />
-                      <text
-                        x={pt.x + 10}
-                        y={pt.y + 4}
-                        fill="#a5b4fc"
-                        fontSize="10"
-                        fontWeight="600"
-                      >
-                        Calendar {ev.startTime}: {ev.summary.slice(0, 22)}
-                      </text>
                     </g>
                   );
                 })}
@@ -1331,25 +1301,22 @@ export function InteractiveMapPanel({
                       <circle
                         cx={basePt.x}
                         cy={basePt.y}
-                        r={9}
-                        fill="#facc15"
-                        stroke="#0f172a"
+                        r={8}
+                        fill="#0f172a"
+                        stroke="#ffffff"
                         strokeWidth="2"
                       />
-                      <text
-                        x={basePt.x + 12}
-                        y={basePt.y + 4}
-                        fill="#fde047"
-                        fontSize="11"
-                        fontWeight="700"
-                      >
-                        Partida ({effectiveProfile.direccionPartida.split(',')[0]})
-                      </text>
+                      <circle
+                        cx={basePt.x}
+                        cy={basePt.y}
+                        r={3}
+                        fill="#facc15"
+                      />
                     </g>
                   );
                 })()}
 
-                {/* Marcadores de los Cafés HUB Oficiales en vista Esquema Nodos */}
+                {/* Marcadores de los Cafés HUB Oficiales */}
                 {visibleCafesHub.map((cafe) => {
                   const pt = projectToSvg(cafe.lat, cafe.lng);
                   return (
@@ -1366,7 +1333,7 @@ export function InteractiveMapPanel({
                         cy={pt.y}
                         r={4.5}
                         fill="#10b981"
-                        stroke="#064e3b"
+                        stroke="#ffffff"
                         strokeWidth="1.5"
                       />
                     </g>
@@ -1378,12 +1345,17 @@ export function InteractiveMapPanel({
                   const pt = projectToSvg(c.lat, c.lng);
                   const inRoute = selectedForRouteIds.has(c.id);
                   const isSelected = selectedMarkerContact?.id === c.id;
+                  const isClusterMember = activeClusterId
+                    ? visibleClusters.find((x) => x.id === activeClusterId)?.miembros.some((m) => m.contact.id === c.id)
+                    : false;
+
                   const fill =
                     c.situacion === 'VISITA_AGENDADA'
-                      ? '#facc15'
+                      ? '#f59e0b'
                       : c.rsp === 'Sí'
-                      ? '#fb923c'
-                      : '#94a3b8';
+                      ? '#ea580c'
+                      : '#64748b';
+
                   return (
                     <g
                       key={`svg-pt-${c.id}-${idxSvgPt}`}
@@ -1393,31 +1365,33 @@ export function InteractiveMapPanel({
                       }}
                       className="cursor-pointer"
                     >
-                      {inRoute && (
+                      {(inRoute || isClusterMember) && (
                         <circle
                           cx={pt.x}
                           cy={pt.y}
-                          r={11}
+                          r={isClusterMember ? 12 : 10}
                           fill="none"
-                          stroke="#38bdf8"
-                          strokeWidth="2"
+                          stroke={isClusterMember ? '#10b981' : '#0284c7'}
+                          strokeWidth={isClusterMember ? 2 : 1.5}
+                          strokeDasharray={isClusterMember ? 'none' : '3 3'}
                         />
                       )}
                       <circle
                         cx={pt.x}
                         cy={pt.y}
-                        r={isSelected ? 8 : c.tieneCoordenadasExactas ? 6 : 4.5}
-                        fill={fill}
-                        stroke="#0f172a"
+                        r={isSelected || isClusterMember ? 7 : c.tieneCoordenadasExactas ? 5 : 4}
+                        fill={isClusterMember ? '#10b981' : fill}
+                        stroke="#ffffff"
                         strokeWidth="1.5"
                       />
-                      {c.tieneCoordenadasExactas && (
+                      {(isSelected || isClusterMember) && (
                         <text
-                          x={pt.x + 8}
-                          y={pt.y + 3}
-                          fill="#f8fafc"
+                          x={pt.x + 9}
+                          y={pt.y + 3.5}
+                          fill="#0f172a"
                           fontSize="10"
-                          fontWeight="500"
+                          fontWeight="700"
+                          className="select-none"
                         >
                           #{c.id} {c.primerNombre}
                         </text>
@@ -1428,16 +1402,18 @@ export function InteractiveMapPanel({
               </svg>
 
               {selectedCafeHubPin && (
-                <div className="p-4 bg-slate-900/95 border-t border-slate-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="p-3.5 bg-white border-t border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
                   <div>
-                    <div className="flex items-center gap-2 text-sm font-bold text-white">
-                      <Coffee className="w-4 h-4 text-emerald-400" />
+                    <div className="flex items-center gap-2 text-xs font-black text-slate-900">
+                      <Coffee className="w-4 h-4 text-amber-600 shrink-0" />
                       <span>{selectedCafeHubPin.nombre}</span>
-                      <span className="text-slate-400">·</span>
-                      <span className="text-emerald-300">{selectedCafeHubPin.barrio}</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 text-[10px] font-bold">
+                        {selectedCafeHubPin.barrio}
+                      </span>
                     </div>
-                    <p className="text-xs text-slate-300 mt-1">
-                      {selectedCafeHubPin.direccion} (Café HUB Oficial de tu lista Google Maps)
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {selectedCafeHubPin.direccion} · Café HUB Oficial
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -1445,10 +1421,10 @@ export function InteractiveMapPanel({
                       href={selectedCafeHubPin.urlGoogleMaps}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-slate-900 hover:bg-slate-100 flex items-center gap-1 whitespace-nowrap"
+                      className="px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-900 text-white hover:bg-slate-800 flex items-center gap-1.5 shadow-2xs transition"
                     >
-                      Abrir en Google Maps
-                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Ver en Maps</span>
+                      <ExternalLink className="w-3 h-3" />
                     </a>
                     {onSelectCafeHubForBarrio && (
                       <button
@@ -1457,129 +1433,132 @@ export function InteractiveMapPanel({
                           onSelectCafeHubForBarrio(selectedCafeHubPin);
                           setSelectedCafeHubPin(null);
                         }}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 whitespace-nowrap"
+                        className="px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-600 text-white hover:bg-emerald-500 shadow-2xs transition"
                       >
                         Fijar como Hub de {selectedCafeHubPin.barrio}
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCafeHubPin(null)}
+                      className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               )}
 
               {selectedMarkerContact && (
-                <div className="p-4 bg-slate-900/95 border-t border-slate-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="p-3.5 bg-white border-t border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
                   <div>
-                    <div className="flex items-center gap-2 text-sm font-bold text-white">
-                      <span>
-                        #{selectedMarkerContact.id}{' '}
-                        {selectedMarkerContact.nombreCompletoCorregido}
-                      </span>
-                      <span className="text-slate-400">·</span>
-                      <span className="text-amber-300">
-                        {selectedMarkerContact.calleOCruce ||
-                          selectedMarkerContact.barrio}
-                      </span>
-                      <span className="text-slate-400">·</span>
-                      <span className="text-xs text-slate-300">
-                        {selectedMarkerContact.franjaHoraria}
+                    <div className="flex items-center gap-2 text-xs font-black text-slate-900">
+                      <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>#{selectedMarkerContact.id} {selectedMarkerContact.nombreCompletoCorregido}</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-slate-600 text-[11px] font-medium">
+                        {selectedMarkerContact.calleOCruce || selectedMarkerContact.barrio} · {selectedMarkerContact.franjaHoraria}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-300 mt-1">
-                      {selectedMarkerContact.comentario ||
-                        selectedMarkerContact.motivoEstrategico}
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Col. G: {selectedMarkerContact.comentario || 'Sin comentario'}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
-                      onClick={() => toggleContactInRoute(selectedMarkerContact.id)}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 whitespace-nowrap"
+                      onClick={() => onOpenWhatsApp(selectedMarkerContact)}
+                      className="px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-600 text-white hover:bg-emerald-500 shadow-2xs transition flex items-center gap-1.5"
                     >
-                      {selectedForRouteIds.has(selectedMarkerContact.id)
-                        ? 'Quitar de Ruta'
-                        : '+ Sumar a Ruta'}
+                      <Send className="w-3 h-3" />
+                      <span>Enviar WA</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => onSelectContactForEdit(selectedMarkerContact)}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-400 text-slate-950 hover:bg-amber-300 whitespace-nowrap"
+                      onClick={() => toggleContactInRoute(selectedMarkerContact.id)}
+                      className="px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-900 text-white hover:bg-slate-800 shadow-2xs transition"
                     >
-                      Abrir en Bandeja
+                      {selectedForRouteIds.has(selectedMarkerContact.id) ? 'Quitar de Ruta' : 'Sumar a Ruta'}
                     </button>
-                    {selectedMarkerContact.telWA && (
+                    {onSelectContactForEdit && (
                       <button
                         type="button"
-                        onClick={() => onOpenWhatsApp(selectedMarkerContact)}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 flex items-center gap-1.5 whitespace-nowrap"
+                        onClick={() => onSelectContactForEdit(selectedMarkerContact)}
+                        className="px-3 py-1.5 text-xs font-bold rounded-xl bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 shadow-2xs transition"
                       >
-                        <Send className="w-3.5 h-3.5" />
-                        WhatsApp 1-Clic
+                        Ficha
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMarkerContact(null)}
+                      className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               )}
             </div>
           )}
 
-          {/* Leyenda clara de pines (sólo no adheridos + Cafés HUB Oficiales + eventos Calendar) */}
-          <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
-            <div className="flex flex-wrap items-center gap-4">
-              <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-900">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block" />
-                Verde: Café HUB Oficial (Tu lista Google Maps)
+          {/* Leyenda clara de pines */}
+          <div className="px-5 py-3 bg-white border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-500 font-medium">
+            <div className="flex flex-wrap items-center gap-3.5">
+              <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800">
+                <span className="w-2 h-2 rounded-full bg-emerald-600 inline-block" />
+                Café HUB Oficial
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
-                Amarillo: Visita agendada (Pendiente)
+              <span className="inline-flex items-center gap-1.5 font-bold text-amber-700">
+                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+                Visita Agendada
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block" />
-                Naranja: Cambió el chip (Respondió Sí)
+              <span className="inline-flex items-center gap-1.5 font-bold text-orange-700">
+                <span className="w-2 h-2 rounded-full bg-orange-500 inline-block" />
+                Respondió Sí
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block" />
-                Gris: Sin respuesta aún
+              <span className="inline-flex items-center gap-1.5 font-bold text-slate-600">
+                <span className="w-2 h-2 rounded-full bg-slate-400 inline-block" />
+                Sin respuesta
               </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 inline-block" />
-                Índigo: Evento Google Calendar
+              <span className="inline-flex items-center gap-1.5 font-bold text-indigo-700">
+                <span className="w-2 h-2 rounded-full bg-indigo-600 inline-block" />
+                Google Calendar
               </span>
             </div>
           </div>
         </div>
 
-        {/* Columna Derecha (5 cols): Nodos de Micro-Clustering (Oculto cuando mode === 'map_only' porque ya está integrado en Agenda Recomendada Día por Día) */}
+        {/* Columna Derecha: Nodos de Micro-Clustering */}
         {mode === 'full' && (
-        <div
-          className={`lg:col-span-5 min-w-0 space-y-4 ${
-            mobileMapSection === 'route_only' ? 'hidden lg:block' : 'block'
-          }`}
-        >
-          <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-              <h3 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
-                <Layers className="w-4 h-4 text-slate-700 shrink-0" />
-                <span>Circuitos y Puntos Céntricos (Sólo No Adheridos)</span>
-              </h3>
-              <span className="text-xs text-slate-500 font-mono tabular-nums shrink-0">
-                {visibleClusters.length} circuitos
+        <div className="lg:col-span-5 min-w-0 space-y-4">
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Circuitos & Puntos Céntricos</span>
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Vecinos agrupados por cercanía geográfica y fechas en Col. G
+                </p>
+              </div>
+              <span className="text-xs font-mono font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full shrink-0">
+                {visibleClusters.length}
               </span>
             </div>
 
-            <p className="text-xs text-slate-600 mb-3 leading-relaxed">
-              Agrupa vecinos sin adherir por cercanía y <strong>fecha en Columna G (&quot;Comentario&quot;)</strong>, alineado con la <strong>Agenda Día por Día</strong>. Elegí uno de los <strong>Cafés HUB de tu lista de Google Maps</strong> o cambiá la modalidad para <strong>personalizar automáticamente el mensaje</strong> de cada persona.
-            </p>
-
-            {/* Filtro rápido para mostrar sólo los Cafés HUB sugeridos para próximos días o todos los nodos */}
-            <div className="flex flex-wrap items-center gap-1.5 mb-3 pb-2.5 border-b border-slate-100">
+            {/* Selector de Filtro de Circuitos */}
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-100/80 border border-slate-200/60">
               <button
                 type="button"
                 onClick={() => setSoloCafesHubSugeridosAgenda(false)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all text-center ${
                   !soloCafesHubSugeridosAgenda
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 Todos los circuitos ({clusters.length})
@@ -1587,18 +1566,18 @@ export function InteractiveMapPanel({
               <button
                 type="button"
                 onClick={() => setSoloCafesHubSugeridosAgenda(true)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors flex items-center gap-1 ${
+                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 text-center ${
                   soloCafesHubSugeridosAgenda
-                    ? 'bg-emerald-700 text-white'
-                    : 'bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100'
+                    ? 'bg-white text-emerald-800 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <Coffee className="w-3 h-3 shrink-0" />
-                <span>Sólo Cafés HUB sugeridos próx. días</span>
+                <Coffee className="w-3.5 h-3.5 text-amber-600" />
+                <span>Cafés HUB sugeridos</span>
               </button>
             </div>
 
-            <div className="space-y-3.5 max-h-[560px] overflow-y-auto pr-1">
+            <div className="space-y-3.5 max-h-[580px] overflow-y-auto pr-1">
               {visibleClusters.map((cl) => {
                 const grounding = groundingResultByCluster[cl.id];
                 const isLoadingGrounding = groundingLoadingCluster === cl.id;
@@ -1609,71 +1588,117 @@ export function InteractiveMapPanel({
                   cl.modalidadRecomendadaAgenda ||
                   (cl.convieneCafeHub ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
 
+                if (!isActiveCluster) {
+                  return (
+                    <div
+                      key={cl.id}
+                      onClick={() => setActiveClusterId(cl.id)}
+                      className="p-3.5 rounded-xl border border-slate-200/80 bg-white hover:border-slate-300 hover:bg-slate-50/50 transition-all cursor-pointer flex items-center justify-between gap-3 shadow-2xs group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div
+                          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
+                            cl.convieneCafeHub
+                              ? 'bg-amber-100/70 text-amber-700'
+                              : 'bg-sky-100/70 text-sky-700'
+                          }`}
+                        >
+                          {cl.convieneCafeHub ? (
+                            <Coffee className="w-4 h-4" />
+                          ) : (
+                            <Footprints className="w-4 h-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-black text-slate-900 truncate">
+                              {cl.nombreNodo}
+                            </h4>
+                            {cl.etiquetaFechaGrupo && (
+                              <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded shrink-0">
+                                {cl.etiquetaFechaGrupo}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                            {cafeElegido ? `☕ ${cafeElegido.nombre}` : '🚶 Puerta a Puerta'} · {cl.miembros.length} vecinos ({cl.miembros.map((m) => m.contact.primerNombre || m.contact.nombre).join(', ')})
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                          ~{cl.mediaMinutos}m
+                        </span>
+                        <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-700 group-hover:translate-x-0.5 transition" />
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div
                     key={cl.id}
-                    className={`p-3 sm:p-3.5 rounded-xl border transition-colors ${
-                      isActiveCluster
-                        ? 'border-slate-900 bg-slate-50/90 shadow-sm'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
-                    }`}
+                    onClick={() => setActiveClusterId(cl.id)}
+                    className="p-4 rounded-2xl border-2 border-emerald-500 ring-4 ring-emerald-500/10 bg-slate-50/70 shadow-sm transition-all"
                   >
+                    {/* Header del Circuito */}
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
                           <span
-                            className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black border ${
                               cl.convieneCafeHub
-                                ? 'bg-amber-100 text-amber-900'
-                                : 'bg-sky-100 text-sky-900'
+                                ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                : 'bg-sky-50 text-sky-900 border-sky-200'
                             }`}
                           >
-                            {cl.veredicto}
+                            {cl.convieneCafeHub ? '☕ Café HUB' : '🚶 Casa x Casa'}
                           </span>
                           {cl.etiquetaFechaGrupo && (
-                            <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-900 border border-indigo-200/70">
                               📅 {cl.etiquetaFechaGrupo}
                             </span>
                           )}
                         </div>
-                        <h4 className="text-sm font-bold text-slate-900 mt-1 break-words">
+                        <h4 className="text-sm font-black text-slate-900 truncate">
                           {cl.nombreNodo}
                         </h4>
                       </div>
-                      <span className="text-xs font-mono tabular-nums text-slate-600 shrink-0">
-                        Prom. {cl.mediaMinutos} min
+                      <span className="text-xs font-mono font-bold text-slate-500 shrink-0 bg-slate-100 px-2 py-0.5 rounded-md">
+                        ~{cl.mediaMinutos}m a pie
                       </span>
                     </div>
 
-                    {/* Recomendación sincronizada con la Agenda Día por Día (Pestaña 2) */}
+                    {/* Vínculo y Estrategia recomendada (Concisa) */}
                     {cl.recomendacionAgendaTexto && (
-                      <div className="mt-2 p-2 rounded-lg bg-amber-50/80 border border-amber-200 text-[11px] text-amber-950 leading-snug">
-                        <strong>Vínculo con Agenda Día por Día:</strong> {cl.recomendacionAgendaTexto}
+                      <div className="mt-2.5 p-2 rounded-xl bg-amber-50/70 border border-amber-200/70 text-[11px] text-amber-950 flex items-start gap-1.5 leading-snug">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">
+                          <strong className="font-bold">Estrategia:</strong> {cl.recomendacionAgendaTexto.replace(/^Recomendación Agenda Día por Día \([^)]+\):\s*/i, '')}
+                        </span>
                       </div>
                     )}
 
-                    {/* Selector de Modalidad para personalizar los mensajes de este circuito */}
-                    <div className="mt-2.5">
-                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">
-                        1. Elegir modalidad para personalizar mensajes del circuito:
-                      </span>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
+                    {/* Selector de Modalidad Compacto */}
+                    <div className="mt-2.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="grid grid-cols-4 gap-1 p-0.5 rounded-xl bg-slate-100/80 border border-slate-200/60">
                         {(
                           [
-                            { id: 'CAFE_HUB', label: '☕ Café HUB' },
-                            { id: 'PUERTA_A_PUERTA', label: '🚶 Puerta a Puerta' },
-                            { id: 'PUNTO_ADHESION', label: '📍 Punto Adhesión' },
-                            { id: 'EVENTO_SEDE', label: '🏛️ Sede Chile' },
+                            { id: 'CAFE_HUB', label: '☕ Café' },
+                            { id: 'PUERTA_A_PUERTA', label: '🚶 Casa' },
+                            { id: 'PUNTO_ADHESION', label: '📍 Punto' },
+                            { id: 'EVENTO_SEDE', label: '🏛️ Sede' },
                           ] as { id: ModalidadEncuentroAgenda; label: string }[]
                         ).map((opt) => (
                           <button
                             key={opt.id}
                             type="button"
                             onClick={() => handleCambiarModalidadCircuito(cl, opt.id)}
-                            className={`px-2 py-1 rounded text-[11px] font-bold border transition-colors truncate ${
+                            className={`py-1 rounded-lg text-[10px] font-black transition-all truncate text-center ${
                               modalidadCircuito === opt.id
-                                ? 'bg-slate-900 text-white border-slate-900'
-                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                ? 'bg-white text-slate-900 shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
                             }`}
                           >
                             {opt.label}
@@ -1682,271 +1707,144 @@ export function InteractiveMapPanel({
                       </div>
                     </div>
 
-                    {/* Cafés HUB de la lista de Google Maps más cercanos (Al elegir uno, modifica automáticamente el mensaje personalizado) */}
-                    {cl.cafesHubCercanos && cl.cafesHubCercanos.length > 0 && (
-                      <div className="mt-2.5 p-2.5 rounded-lg bg-emerald-50/70 border border-emerald-200 space-y-1.5">
-                        <div className="flex flex-wrap items-center justify-between gap-1">
-                          <span className="text-[11px] font-bold text-emerald-950 flex items-center gap-1">
-                            <Coffee className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                            <span>2. Cafés HUB de tu lista Google Maps (tocá uno para personalizar msjs):</span>
-                          </span>
-                        </div>
-                        <div className="space-y-1.5">
-                          {cl.cafesHubCercanos.slice(0, 3).map((cafe, cIdx) => {
-                            const isSelectedCafe = cafeElegido?.id === cafe.id;
-                            return (
-                              <div
-                                key={cafe.id}
-                                className={`flex flex-wrap items-center justify-between gap-1.5 text-xs px-2 py-1.5 rounded border transition-colors ${
-                                  isSelectedCafe
-                                    ? 'bg-emerald-950 text-white border-emerald-800 shadow-sm'
-                                    : 'bg-white/95 text-slate-900 border-emerald-100'
-                                }`}
+                    {/* Café HUB Elegido + Dropdown Cambiar */}
+                    {modalidadCircuito === 'CAFE_HUB' && cafeElegido && (
+                      <div className="mt-2.5 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+                          <div className="min-w-0 flex-1 flex items-center gap-1.5">
+                            <Coffee className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span className="font-bold text-slate-900 truncate">{cafeElegido.nombre}</span>
+                            <span className="text-[10px] text-slate-500 shrink-0">
+                              · {cafeElegido.direccion.split(',')[0]}{'minutosCaminando' in cafeElegido ? ` (~${(cafeElegido as any).minutosCaminando}m)` : ''}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <a
+                              href={cafeElegido.urlGoogleMaps}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Ver en Google Maps"
+                              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 transition"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                            {cl.cafesHubCercanos && cl.cafesHubCercanos.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setChangingCafeForClusterId(
+                                    changingCafeForClusterId === cl.id ? null : cl.id
+                                  )
+                                }
+                                className="text-[10px] font-bold text-slate-600 hover:text-slate-900 px-2 py-0.5 rounded-lg bg-slate-200/80 hover:bg-slate-300 transition"
                               >
-                                <div className="min-w-0 flex-1 flex items-center gap-1 flex-wrap">
-                                  {isSelectedCafe ? (
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                                  ) : (
-                                    <Coffee className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                                  )}
-                                  <span className="font-bold">
-                                    {cafe.nombre}
-                                  </span>{' '}
-                                  <span
-                                    className={`text-[11px] ${
-                                      isSelectedCafe ? 'text-emerald-200' : 'text-slate-600'
-                                    }`}
-                                  >
-                                    ({cafe.direccion.split(',')[0]})
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1.5 shrink-0">
-                                  <span
-                                    className={`text-[10px] font-mono ${
-                                      isSelectedCafe ? 'text-emerald-300' : 'text-emerald-800'
-                                    }`}
-                                  >
-                                    {cafe.minutosCaminando}m ({cafe.cuadrasAprox}c)
-                                  </span>
-                                  <a
-                                    href={cafe.urlGoogleMaps}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    title="Abrir este Café HUB en Google Maps"
-                                    className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-800 text-white rounded hover:bg-slate-700 inline-flex items-center gap-0.5"
-                                  >
-                                    Maps
-                                    <ExternalLink className="w-2.5 h-2.5" />
-                                  </a>
+                                {changingCafeForClusterId === cl.id ? 'Cerrar' : 'Cambiar'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Desplegable de selección si hace clic en Cambiar */}
+                        {changingCafeForClusterId === cl.id && cl.cafesHubCercanos && (
+                          <div className="p-2 rounded-xl bg-slate-100 border border-slate-200 space-y-1.5">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block px-1">
+                              Elegir Café HUB alternativo:
+                            </span>
+                            {cl.cafesHubCercanos.slice(0, 3).map((cafe) => {
+                              const isSelected = cafeElegido.id === cafe.id;
+                              return (
+                                <div
+                                  key={cafe.id}
+                                  className={`flex items-center justify-between gap-2 p-2 rounded-lg border text-xs transition ${
+                                    isSelected
+                                      ? 'bg-slate-900 text-white border-slate-900'
+                                      : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300'
+                                  }`}
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <p className="font-bold truncate">{cafe.nombre}</p>
+                                    <p className={`text-[10px] truncate ${isSelected ? 'text-slate-300' : 'text-slate-500'}`}>
+                                      {cafe.direccion.split(',')[0]} · {cafe.minutosCaminando} min
+                                    </p>
+                                  </div>
                                   <button
                                     type="button"
-                                    onClick={() => handleElegirCafeParaCircuito(cl, cafe)}
-                                    className={`px-2 py-0.5 text-[10px] font-bold rounded transition-colors ${
-                                      isSelectedCafe
+                                    onClick={() => {
+                                      handleElegirCafeParaCircuito(cl, cafe);
+                                      setChangingCafeForClusterId(null);
+                                    }}
+                                    className={`px-2 py-1 text-[10px] font-bold rounded-md shrink-0 transition ${
+                                      isSelected
                                         ? 'bg-amber-400 text-slate-950'
-                                        : 'bg-emerald-700 text-white hover:bg-emerald-800'
+                                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                                     }`}
                                   >
-                                    {isSelectedCafe ? 'Café Activo en Msj' : 'Elegir y Personalizar'}
+                                    {isSelected ? '✓ Activo' : 'Elegir'}
                                   </button>
                                 </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {/* Botón para desplegar / ver los mensajes personalizados 1-a-1 de este circuito */}
-                    <div className="mt-2.5 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                    {/* Resumen de vecinos */}
+                    <div className="mt-2.5 flex items-center justify-between text-xs text-slate-600">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="font-bold text-slate-800 shrink-0">{cl.miembros.length} vecinos:</span>
+                        <span className="truncate text-slate-500 text-[11px]">
+                          {cl.miembros.map((m) => m.contact.primerNombre || m.contact.nombre).join(', ')}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Acciones del Circuito */}
+                    <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
-                        onClick={() =>
-                          setActiveClusterId(isActiveCluster ? null : cl.id)
-                        }
-                        className="px-2.5 py-1.5 text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-lg flex items-center gap-1"
+                        onClick={() => setDrawerCluster(cl)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white transition shadow-2xs"
                       >
-                        <Send className="w-3.5 h-3.5 shrink-0" />
-                        <span>
-                          {isActiveCluster
-                            ? `Ocultar Mensajes (${cl.miembros.length})`
-                            : `Personalizar y Enviar Msj 1-a-1 (${cl.miembros.length})`}
-                        </span>
-                        {isActiveCluster ? (
-                          <ChevronUp className="w-3.5 h-3.5" />
-                        ) : (
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        )}
+                        <Send className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Personalizar WA ({cl.miembros.length})</span>
                       </button>
 
-                      <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => {
                             cargarCircuitoDesdeCluster(cl);
                             setMobileMapSection('route_only');
                           }}
-                          className="px-2.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 flex items-center gap-1"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition shadow-2xs"
+                          title="Cargar circuito en Hoja de Ruta"
                         >
-                          <Navigation className="w-3.5 h-3.5 shrink-0" />
-                          <span>Cargar en Ruta ({cl.miembros.length})</span>
+                          <Navigation className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Ruta</span>
                         </button>
 
                         <button
                           type="button"
                           onClick={() => consultarCafesGrounding(cl)}
                           disabled={isLoadingGrounding}
-                          className="px-2 py-1.5 text-xs font-medium border border-slate-300 bg-white text-slate-800 rounded-lg hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1"
+                          className="inline-flex items-center gap-1 px-2 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-bold transition disabled:opacity-50 shadow-2xs"
+                          title="Consultar sugerencias con Gemini AI Grounding"
                         >
-                          <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <Sparkles className="w-3.5 h-3.5 text-amber-500" />
                           <span>{isLoadingGrounding ? '...' : 'IA'}</span>
                         </button>
                       </div>
                     </div>
 
-                    {/* Lista 1-a-1 de Vecinos con Mensaje Personalizado según el Café HUB y Modalidad elegidos */}
-                    {isActiveCluster && (
-                      <div className="mt-3 pt-2.5 border-t border-slate-200 space-y-2.5">
-                        <p className="text-[11px] font-bold text-slate-800">
-                          Mensajes personalizados ({modalidadCircuito === 'CAFE_HUB' ? `Café HUB: ${cafeElegido?.nombre || cl.cafeRecomendado}` : modalidadCircuito}):
-                        </p>
-                        {cl.miembros.map((m, idxM) => {
-                          const msgKey = `${cl.id}-${m.contact.id}`;
-                          const msgTexto =
-                            customClusterMessages[msgKey] ??
-                            generarMensajePersonalizadoCircuitoMapa(
-                              m.contact,
-                              cl,
-                              profile,
-                              {
-                                modalidad: modalidadCircuito,
-                                cafeSeleccionado: cafeElegido
-                                  ? {
-                                      nombre: cafeElegido.nombre,
-                                      direccion: cafeElegido.direccion,
-                                    }
-                                  : undefined,
-                              }
-                            );
-
-                          return (
-                            <div
-                              key={`cl-m-${cl.id}-${m.contact.id}-${idxM}`}
-                              className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-2"
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-1 text-xs">
-                                <span className="font-bold text-slate-900">
-                                  #{m.contact.id} {m.contact.nombreCompletoCorregido}{' '}
-                                  <span className="font-normal text-slate-500">
-                                    ({m.contact.calleOCruce || m.contact.barrio} · {m.minutosCaminando} min)
-                                  </span>
-                                </span>
-                                {m.contact.fechasMencionadas.length > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-900 font-mono text-[10px] font-bold">
-                                    Col. G: {m.contact.fechasMencionadas.join(', ')}
-                                  </span>
-                                )}
-                              </div>
-
-                              <textarea
-                                rows={3}
-                                value={msgTexto}
-                                onChange={(e) =>
-                                  setCustomClusterMessages((prev) => ({
-                                    ...prev,
-                                    [msgKey]: e.target.value,
-                                  }))
-                                }
-                                className="w-full p-2 text-xs border border-slate-300 rounded-lg bg-slate-50 text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-slate-900"
-                              />
-
-                              <div className="flex flex-wrap items-center justify-between gap-1.5">
-                                <div className="flex flex-wrap items-center gap-1">
-                                  {onQuickStatusFromMap && (
-                                    <>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          onQuickStatusFromMap(
-                                            m.contact.id,
-                                            'CONFIRMO_CAFE_HUB',
-                                            cafeElegido
-                                              ? `${cafeElegido.nombre} (${cafeElegido.direccion.split(',')[0]})`
-                                              : cl.cafeRecomendado
-                                          )
-                                        }
-                                        className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-50 text-emerald-900 border border-emerald-300 hover:bg-emerald-100"
-                                      >
-                                        ✓ Confirmó Café
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          onQuickStatusFromMap(
-                                            m.contact.id,
-                                            'PASA_PUERTA_A_PUERTA'
-                                          )
-                                        }
-                                        className="px-2 py-1 rounded text-[10px] font-bold bg-amber-50 text-amber-950 border border-amber-300 hover:bg-amber-100"
-                                        title="Si declina la propuesta de Café HUB, pasa automáticamente a Recorrido Puerta a Puerta"
-                                      >
-                                        🚶 Declinó Café → Puerta a Puerta
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          onQuickStatusFromMap(m.contact.id, 'YA_ADHIRIO')
-                                        }
-                                        className="px-2 py-1 rounded text-[10px] font-bold bg-slate-900 text-white hover:bg-slate-800"
-                                      >
-                                        🎉 Ya Adhirió
-                                      </button>
-                                    </>
-                                  )}
-                                </div>
-
-                                <div className="flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyMapText(msgKey, msgTexto)}
-                                    className="px-2 py-1 rounded text-[11px] font-semibold border border-slate-300 text-slate-700 hover:bg-slate-100 flex items-center gap-1"
-                                  >
-                                    {copiedMapMsgId === msgKey ? (
-                                      <>
-                                        <Check className="w-3 h-3 text-emerald-600" />
-                                        <span>Copiado</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Copy className="w-3 h-3" />
-                                        <span>Copiar</span>
-                                      </>
-                                    )}
-                                  </button>
-                                  {m.contact.telWA && (
-                                    <button
-                                      type="button"
-                                      onClick={() => onOpenWhatsApp(m.contact, msgTexto)}
-                                      className="px-2.5 py-1 rounded text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1 shadow-sm"
-                                    >
-                                      <Send className="w-3 h-3" />
-                                      <span>Enviar WA</span>
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
+                    {/* Grounding result si existe */}
                     {grounding && (
-                      <div className="mt-3 p-3 bg-amber-50/70 border border-amber-200 rounded-lg text-xs text-slate-800 space-y-2">
-                        <p className="font-semibold text-slate-900">
-                          Análisis de Café Hub cerca de {cl.esquinaCentrica}:
+                      <div className="mt-3 p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-xs text-slate-800 space-y-2">
+                        <p className="font-semibold text-slate-900 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Análisis de Café HUB cerca de {cl.esquinaCentrica}:</span>
                         </p>
-                        <div className="whitespace-pre-line leading-relaxed">
+                        <div className="whitespace-pre-line leading-relaxed text-[11px]">
                           {grounding.texto}
                         </div>
                         {grounding.links.length > 0 && (
@@ -1957,9 +1855,9 @@ export function InteractiveMapPanel({
                                 href={lk.uri}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-xs font-semibold text-slate-900 underline hover:text-amber-900"
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-900 underline hover:text-amber-900"
                               >
-                                <MapPin className="w-3 h-3" />
+                                <MapPin className="w-3 h-3 text-emerald-600" />
                                 {lk.titulo}
                               </a>
                             ))}
@@ -1977,29 +1875,36 @@ export function InteractiveMapPanel({
       </div>
       )}
 
-      {/* Cronograma Paso a Paso y Hoja de Ruta Calculada (Exclusivo en Pestaña 3: mode === 'route_only' o 'full') */}
+      {/* Cronograma Paso a Paso y Hoja de Ruta Calculada */}
       {mode !== 'map_only' && (
       <div
-        className={`bg-white border border-slate-200 rounded-xl p-3.5 sm:p-5 ${
-          mobileMapSection === 'clusters_only' && mode !== 'route_only' ? 'hidden lg:block' : 'block'
+        className={`bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-6 shadow-xs space-y-4 ${
+          mobileMapSection === 'route_only' || mode === 'route_only' ? 'block' : 'hidden'
         }`}
       >
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-slate-100">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
-                <Navigation className="w-4 h-4 text-slate-900 shrink-0" />
-                <span>Hoja de Ruta en Terreno · Casa x Casa y Café HUB ({hojaDeRuta.length} paradas pendientes)</span>
+              <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                <Navigation className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Hoja de Ruta en Terreno ({hojaDeRuta.length} paradas pendientes)</span>
               </h3>
-              <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 text-[11px] font-bold">
-                Mensajes en vivo según horario de llegada
+              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200/70 text-[10px] font-black">
+                En vivo
               </span>
             </div>
-            <p className="text-xs text-slate-600 mt-1">
-              Ideal al momento de <strong>iniciar la recorrida puerta a puerta, instalarte en el Café HUB o retirar fichas extras</strong>: partiendo desde <strong>{effectiveProfile.direccionPartida}</strong> a las <strong>{horaSalida} hs</strong>, personaliza automáticamente el WhatsApp de cada parada con su hora estimada y te permite marcar quién ya firmó.
+            <p className="text-xs text-slate-500 mt-1">
+              Partida desde <strong className="text-slate-800">{effectiveProfile.direccionPartida}</strong> a las <strong className="text-slate-800">{horaSalida} hs</strong> · Personaliza los WhatsApp en vivo según tu hora estimada de llegada.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileMapSection('map_and_clusters')}
+              className="px-3 py-1.5 text-xs font-bold rounded-xl border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 transition shadow-2xs"
+            >
+              ← Volver a Mapa & Circuitos
+            </button>
             {bloquesDelDiaHoy.length > 0 && (
               <button
                 type="button"
@@ -2020,9 +1925,9 @@ export function InteractiveMapPanel({
                     setHoraSalida(bloquesDelDiaHoy[0].horaInicioCalculada);
                   }
                 }}
-                className="px-2.5 py-1.5 text-xs font-bold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 whitespace-nowrap shadow-xs"
+                className="px-3 py-1.5 text-xs font-bold bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 whitespace-nowrap shadow-xs"
               >
-                📅 Todas las de HOY ({bloquesDelDiaHoy[0]?.fechaClave || 'Hoy'})
+                📅 Todas las de HOY
               </button>
             )}
             {dynamicBarrios.map(([barrio, count]) => (
@@ -2049,23 +1954,23 @@ export function InteractiveMapPanel({
           </div>
         </div>
 
-        {/* Barra de Situación en Terreno: cambia automáticamente todos los mensajes de la Hoja de Ruta */}
-        <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="space-y-1.5 flex-1">
-            <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-              <span>Mensajes en Vivo según Situación en Terreno (y ajuste automático por choques con Google Calendar):</span>
+        {/* Barra de Situación en Terreno */}
+        <div className="p-4 rounded-2xl bg-slate-50/80 border border-slate-200/80 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="space-y-2 flex-1">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>Situación en Terreno (adapta todos los mensajes en 1 clic):</span>
             </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5">
               {(
                 [
-                  { id: 'RECORDATORIO_MANIANA_ANTES_SALIR', label: '🌅 Recordatorio mañana (antes de salir)' },
-                  { id: 'EN_CAMINO_HORA_CALC', label: '🚗 En camino (Normal con hora)' },
-                  { id: 'DEMORADO_10_MIN', label: '⏳ Aviso de Demora (+15/20 min)' },
-                  { id: 'DISCULPAS_CANCELACION_REPROGRAMAR', label: '🗓️ Disculpas por Cancelación / Reprogramar' },
-                  { id: 'NO_ESTABA_REPROGRAMAR', label: '🚪 Esperé y no estaba / Reprogramar' },
-                  { id: 'LLEGANDO_2_MIN', label: '🔔 En la puerta (llego en 2 min)' },
-                  { id: 'YA_EN_CAFE_HUB', label: '☕ Ya instalado en Café HUB' },
+                  { id: 'RECORDATORIO_MANIANA_ANTES_SALIR', label: '🌅 Antes de salir' },
+                  { id: 'EN_CAMINO_HORA_CALC', label: '🚗 En camino (Hora)' },
+                  { id: 'DEMORADO_10_MIN', label: '⏳ Demorado (+15m)' },
+                  { id: 'LLEGANDO_2_MIN', label: '🔔 En la puerta (2 min)' },
+                  { id: 'YA_EN_CAFE_HUB', label: '☕ En Café HUB' },
+                  { id: 'NO_ESTABA_REPROGRAMAR', label: '🚪 No estaba' },
+                  { id: 'DISCULPAS_CANCELACION_REPROGRAMAR', label: '🗓️ Reprogramar' },
                 ] as { id: ModoMensajeTerrenoRuta; label: string }[]
               ).map((m) => (
                 <button
@@ -2076,10 +1981,10 @@ export function InteractiveMapPanel({
                     setModoTerrenoPorParada({});
                     setCustomRouteMessages({});
                   }}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors text-left truncate ${
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all text-left truncate ${
                     modoTerrenoRuta === m.id
-                      ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
                   {m.label}
@@ -2090,8 +1995,8 @@ export function InteractiveMapPanel({
 
           {modoTerrenoRuta === 'YA_EN_CAFE_HUB' && (
             <div className="min-w-[220px]">
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                Café HUB donde estás instalado ahora:
+              <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                Café HUB instalado:
               </label>
               <input
                 type="text"
@@ -2101,7 +2006,7 @@ export function InteractiveMapPanel({
                   setCustomRouteMessages({});
                 }}
                 placeholder="Ej: Café García (Av. San Isidro y Arias)"
-                className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white text-slate-900"
+                className="w-full px-3 py-2 text-xs font-bold border border-slate-200 rounded-xl bg-white text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
               />
             </div>
           )}
@@ -2231,20 +2136,15 @@ export function InteractiveMapPanel({
                             </p>
                           </div>
                         ) : (
-                          <div className="mt-1.5 p-2 rounded-md bg-amber-50/90 border border-amber-300 space-y-1 text-xs text-amber-950">
-                            <div className="flex items-start gap-1.5 font-bold">
-                              <Coffee className="w-3.5 h-3.5 text-amber-800 shrink-0 mt-0.5" />
-                              <span>
-                                {prefiereDomicilioConfirmado
-                                  ? `Opción definida (Puerta a Puerta): acercarse a ${p.destinoNombre} a las ${p.horaLlegada} hs · Café HUB alternativo: ${cafeUnificadoParada}`
-                                  : `Opción definida (Café HUB del bloque): proponer ${cafeUnificadoParada} o acercarse a ${p.destinoNombre} a las ${p.horaLlegada} hs`}
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-amber-900">
-                              {p.notaHorarioConveniente
-                                ? `✓ ${p.notaHorarioConveniente} Café HUB sugerido en correspondencia con Pestaña 2: ${cafeUnificadoParada}.`
-                                : `✓ Horario conveniente en Hoja de Ruta: ${p.horaLlegada} hs (ordenado por horario según la agenda del día). Café HUB del bloque: ${cafeUnificadoParada}.`}
-                            </p>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-600 bg-slate-50/80 px-2.5 py-1.5 rounded-xl border border-slate-200/60">
+                            <span className="inline-flex items-center gap-1 font-bold text-slate-800">
+                              <Coffee className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              <span>{prefiereDomicilioConfirmado ? 'Puerta a Puerta' : `Café HUB: ${cafeUnificadoParada}`}</span>
+                            </span>
+                            <span className="text-slate-400">·</span>
+                            <span className="text-[11px] text-slate-500">
+                              {p.notaHorarioConveniente || `Horario conveniente: ${p.horaLlegada} hs`}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -2400,44 +2300,34 @@ export function InteractiveMapPanel({
                       </div>
                     ) : (
                       <>
-                        <div className="flex flex-wrap items-center gap-1">
-                          <span className="text-[10px] font-bold uppercase text-slate-500 mr-1">
-                            Situación de esta parada:
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                            Situación de parada:
                           </span>
-                          {(
-                            [
-                              { id: 'RECORDATORIO_MANIANA_ANTES_SALIR', label: '🌅 Recordatorio mañana' },
-                              { id: 'EN_CAMINO_HORA_CALC', label: '🚗 En camino' },
-                              { id: 'LLEGANDO_2_MIN', label: '🔔 En puerta (2m)' },
-                              { id: 'YA_EN_CAFE_HUB', label: '☕ Ya en Café HUB' },
-                              { id: 'DEMORADO_10_MIN', label: '⏳ Demora (+15/20m)' },
-                              { id: 'DISCULPAS_CANCELACION_REPROGRAMAR', label: '🗓️ Disculpas / Reprogramar' },
-                              { id: 'NO_ESTABA_REPROGRAMAR', label: '🚪 No estaba / Reprogramar' },
-                            ] as { id: ModoMensajeTerrenoRuta; label: string }[]
-                          ).map((opt) => (
-                            <button
-                              key={opt.id}
-                              type="button"
-                              onClick={() => {
-                                setModoTerrenoPorParada((prev) => ({
-                                  ...prev,
-                                  [p.contact.id]: opt.id,
-                                }));
-                                setCustomRouteMessages((prev) => {
-                                  const next = { ...prev };
-                                  delete next[p.contact.id];
-                                  return next;
-                                });
-                              }}
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
-                                modoEfectivoParada === opt.id
-                                  ? 'bg-slate-900 text-white border-slate-900'
-                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
+                          <select
+                            value={modoEfectivoParada}
+                            onChange={(e) => {
+                              const optId = e.target.value as ModoMensajeTerrenoRuta;
+                              setModoTerrenoPorParada((prev) => ({
+                                ...prev,
+                                [p.contact.id]: optId,
+                              }));
+                              setCustomRouteMessages((prev) => {
+                                const next = { ...prev };
+                                delete next[p.contact.id];
+                                return next;
+                              });
+                            }}
+                            className="px-2.5 py-1 text-xs font-bold border border-slate-200 rounded-xl bg-white text-slate-800 hover:bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 cursor-pointer shadow-2xs"
+                          >
+                            <option value="RECORDATORIO_MANIANA_ANTES_SALIR">🌅 Recordatorio mañana antes de salir</option>
+                            <option value="EN_CAMINO_HORA_CALC">🚗 En camino (Hora calculada)</option>
+                            <option value="LLEGANDO_2_MIN">🔔 En la puerta (2 min)</option>
+                            <option value="YA_EN_CAFE_HUB">☕ Ya en Café HUB</option>
+                            <option value="DEMORADO_10_MIN">⏳ Demorado (+15/20 min)</option>
+                            <option value="DISCULPAS_CANCELACION_REPROGRAMAR">🗓️ Disculpas / Reprogramar</option>
+                            <option value="NO_ESTABA_REPROGRAMAR">🚪 No estaba en domicilio</option>
+                          </select>
                         </div>
 
                         {isExpanded ? (
@@ -2468,6 +2358,240 @@ export function InteractiveMapPanel({
         )}
       </div>
       )}
+
+      {/* Drawer Lateral para Personalizar y Enviar WA de los Vecinos del Circuito */}
+      <AnimatePresence>
+        {drawerCluster && (
+          <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/30 backdrop-blur-xs flex justify-end">
+            {/* Backdrop */}
+            <div className="absolute inset-0" onClick={() => setDrawerCluster(null)} />
+
+            <motion.aside
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+              className="relative z-10 flex h-full w-full max-w-xl flex-col bg-white shadow-2xl border-l border-slate-200 overflow-y-auto"
+            >
+              {/* Header */}
+              <div className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200/80 bg-white/95 px-6 py-4 backdrop-blur-md">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 text-emerald-800 border border-emerald-200/70">
+                      {drawerCluster.miembros.length} vecinos
+                    </span>
+                    <h3 className="truncate text-base font-black text-slate-900">
+                      {drawerCluster.nombreNodo}
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {(() => {
+                      const mod =
+                        selectedModalidadByCluster[drawerCluster.id] ||
+                        drawerCluster.modalidadRecomendadaAgenda ||
+                        (drawerCluster.convieneCafeHub ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
+                      const cafe =
+                        selectedCafeByCluster[drawerCluster.id] ||
+                        drawerCluster.cafesHubCercanos?.[0];
+                      return mod === 'CAFE_HUB'
+                        ? `☕ Café HUB: ${cafe?.nombre || drawerCluster.cafeRecomendado}`
+                        : mod === 'PUERTA_A_PUERTA'
+                        ? '🚶 Modalidad: Casa x Casa'
+                        : mod === 'PUNTO_ADHESION'
+                        ? '📍 Modalidad: Punto de Adhesión'
+                        : '🏛️ Modalidad: Evento en Sede';
+                    })()}{' '}
+                    · ~{drawerCluster.mediaMinutos}m a pie
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setDrawerCluster(null)}
+                  className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Contenido del Drawer */}
+              <div className="p-6 space-y-6">
+                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
+                  <span className="text-slate-600 font-medium">
+                    Mensajes 1-a-1 personalizados según modalidad y café HUB.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      cargarCircuitoDesdeCluster(drawerCluster);
+                      setDrawerCluster(null);
+                      setMobileMapSection('route_only');
+                    }}
+                    className="px-2.5 py-1 text-xs font-bold bg-white text-slate-800 border border-slate-200 rounded-xl hover:bg-slate-100 shadow-2xs shrink-0"
+                  >
+                    Cargar en Ruta →
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  {drawerCluster.miembros.map((m, idxM) => {
+                    const msgKey = `${drawerCluster.id}-${m.contact.id}`;
+                    const modCircuito =
+                      selectedModalidadByCluster[drawerCluster.id] ||
+                      drawerCluster.modalidadRecomendadaAgenda ||
+                      (drawerCluster.convieneCafeHub ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
+                    const cafeElegidoDrawer =
+                      selectedCafeByCluster[drawerCluster.id] ||
+                      drawerCluster.cafesHubCercanos?.[0];
+
+                    const msgTexto =
+                      customClusterMessages[msgKey] ??
+                      generarMensajePersonalizadoCircuitoMapa(
+                        m.contact,
+                        drawerCluster,
+                        profile,
+                        {
+                          modalidad: modCircuito,
+                          cafeSeleccionado: cafeElegidoDrawer
+                            ? {
+                                nombre: cafeElegidoDrawer.nombre,
+                                direccion: cafeElegidoDrawer.direccion,
+                              }
+                            : undefined,
+                        }
+                      );
+
+                    return (
+                      <div
+                        key={`drawer-m-${drawerCluster.id}-${m.contact.id}-${idxM}`}
+                        className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs space-y-3"
+                      >
+                        {/* Cabecera del Vecino */}
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-xs font-bold text-slate-400">
+                                #{m.contact.id}
+                              </span>
+                              <h4 className="text-sm font-black text-slate-900 truncate">
+                                {m.contact.nombreCompletoCorregido}
+                              </h4>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {m.contact.calleOCruce || m.contact.barrio} · {m.minutosCaminando} min a pie
+                            </p>
+                          </div>
+
+                          {m.contact.fechasMencionadas.length > 0 && (
+                            <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-900 font-mono text-[10px] font-bold border border-indigo-200/70">
+                              Col. G: {m.contact.fechasMencionadas.join(', ')}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Textarea */}
+                        <div>
+                          <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">
+                            Mensaje WhatsApp:
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={msgTexto}
+                            onChange={(e) =>
+                              setCustomClusterMessages((prev) => ({
+                                ...prev,
+                                [msgKey]: e.target.value,
+                              }))
+                            }
+                            className="w-full p-2.5 text-xs border border-slate-200 rounded-xl bg-slate-50/60 text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500 leading-relaxed"
+                          />
+                        </div>
+
+                        {/* Botones de Acción */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                          <div className="flex flex-wrap items-center gap-1">
+                            {onQuickStatusFromMap && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onQuickStatusFromMap(
+                                      m.contact.id,
+                                      'CONFIRMO_CAFE_HUB',
+                                      cafeElegidoDrawer
+                                        ? `${cafeElegidoDrawer.nombre} (${cafeElegidoDrawer.direccion.split(',')[0]})`
+                                        : drawerCluster.cafeRecomendado
+                                    )
+                                  }
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-50 text-emerald-900 border border-emerald-300 hover:bg-emerald-100 transition shadow-2xs"
+                                >
+                                  ✓ Confirmó Café
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onQuickStatusFromMap(
+                                      m.contact.id,
+                                      'PASA_PUERTA_A_PUERTA'
+                                    )
+                                  }
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-50 text-amber-950 border border-amber-300 hover:bg-amber-100 transition shadow-2xs"
+                                  title="Si declina la propuesta de Café HUB, pasa automáticamente a Recorrido Puerta a Puerta"
+                                >
+                                  🚶 Casa x Casa
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onQuickStatusFromMap(m.contact.id, 'YA_ADHIRIO')
+                                  }
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-2xs"
+                                >
+                                  🎉 Ya Adhirió
+                                </button>
+                              </>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyMapText(msgKey, msgTexto)}
+                              className="px-2.5 py-1.5 rounded-xl text-xs font-bold border border-slate-200 text-slate-700 hover:bg-slate-100 flex items-center gap-1 transition shadow-2xs"
+                            >
+                              {copiedMapMsgId === msgKey ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Copiado</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span>Copiar</span>
+                                </>
+                              )}
+                            </button>
+                            {m.contact.telWA && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenWhatsApp(m.contact, msgTexto)}
+                                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shadow-2xs transition"
+                              >
+                                <Send className="w-3.5 h-3.5" />
+                                <span>Enviar WA</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.aside>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

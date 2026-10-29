@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   MapPin,
@@ -49,9 +49,28 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
 }) => {
   if (!contact) return null;
 
-  const currentStageKey = getMacroStageForContact(contact);
+  // Actualizaciones optimistas para respuesta visual inmediata al cambiar etapas o guardar datos
+  const [optimisticUpdates, setOptimisticUpdates] = useState<{
+    contactId: string;
+    updates: Partial<Contact>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (optimisticUpdates && optimisticUpdates.contactId !== contact.id) {
+      setOptimisticUpdates(null);
+    }
+  }, [contact.id, optimisticUpdates]);
+
+  const activeContact: Contact = useMemo(() => {
+    if (optimisticUpdates && optimisticUpdates.contactId === contact.id) {
+      return { ...contact, ...optimisticUpdates.updates };
+    }
+    return contact;
+  }, [contact, optimisticUpdates]);
+
+  const currentStageKey = getMacroStageForContact(activeContact);
   const currentStageDef = MACRO_STAGES[currentStageKey];
-  const recAction = getRecommendedActionForContact(contact);
+  const recAction = getRecommendedActionForContact(activeContact);
 
   const [selectedTemplate, setSelectedTemplate] = useState<TipoPlantillaWA>('auto');
   const [messageText, setMessageText] = useState<string>('');
@@ -60,33 +79,41 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
   const [directSendSuccess, setDirectSendSuccess] = useState<boolean>(false);
 
   // Edit fields
-  const [editCalle, setEditCalle] = useState<string>(contact.calleOCruce || '');
-  const [editComentario, setEditComentario] = useState<string>(contact.comentario || '');
-  const [editBarrio, setEditBarrio] = useState<string>(contact.barrio || '');
+  const cleanInitialComment = (activeContact.comentario || '')
+    .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+    .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+    .trim();
+  const [editCalle, setEditCalle] = useState<string>(activeContact.calleOCruce || '');
+  const [editComentario, setEditComentario] = useState<string>(cleanInitialComment);
+  const [editBarrio, setEditBarrio] = useState<string>(activeContact.barrio || '');
   const [isSavingDetails, setIsSavingDetails] = useState<boolean>(false);
 
   useEffect(() => {
-    setEditCalle(contact.calleOCruce || '');
-    setEditComentario(contact.comentario || '');
-    setEditBarrio(contact.barrio || '');
+    const cleanComment = (activeContact.comentario || '')
+      .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+      .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+      .trim();
+    setEditCalle(activeContact.calleOCruce || '');
+    setEditComentario(cleanComment);
+    setEditBarrio(activeContact.barrio || '');
     setDirectSendSuccess(false);
 
-    if (selectedTemplate === 'auto' && contact.alertaVencido?.activa) {
-      setMessageText(contact.alertaVencido.mensajeDisculpasReprogramacion);
+    if (selectedTemplate === 'auto' && activeContact.alertaVencido?.activa) {
+      setMessageText(activeContact.alertaVencido.mensajeDisculpasReprogramacion);
     } else {
-      const gen = generarMensajeContextual(contact, voiceProfile, selectedTemplate);
+      const gen = generarMensajeContextual(activeContact, voiceProfile, selectedTemplate);
       setMessageText(gen.texto);
     }
-  }, [contact, selectedTemplate, voiceProfile]);
+  }, [activeContact, selectedTemplate, voiceProfile]);
 
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
-  const auditDate = formatAuditDate(contact);
+  const auditDate = formatAuditDate(activeContact);
 
   const handleStageChange = async (targetStage: MacroStageKey) => {
-    let nextEstado: EstadoFlujo = contact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP';
-    let nextAdhirio = contact.adhirio;
-    let nextRsp = contact.rsp;
+    let nextEstado: EstadoFlujo = activeContact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP';
+    let nextAdhirio = activeContact.adhirio;
+    let nextRsp = activeContact.rsp;
 
     switch (targetStage) {
       case 'nuevos':
@@ -96,7 +123,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
         break;
       case 'conversacion':
         nextEstado = '1ER_MSJ_ENVIADO_SIN_RSP';
-        nextRsp = contact.rsp === 'Sí' ? 'Sí' : 'No';
+        nextRsp = activeContact.rsp === 'Sí' ? 'Sí' : 'No';
         nextAdhirio = 'Pendiente';
         break;
       case 'agendados':
@@ -124,7 +151,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
     const auditText = `${ddmm} a las ${hhmm} hs`;
     const targetDef = MACRO_STAGES[targetStage];
 
-    const baseCom = (contact.comentario || '')
+    const baseCom = (activeContact.comentario || '')
       .replace(/\s*\[Modificado el [^\]]+\]/g, '')
       .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
       .trim();
@@ -132,14 +159,19 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
       ? `${baseCom} [Modificado el ${auditText} a "${targetDef.shortLabel}"]`
       : `[Modificado el ${auditText} a "${targetDef.shortLabel}"]`;
 
-    await onUpdateContact(contact.id, {
+    const updates: Partial<Contact> = {
       estadoFlujo: nextEstado,
       adhirio: nextAdhirio,
       rsp: nextRsp,
       primerContactoEnviado: targetStage !== 'nuevos',
       comentario: newComentario,
       actualizadoEnAppAt: ahora.toISOString(),
-    });
+    };
+
+    // Actualización optimista instantánea en el Drawer
+    setOptimisticUpdates({ contactId: contact.id, updates });
+
+    await onUpdateContact(contact.id, updates);
 
     setFeedbackMsg(`✓ Etapa cambiada a "${targetDef.label}" (${auditText})`);
     setTimeout(() => setFeedbackMsg(null), 3500);
@@ -161,12 +193,16 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
         ? `${baseCom} [Modificado el ${auditText}]`
         : `[Modificado el ${auditText}]`;
 
-      await onUpdateContact(contact.id, {
+      const updates: Partial<Contact> = {
         calleOCruce: editCalle.trim(),
         comentario: newComentario,
         barrio: editBarrio.trim(),
         actualizadoEnAppAt: ahora.toISOString(),
-      });
+      };
+
+      setOptimisticUpdates({ contactId: contact.id, updates });
+
+      await onUpdateContact(contact.id, updates);
 
       setFeedbackMsg(`✓ Datos guardados en auditoría (${auditText})`);
       setTimeout(() => setFeedbackMsg(null), 3500);
@@ -180,11 +216,11 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
     setIsSendingDirect(true);
     try {
       const ok = await onSendDirectWA(
-        contact.tel || contact.telRaw,
+        activeContact.tel || activeContact.telRaw,
         messageText,
-        contact.id,
-        contact.primerNombre || contact.nombre,
-        contact.barrio
+        activeContact.id,
+        activeContact.primerNombre || activeContact.nombre,
+        activeContact.barrio
       );
       if (ok) {
         setDirectSendSuccess(true);
@@ -201,7 +237,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const waLink = crearEnlaceWhatsApp(contact.tel || contact.telRaw, messageText);
+  const waLink = crearEnlaceWhatsApp(activeContact.tel || activeContact.telRaw, messageText);
 
   return (
     <AnimatePresence>
@@ -221,10 +257,10 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-mono font-bold text-slate-400">
-                  #{contact.id}
+                  #{activeContact.id}
                 </span>
                 <h3 className="truncate text-base font-black text-slate-900">
-                  {contact.primerNombre || contact.nombre}
+                  {activeContact.primerNombre || activeContact.nombre}
                 </h3>
                 <span
                   className={`rounded-full border px-2.5 py-0.5 text-[11px] font-black ${currentStageDef.badgeBg} ${currentStageDef.badgeText} ${currentStageDef.badgeBorder}`}
@@ -233,7 +269,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                {contact.barrio || 'CABA'} · Tel: {contact.tel || contact.telRaw || 'Sin número'}
+                {activeContact.barrio || 'CABA'} · Tel: {activeContact.tel || activeContact.telRaw || 'Sin número'}
               </p>
               {auditDate && (
                 <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1 mt-0.5">
@@ -372,7 +408,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                   <button
                     type="button"
                     onClick={handleSendDirect}
-                    disabled={isSendingDirect || !contact.tel}
+                    disabled={isSendingDirect || !activeContact.tel}
                     className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white hover:bg-emerald-500 transition shadow-sm shadow-emerald-600/20 disabled:opacity-50"
                   >
                     <Send className={`h-3.5 w-3.5 ${isSendingDirect ? 'animate-spin' : ''}`} />
@@ -385,9 +421,23 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                   target="_blank"
                   rel="noreferrer"
                   onClick={() => {
-                    onUpdateContact(contact.id, {
+                    const ahora = new Date();
+                    const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+                    const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+                    const auditText = `${ddmm} a las ${hhmm} hs`;
+                    const baseCom = (activeContact.comentario || '')
+                      .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+                      .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+                      .trim();
+                    const newComentario = baseCom
+                      ? `${baseCom} [Modificado el ${auditText} a "1er msj wa.me"]`
+                      : `[Modificado el ${auditText} a "1er msj wa.me"]`;
+
+                    onUpdateContact(activeContact.id, {
                       primerContactoEnviado: true,
-                      estadoFlujo: contact.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ? '1ER_MSJ_ENVIADO_SIN_RSP' : contact.estadoFlujo,
+                      estadoFlujo: activeContact.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ? '1ER_MSJ_ENVIADO_SIN_RSP' : activeContact.estadoFlujo,
+                      comentario: newComentario,
+                      actualizadoEnAppAt: ahora.toISOString(),
                     });
                   }}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-xs"

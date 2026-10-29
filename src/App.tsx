@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { CheckCircle2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import type {
   AutoFirstMessageCampaign,
   AutoFirstMessageConfig,
@@ -48,10 +50,28 @@ export default function App() {
   const [profile, setProfile] = useState<VoiceProfile>(() => DEFAULT_VOICE_PROFILE);
 
   // 3. Ajustes de Conectividad
-  const [sheetUrlInput, setSheetUrlInput] = useState<string>('');
-  const [appsScriptUrlInput, setAppsScriptUrlInput] = useState<string>('');
-  const [calendarIcalUrlInput, setCalendarIcalUrlInput] = useState<string>('');
+  const [sheetUrlInput, setSheetUrlInput] = useState<string>(
+    () => (import.meta.env.VITE_GOOGLE_SHEET_URL as string) || (import.meta.env.VITE_SHEET_URL as string) || ''
+  );
+  const [appsScriptUrlInput, setAppsScriptUrlInput] = useState<string>(
+    () => (import.meta.env.VITE_APPS_SCRIPT_URL as string) || ''
+  );
+  const [calendarIcalUrlInput, setCalendarIcalUrlInput] = useState<string>(
+    () => (import.meta.env.VITE_CALENDAR_ICAL_URL as string) || ''
+  );
   const [isSyncingSheets, setIsSyncingSheets] = useState<boolean>(false);
+  const [syncToast, setSyncToast] = useState<{
+    message: string;
+    type: 'success' | 'warn' | 'error' | 'info';
+  } | null>(null);
+
+  useEffect(() => {
+    if (!syncToast) return;
+    const timer = setTimeout(() => {
+      setSyncToast(null);
+    }, 4500);
+    return () => clearTimeout(timer);
+  }, [syncToast]);
 
   // 4. Automatización WhatsApp Web
   const [whatsAppStatus, setWhatsAppStatus] = useState<string>('DISCONNECTED');
@@ -193,16 +213,63 @@ export default function App() {
   // Actualización atómica de un contacto (UI inmediata + persistencia SQLite)
   const handleUpdateContact = useCallback(
     async (contactId: string, updates: Partial<Contact>) => {
+      const ahora = new Date();
+      const nowIso = ahora.toISOString();
+      const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+      const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const auditText = `${ddmm} a las ${hhmm} hs`;
+
+      let calculatedComentario = updates.comentario;
+
       setRawContacts((prev) =>
-        prev.map((c) => (String(c.id) === String(contactId) ? { ...c, ...(updates as any) } : c))
+        prev.map((c) => {
+          if (String(c.id) !== String(contactId)) return c;
+
+          let finalComentario = updates.comentario !== undefined ? updates.comentario : c.comentario;
+          if (
+            updates.comentario === undefined &&
+            (updates.estadoFlujo !== undefined || updates.adhirio !== undefined)
+          ) {
+            const baseCom = (c.comentario || '')
+              .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+              .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+              .trim();
+            const tagLabel = updates.estadoFlujo ? ` a "${updates.estadoFlujo}"` : '';
+            finalComentario = baseCom
+              ? `${baseCom} [Modificado el ${auditText}${tagLabel}]`
+              : `[Modificado el ${auditText}${tagLabel}]`;
+            calculatedComentario = finalComentario;
+          }
+
+          return {
+            ...c,
+            ...updates,
+            comentario: finalComentario,
+            actualizadoEnAppAt: updates.actualizadoEnAppAt || nowIso,
+          };
+        })
       );
 
+      const enrichedUpdates = {
+        ...updates,
+        ...(calculatedComentario !== undefined ? { comentario: calculatedComentario } : {}),
+        actualizadoEnAppAt: updates.actualizadoEnAppAt || nowIso,
+      };
+
       try {
-        await fetch(`/api/contacts/${contactId}`, {
+        const res = await fetch(`/api/contacts/${contactId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updates),
+          body: JSON.stringify(enrichedUpdates),
         });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.contact) {
+            setRawContacts((prev) =>
+              prev.map((c) => (String(c.id) === String(contactId) ? { ...c, ...data.contact } : c))
+            );
+          }
+        }
       } catch (err) {
         console.error('Error persistiendo contacto en SQLite:', err);
       }
@@ -234,17 +301,31 @@ export default function App() {
         });
         const data = await res.json();
         if (data?.ok) {
+          const nowIso = new Date().toISOString();
+          const ahora = new Date();
+          const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+          const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+          const auditText = `${ddmm} a las ${hhmm} hs`;
+
           setRawContacts((prev) =>
-            prev.map((c) =>
-              String(c.id) === String(contactId)
-                ? {
-                    ...c,
-                    primerContactoEnviado: true,
-                    estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
-                    ultimoContacto: new Date().toISOString().slice(0, 10),
-                  }
-                : c
-            )
+            prev.map((c) => {
+              if (String(c.id) !== String(contactId)) return c;
+              const baseCom = (c.comentario || '')
+                .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+                .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+                .trim();
+              const newCom = baseCom
+                ? `${baseCom} [Modificado el ${auditText} a "1er mensaje enviado"]`
+                : `[Modificado el ${auditText} a "1er mensaje enviado"]`;
+              return {
+                ...c,
+                primerContactoEnviado: true,
+                estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
+                ultimoContacto: nowIso.slice(0, 10),
+                actualizadoEnAppAt: nowIso,
+                comentario: newCom,
+              };
+            })
           );
           return true;
         }
@@ -259,7 +340,22 @@ export default function App() {
   // Sincronización en vivo con Google Sheets vía Apps Script
   const handleActualizarDesdeSheets = useCallback(async () => {
     if (isSyncingSheets) return;
+
+    // 1. Si no hay ni Sheet URL ni Apps Script configurado, avisar y guiar a Configuración
+    if (!sheetUrlInput.trim() && !appsScriptUrlInput.trim()) {
+      setSyncToast({
+        message: 'Por favor pegá el enlace de tu Google Sheets en la pestaña Configuración para sincronizar.',
+        type: 'warn',
+      });
+      setActiveTab('configuracion');
+      return;
+    }
+
     setIsSyncingSheets(true);
+    setSyncToast({
+      message: 'Conectando y leyendo datos de Google Sheets...',
+      type: 'info',
+    });
 
     try {
       const keysControl = new Set<string>();
@@ -267,67 +363,87 @@ export default function App() {
         if (reg.contactId) keysControl.add(`id:${String(reg.contactId).trim()}`);
       }
 
-      if (sheetUrlInput.trim() || appsScriptUrlInput.trim()) {
-        const res = await fetch('/api/sheets/fetch-live', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sheetUrlOrId: sheetUrlInput.trim(),
-            appsScriptUrl: appsScriptUrlInput.trim(),
-          }),
-        });
+      const res = await fetch('/api/sheets/fetch-live', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sheetUrlOrId: sheetUrlInput.trim(),
+          appsScriptUrl: appsScriptUrlInput.trim(),
+        }),
+      });
 
-        const rawText = await res.text();
-        let data: any = null;
-        try {
-          data = JSON.parse(rawText.trim());
-        } catch {
-          // Ignorar HTML
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText.trim());
+      } catch {
+        // Ignorar HTML
+      }
+
+      if (data && data.ok) {
+        let parsed: RawContactRow[] = [];
+        if (data.source === 'apps_script' && Array.isArray(data.rows)) {
+          const textTsv = data.rows
+            .map((r: unknown[]) => r.map((cell) => String(cell ?? '')).join('\t'))
+            .join('\n');
+          parsed = parsearTSVoCSVContactos(textTsv, true);
+        } else if (data.csvText) {
+          parsed = parsearTSVoCSVContactos(data.csvText, true);
         }
 
-        if (data && data.ok) {
-          let parsed: RawContactRow[] = [];
-          if (data.source === 'apps_script' && Array.isArray(data.rows)) {
-            const textTsv = data.rows
-              .map((r: unknown[]) => r.map((cell) => String(cell ?? '')).join('\t'))
-              .join('\n');
-            parsed = parsearTSVoCSVContactos(textTsv, true);
-          } else if (data.csvText) {
-            parsed = parsearTSVoCSVContactos(data.csvText, true);
-          }
+        if (parsed.length > 0) {
+          const { contactosFusionados } = fusionarContactosDesdeSheetsConControl(
+            parsed,
+            rawContacts,
+            keysControl
+          );
+          setRawContacts(contactosFusionados);
 
-          if (parsed.length > 0) {
-            const { contactosFusionados } = fusionarContactosDesdeSheetsConControl(
-              parsed,
-              rawContacts,
-              keysControl
-            );
-            setRawContacts(contactosFusionados);
+          // Guardar masivamente en SQLite
+          void fetch('/api/contacts/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts: contactosFusionados }),
+          });
 
-            // Guardar masivamente en SQLite
-            void fetch('/api/contacts/bulk', {
-              method: 'POST',
+          if (Array.isArray(data.calendarEvents) && data.calendarEvents.length > 0) {
+            const nextCal = deduplicarEventosCalendar([
+              ...calendarEvents,
+              ...data.calendarEvents,
+            ]);
+            setCalendarEvents(nextCal);
+            void fetch('/api/calendar-events', {
+              method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contacts: contactosFusionados }),
+              body: JSON.stringify({ events: nextCal, source: 'sheets_sync' }),
             });
-
-            if (Array.isArray(data.calendarEvents) && data.calendarEvents.length > 0) {
-              const nextCal = deduplicarEventosCalendar([
-                ...calendarEvents,
-                ...data.calendarEvents,
-              ]);
-              setCalendarEvents(nextCal);
-              void fetch('/api/calendar-events', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ events: nextCal, source: 'sheets_sync' }),
-              });
-            }
           }
+
+          setSyncToast({
+            message: `✓ Sincronizados ${contactosFusionados.length} contactos desde Google Sheets con éxito.`,
+            type: 'success',
+          });
+        } else {
+          setSyncToast({
+            message: 'Se conectó a Sheets pero no se detectaron filas de contactos válidas.',
+            type: 'warn',
+          });
         }
+      } else {
+        const errMsg =
+          data?.error ||
+          'No se pudo sincronizar con Google Sheets. Verificá que esté compartido como Lector o que la URL sea válida.';
+        setSyncToast({
+          message: errMsg,
+          type: 'error',
+        });
       }
     } catch (err) {
       console.error('Error sincronizando con Google Sheets:', err);
+      setSyncToast({
+        message: 'Error de red o conexión al intentar conectar con Google Sheets.',
+        type: 'error',
+      });
     } finally {
       setIsSyncingSheets(false);
     }
@@ -601,6 +717,39 @@ export default function App() {
         onApplyBatchResults={handleApplyAutoBatchResults}
         initialModoCola={modoColaBotActivo}
       />
+
+      {/* 4. Notificaciones Flotantes de Sincronización y Estado */}
+      <AnimatePresence>
+        {syncToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className={`fixed bottom-6 right-6 z-50 max-w-md flex items-center gap-3 rounded-2xl px-4 py-3 shadow-2xl border text-xs font-bold ${
+              syncToast.type === 'success'
+                ? 'bg-slate-900 text-white border-emerald-500/50 shadow-emerald-950/20'
+                : syncToast.type === 'error'
+                ? 'bg-rose-950 text-rose-50 border-rose-500/50 shadow-rose-950/30'
+                : syncToast.type === 'warn'
+                ? 'bg-amber-950 text-amber-50 border-amber-500/50 shadow-amber-950/30'
+                : 'bg-slate-900 text-white border-slate-700 shadow-black/20'
+            }`}
+          >
+            {syncToast.type === 'success' && <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />}
+            {syncToast.type === 'error' && <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />}
+            {syncToast.type === 'warn' && <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />}
+            {syncToast.type === 'info' && <RefreshCw className="h-4 w-4 text-indigo-400 animate-spin shrink-0" />}
+            <span className="flex-1 leading-snug">{syncToast.message}</span>
+            <button
+              type="button"
+              onClick={() => setSyncToast(null)}
+              className="text-slate-400 hover:text-white px-1 text-xs"
+            >
+              ✕
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

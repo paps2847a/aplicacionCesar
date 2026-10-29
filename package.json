@@ -7,8 +7,11 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "start": "node server.ts",
+    "compile": "bun run build && bun scripts/generate_embedded_assets.ts && bun build --compile --minify ./server.ts --outfile popurri-app --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3",
+    "compile:win": "bun run build && bun scripts/generate_embedded_assets.ts && bun build --compile --minify --target=bun-windows-x64 ./server.ts --outfile popurri-app.exe --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3",
+    "compile:mac": "bun run build && bun scripts/generate_embedded_assets.ts && bun build --compile --minify --target=bun-darwin-arm64 ./server.ts --outfile popurri-app-mac --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist server.js popurri-app popurri-app.exe popurri-app-mac",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

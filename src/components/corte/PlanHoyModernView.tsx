@@ -309,9 +309,24 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      const ahora = new Date();
+                                      const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+                                      const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+                                      const auditText = `${ddmm} a las ${hhmm} hs`;
+                                      const baseCom = (parada.contact.comentario || '')
+                                        .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+                                        .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+                                        .trim();
+                                      const newComentario = baseCom
+                                        ? `${baseCom} [Modificado el ${auditText} a "Firmaron"]`
+                                        : `[Modificado el ${auditText} a "Firmaron"]`;
+
                                       onUpdateContact(parada.contact.id, {
                                         adhirio: 'Sí',
                                         estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+                                        primerContactoEnviado: true,
+                                        comentario: newComentario,
+                                        actualizadoEnAppAt: ahora.toISOString(),
                                       });
                                     }}
                                     className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100 transition"

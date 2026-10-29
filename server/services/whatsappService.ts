@@ -126,17 +126,32 @@ class WhatsAppService {
       this.qrCodeDataUrl = null;
       this.addLog('info', 'Iniciando navegador Chromium para WhatsApp Web...');
 
-      const sessionDir = path.resolve(__dirname, '../../data/wa_session');
+      const candidateSessionDirs = [
+        path.resolve(__dirname, '../../data/wa_session'),
+        path.resolve(process.cwd(), 'data/wa_session'),
+      ];
+      const sessionDir =
+        candidateSessionDirs.find((d) => fs.existsSync(d)) || candidateSessionDirs[1];
       if (!fs.existsSync(sessionDir)) {
         fs.mkdirSync(sessionDir, { recursive: true });
       }
 
+      const systemChromium = [
+        process.env.PUPPETEER_EXECUTABLE_PATH,
+        process.env.CHROME_BIN,
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/google-chrome',
+      ].find((p) => p && fs.existsSync(p));
+
       this.client = new Client({
         authStrategy: new LocalAuth({
-          dataPath: sessionDir,
+          dataPath: path.dirname(sessionDir),
+          clientId: 'wa_session',
         }),
         puppeteer: {
           headless: true,
+          executablePath: systemChromium || undefined,
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
