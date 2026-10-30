@@ -666,6 +666,7 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: action || 'updateRow', payload }),
+        redirect: 'follow',
       });
       const scriptText = await scriptRes.text();
       if (/^<!doctype/i.test(scriptText.trim()) || /^<html/i.test(scriptText.trim())) {

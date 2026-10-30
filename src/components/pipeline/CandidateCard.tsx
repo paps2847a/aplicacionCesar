@@ -184,6 +184,10 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   const auditDate = formatAuditDate(contact);
   const phone = contact.tel || contact.telRaw;
   const fullName = contact.nombreCompletoCorregido || contact.nombre || `Contacto #${contact.id}`;
+  const yaFirmo =
+    contact.adhirio === 'Sí' ||
+    contact.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+    stageKey === 'adheridos';
 
   const handleCopyPhone = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -360,18 +364,26 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
 
             {/* Botones de Acción */}
             <div className="flex items-center gap-1.5">
-              {stageKey !== 'adheridos' && (
+              {yaFirmo ? (
+                <span
+                  className="inline-flex items-center gap-1 rounded-xl bg-emerald-100 border border-emerald-300 px-2.5 py-1.5 text-xs font-black text-emerald-900 shadow-2xs cursor-default"
+                  title="Firma oficial registrada para este contacto"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
+                  <span>✓ Ya Firmó</span>
+                </span>
+              ) : (
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (onStageChange) onStageChange(contact, 'adheridos');
                   }}
-                  className="inline-flex items-center gap-1 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-black text-emerald-800 hover:bg-emerald-100 transition shadow-2xs"
-                  title="Marcar como firma oficial completada"
+                  className="inline-flex items-center gap-1 rounded-xl border border-emerald-200 bg-white hover:bg-emerald-50 px-2.5 py-1.5 text-xs font-black text-emerald-700 transition shadow-2xs"
+                  title="Registrar firma oficial para este contacto"
                 >
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                  <span>Firmó</span>
+                  <span>+ Marcar Firma</span>
                 </button>
               )}
 

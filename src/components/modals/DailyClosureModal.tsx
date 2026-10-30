@@ -12,12 +12,15 @@ import {
   PhoneCall,
   UserX,
   MapPin,
+  Trash2,
+  RotateCcw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type {
   Contact,
   ControlEnvioRegistro,
   CorteResultado,
+  EstatusReporteApp,
   VoiceProfile,
 } from '../../types';
 import { generarPanelTareasDiarias } from '../../domain/tasks/dailyTasks';
@@ -42,6 +45,7 @@ export const DailyClosureModal: React.FC<DailyClosureModalProps> = ({
   ahoraMs = Date.now(),
 }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [excludedContactIds, setExcludedContactIds] = useState<Set<string>>(new Set());
 
   const panel = useMemo(() => {
     return generarPanelTareasDiarias(
@@ -53,7 +57,32 @@ export const DailyClosureModal: React.FC<DailyClosureModalProps> = ({
     );
   }, [contacts, corteResultado, controlEnvios, profile, ahoraMs]);
 
-  const resumen = panel.resumenFormsYApps;
+  const rawResumen = panel.resumenFormsYApps;
+
+  const filteredPersonasHabladas = useMemo(() => {
+    return rawResumen.estatusPersonasHabladasHoy.filter(
+      (item) => !excludedContactIds.has(String(item.contactId))
+    );
+  }, [rawResumen.estatusPersonasHabladasHoy, excludedContactIds]);
+
+  const conteoPorEstatus = useMemo(() => {
+    const conteo: Record<EstatusReporteApp, number> = {
+      'Adhirió': 0,
+      'Encuentro Confirmado': 0,
+      'En conversación (Falta dato/confirmar)': 0,
+      'Número inválido / No existe WA': 0,
+      'Sin DNI en CABA': 0,
+      'No vive en CABA': 0,
+      'Baja / No contactar': 0,
+    };
+    for (const item of filteredPersonasHabladas) {
+      conteo[item.estatusApp] = (conteo[item.estatusApp] || 0) + 1;
+    }
+    return conteo;
+  }, [filteredPersonasHabladas]);
+
+  const personasContactadasHoy = filteredPersonasHabladas.length;
+  const adhesionesHoy = conteoPorEstatus['Adhirió'] || 0;
 
   const handleCopyText = (key: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -61,19 +90,31 @@ export const DailyClosureModal: React.FC<DailyClosureModalProps> = ({
     setTimeout(() => setCopiedKey(null), 2500);
   };
 
-  const textoResumenGoogleForms = `Fecha: ${resumen.fechaHoyEtiqueta}
-Personas contactadas hoy: ${resumen.personasContactadasHoy}
-Adhesiones conseguidas hoy: ${resumen.adhesionesConseguidasHoy}
-Total adhesiones acumuladas: ${resumen.adhesionesTotalesAcumuladas}
+  const handleExcludeContact = (contactId: string) => {
+    setExcludedContactIds((prev) => {
+      const next = new Set(prev);
+      next.add(String(contactId));
+      return next;
+    });
+  };
+
+  const handleRestoreExcluded = () => {
+    setExcludedContactIds(new Set());
+  };
+
+  const textoResumenGoogleForms = `Fecha: ${rawResumen.fechaHoyEtiqueta}
+Personas contactadas hoy: ${personasContactadasHoy}
+Adhesiones conseguidas hoy: ${adhesionesHoy}
+Total adhesiones acumuladas: ${rawResumen.adhesionesTotalesAcumuladas}
 
 Desglose por estatus:
-- Adhirió: ${resumen.conteoPorEstatusHoy['Adhirió'] || 0}
-- Encuentro Confirmado: ${resumen.conteoPorEstatusHoy['Encuentro Confirmado'] || 0}
-- En conversación: ${resumen.conteoPorEstatusHoy['En conversación (Falta dato/confirmar)'] || 0}
-- Número inválido: ${resumen.conteoPorEstatusHoy['Número inválido / No existe WA'] || 0}
-- Sin DNI en CABA: ${resumen.conteoPorEstatusHoy['Sin DNI en CABA'] || 0}
-- No vive en CABA: ${resumen.conteoPorEstatusHoy['No vive en CABA'] || 0}
-- Baja: ${resumen.conteoPorEstatusHoy['Baja / No contactar'] || 0}`;
+- Adhirió: ${conteoPorEstatus['Adhirió'] || 0}
+- Encuentro Confirmado: ${conteoPorEstatus['Encuentro Confirmado'] || 0}
+- En conversación: ${conteoPorEstatus['En conversación (Falta dato/confirmar)'] || 0}
+- Número inválido: ${conteoPorEstatus['Número inválido / No existe WA'] || 0}
+- Sin DNI en CABA: ${conteoPorEstatus['Sin DNI en CABA'] || 0}
+- No vive en CABA: ${conteoPorEstatus['No vive en CABA'] || 0}
+- Baja: ${conteoPorEstatus['Baja / No contactar'] || 0}`;
 
   if (!isOpen) return null;
 
@@ -122,10 +163,10 @@ Desglose por estatus:
                 </div>
                 <div className="mt-3 flex items-baseline justify-between">
                   <span className="text-3xl font-black text-sky-950">
-                    {resumen.personasContactadasHoy}
+                    {personasContactadasHoy}
                   </span>
                   <button
-                    onClick={() => handleCopyText('cnt-hoy', String(resumen.personasContactadasHoy))}
+                    onClick={() => handleCopyText('cnt-hoy', String(personasContactadasHoy))}
                     className="text-[10px] font-bold text-sky-700 hover:underline inline-flex items-center gap-1"
                   >
                     {copiedKey === 'cnt-hoy' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -143,10 +184,10 @@ Desglose por estatus:
                 </div>
                 <div className="mt-3 flex items-baseline justify-between">
                   <span className="text-3xl font-black text-emerald-950">
-                    {resumen.adhesionesConseguidasHoy}
+                    {adhesionesHoy}
                   </span>
                   <button
-                    onClick={() => handleCopyText('adh-hoy', String(resumen.adhesionesConseguidasHoy))}
+                    onClick={() => handleCopyText('adh-hoy', String(adhesionesHoy))}
                     className="text-[10px] font-bold text-emerald-700 hover:underline inline-flex items-center gap-1"
                   >
                     {copiedKey === 'adh-hoy' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -164,10 +205,10 @@ Desglose por estatus:
                 </div>
                 <div className="mt-3 flex items-baseline justify-between">
                   <span className="text-3xl font-black text-slate-900">
-                    {resumen.adhesionesTotalesAcumuladas}
+                    {rawResumen.adhesionesTotalesAcumuladas}
                   </span>
                   <button
-                    onClick={() => handleCopyText('adh-tot', String(resumen.adhesionesTotalesAcumuladas))}
+                    onClick={() => handleCopyText('adh-tot', String(rawResumen.adhesionesTotalesAcumuladas))}
                     className="text-[10px] font-bold text-slate-600 hover:underline inline-flex items-center gap-1"
                   >
                     {copiedKey === 'adh-tot' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -214,7 +255,7 @@ Desglose por estatus:
               </h4>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {Object.entries(resumen.conteoPorEstatusHoy).map(([estatus, count]) => {
+                {Object.entries(conteoPorEstatus).map(([estatus, count]) => {
                   return (
                     <div
                       key={estatus}
@@ -234,27 +275,42 @@ Desglose por estatus:
 
             {/* 4. Listado Detallado de Personas Habladas Hoy */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
-                  Personas Habladas Hoy ({resumen.estatusPersonasHabladasHoy.length})
-                </h4>
-                <span className="text-[11px] text-slate-500">
-                  Con auditoría de hora y barrio
-                </span>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                    Personas Habladas Hoy ({filteredPersonasHabladas.length})
+                  </h4>
+                  <span className="text-[11px] text-slate-500">
+                    Con auditoría de hora y barrio
+                  </span>
+                </div>
+
+                {excludedContactIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleRestoreExcluded}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-xl border border-amber-200 hover:bg-amber-100 transition shadow-2xs"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Restaurar {excludedContactIds.size} contacto{excludedContactIds.size > 1 ? 's' : ''} descartado{excludedContactIds.size > 1 ? 's' : ''}
+                  </button>
+                )}
               </div>
 
-              {resumen.estatusPersonasHabladasHoy.length === 0 ? (
+              {filteredPersonasHabladas.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-500">
-                  Aún no se registraron envíos ni actualizaciones en la jornada de hoy.
+                  {excludedContactIds.size > 0
+                    ? 'Todos los contactos de la jornada fueron descartados temporalmente.'
+                    : 'Aún no se registraron envíos ni actualizaciones en la jornada de hoy.'}
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200/80 bg-white overflow-hidden max-h-56 overflow-y-auto">
-                  {resumen.estatusPersonasHabladasHoy.map((item) => (
+                  {filteredPersonasHabladas.map((item) => (
                     <div
                       key={item.contactId}
-                      className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-slate-50/60 transition"
+                      className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-slate-50/60 transition group"
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-black text-slate-900 truncate">
                             {item.nombre}
@@ -268,9 +324,19 @@ Desglose por estatus:
                         </p>
                       </div>
 
-                      <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-800 border border-emerald-200">
-                        {item.estatusApp}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-800 border border-emerald-200">
+                          {item.estatusApp}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleExcludeContact(item.contactId)}
+                          title="Descartar de la jornada de hoy (ej: contacto de prueba)"
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

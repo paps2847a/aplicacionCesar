@@ -207,20 +207,43 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   }, [contacts]);
 
   // Filtrado de contactos
+  // Filtrado de contactos omnisciente y universal
   const filteredContacts = useMemo(() => {
+    const qRaw = searchQuery.trim();
+    const hasSearch = qRaw.length > 0;
+    const q = qRaw.toLowerCase();
+    const qDigits = qRaw.replace(/\D/g, '');
+
     return contacts.filter((c) => {
-      // 1. Filtro de búsqueda
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchName = (c.nombre || '').toLowerCase().includes(q);
-        const matchId = String(c.id || '') === q || `#${c.id}` === q;
-        const matchTel = (c.tel || c.telRaw || '').includes(q);
+      // 1. Filtro de búsqueda universal (Nombre, DNI, Teléfono formateado o dígitos limpios, Barrio, Calle, Comentarios)
+      if (hasSearch) {
+        const nom = (c.nombre || '').toLowerCase();
+        const matchName = nom.includes(q);
+        const matchId = String(c.id || '') === q || `#${c.id}` === q || (qDigits.length > 0 && String(c.id) === qDigits);
+        
+        // Búsqueda por teléfono: tolera sin espacios, sin guiones, con o sin 54/9/15
+        const rawTelDigits = (c.telRaw || '').replace(/\D/g, '');
+        const normTelDigits = (c.tel || (c as any).tel_norm || '').replace(/\D/g, '');
+        const matchTel =
+          (c.tel || c.telRaw || '').toLowerCase().includes(q) ||
+          (qDigits.length >= 3 && (rawTelDigits.includes(qDigits) || normTelDigits.includes(qDigits)));
+
+        // Búsqueda por DNI (del campo explícito o en comentarios/notas)
+        const dniDigits = ((c as any).dni || '').replace(/\D/g, '');
+        const matchDni =
+          (qDigits.length >= 4 && dniDigits.includes(qDigits)) ||
+          ((c as any).dni || '').toLowerCase().includes(q);
+
         const matchBarrio = (c.barrio || '').toLowerCase().includes(q);
         const matchCalle = (c.calleOCruce || '').toLowerCase().includes(q);
         const matchCom = (c.comentario || '').toLowerCase().includes(q);
-        if (!matchName && !matchId && !matchTel && !matchBarrio && !matchCalle && !matchCom) {
-          return false;
-        }
+
+        const matchesQuery = matchName || matchId || matchTel || matchDni || matchBarrio || matchCalle || matchCom;
+        if (!matchesQuery) return false;
+
+        // Cuando el usuario busca explícitamente a alguien por nombre, teléfono, DNI o dato,
+        // la búsqueda es universal para encontrarlo sí o sí en toda la base sin que otros filtros lo oculten.
+        return true;
       }
 
       // 2. Filtro de barrio
@@ -296,16 +319,58 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   // Handler para cambio directo de etapa con auditoría de fecha y hora
   const handleDirectStageChange = useCallback(
     async (contact: Contact, targetStage: MacroStageKey) => {
+      const ahora = new Date();
+      const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+      const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const auditText = `${ddmm} a las ${hhmm} hs`;
+      const targetDef = MACRO_STAGES[targetStage];
+      const nom = contact.primerNombre || contact.nombre || `Contacto #${contact.id}`;
+
+      if (targetStage === 'nuevos') {
+        const baseCom = (contact.comentario || '')
+          .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+          .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+          .replace(/\s*\[Firmó el [^\]]+\]/g, '')
+          .trim();
+        await onUpdateContact(contact.id, {
+          estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
+          adhirio: 'Pendiente',
+          rsp: 'Nuevo',
+          primerContactoEnviado: false,
+          comentario: baseCom,
+          actualizadoEnAppAt: '',
+        });
+        showToast(`${nom} devuelto a "Nuevos" (limpio de auditoría)`);
+        return;
+      }
+
+      if (targetStage === 'adheridos') {
+        const baseCom = (contact.comentario || '')
+          .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+          .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+          .replace(/\s*\[Firmó el [^\]]+\]/g, '')
+          .trim();
+        const newComentario = baseCom
+          ? `${baseCom} [Firmó el ${auditText}]`
+          : `[Firmó el ${auditText}]`;
+
+        await onUpdateContact(contact.id, {
+          estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+          adhirio: 'Sí',
+          rsp: 'Sí',
+          primerContactoEnviado: true,
+          comentario: newComentario,
+          actualizadoEnAppAt: ahora.toISOString(),
+        });
+        showToast(`✓ ¡Firma oficial registrada para ${nom}!`);
+        return;
+      }
+
       let nextEstado: EstadoFlujo = contact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP';
       let nextAdhirio = contact.adhirio;
       let nextRsp = contact.rsp;
 
       switch (targetStage) {
-        case 'nuevos':
-          nextEstado = 'SIN_CONTACTAR_1ER_MSJ';
-          nextRsp = 'Nuevo';
-          nextAdhirio = 'Pendiente';
-          break;
         case 'conversacion':
           nextEstado = '1ER_MSJ_ENVIADO_SIN_RSP';
           nextRsp = contact.rsp === 'Sí' ? 'Sí' : 'No';
@@ -319,22 +384,11 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         case 'pausa':
           nextEstado = 'POSTERGO_SALUD_O_VIAJE';
           break;
-        case 'adheridos':
-          nextEstado = 'YA_ADHIRIO_FIRMA_OK';
-          nextAdhirio = 'Sí';
-          nextRsp = 'Sí';
-          break;
         case 'descartados':
           nextEstado = 'DESCARTADO_O_BAJA';
           nextAdhirio = 'No';
           break;
       }
-
-      const ahora = new Date();
-      const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
-      const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-      const auditText = `${ddmm} a las ${hhmm} hs`;
-      const targetDef = MACRO_STAGES[targetStage];
 
       const baseCom = (contact.comentario || '')
         .replace(/\s*\[Modificado el [^\]]+\]/g, '')
@@ -348,12 +402,11 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         estadoFlujo: nextEstado,
         adhirio: nextAdhirio,
         rsp: nextRsp,
-        primerContactoEnviado: targetStage !== 'nuevos',
+        primerContactoEnviado: true,
         comentario: newComentario,
         actualizadoEnAppAt: ahora.toISOString(),
       });
 
-      const nom = contact.primerNombre || contact.nombre || `Contacto #${contact.id}`;
       showToast(`${nom} movido a "${targetDef.label}"`);
     },
     [onUpdateContact, showToast]
@@ -746,10 +799,11 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
           {MACRO_STAGES_ORDER.map((stageKey) => {
             const def = MACRO_STAGES[stageKey];
             const stageContacts = contactsByStage[stageKey];
-            const isExpanded = !!expandedStages[stageKey];
+            const hasActiveSearch = searchQuery.trim().length > 0;
+            const isExpanded = hasActiveSearch ? stageContacts.length > 0 : !!expandedStages[stageKey];
 
-            // Si hay un filtro por etapa y no es esta, ocultar
-            if (activeStageFilter !== 'TODOS' && activeStageFilter !== stageKey) {
+            // Si hay un filtro por etapa y no es esta, ocultar (salvo cuando se está buscando específicamente)
+            if (!hasActiveSearch && activeStageFilter !== 'TODOS' && activeStageFilter !== stageKey) {
               return null;
             }
 

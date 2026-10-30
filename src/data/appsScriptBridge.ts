@@ -51,24 +51,62 @@ function doPost(e) {
   if (body.action === 'updateRow' && body.payload) {
     const p = body.payload;
     const data = sheet.getDataRange().getValues();
-    const idTarget = String(p.id || '').trim();
-    const telTarget = String(p.telefonoNorm || '').replace(/\\D+/g, '').slice(-8);
+    if (data.length < 2) return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Hoja sin filas' })).setMimeType(ContentService.MimeType.JSON);
+    
+    // Auto-detectar columnas a partir de la fila de encabezados (fila 0)
+    var header = data[0];
+    var colId = 0, colNombre = 1, colTel = -1, colRsp = -1, colAdhirio = -1, colComentario = -1, colEstado = -1;
+    for (var c = 0; c < header.length; c++) {
+      var h = String(header[c] || '').toLowerCase().trim();
+      if (h === '#' || h.indexOf('id') === 0 || h.indexOf('orden') >= 0) colId = c;
+      else if (h.indexOf('nombre') >= 0 || h.indexOf('vecino') >= 0) colNombre = c;
+      else if (h.indexOf('tel') >= 0 || h.indexOf('cel') >= 0 || h.indexOf('wa') >= 0 || h.indexOf('contacto') >= 0) colTel = c;
+      else if (h.indexOf('rsp') >= 0 || h.indexOf('respond') >= 0) colRsp = c;
+      else if (h.indexOf('adhir') >= 0) colAdhirio = c;
+      else if (h.indexOf('comentario') >= 0 || h.indexOf('nota') >= 0 || h.indexOf('direcc') >= 0) colComentario = c;
+      else if (h.indexOf('estado') >= 0 || h.indexOf('etapa') >= 0) colEstado = c;
+    }
+    // Fallback si no hay encabezados explícitos
+    if (colTel < 0) colTel = (header.length >= 8 && String(header[3] || '').toLowerCase().indexOf('mail') >= 0) ? 4 : 3;
+    if (colRsp < 0) colRsp = colTel + 1;
+    if (colAdhirio < 0) colAdhirio = colRsp + 1;
+    if (colComentario < 0) colComentario = colAdhirio + 1;
+    if (colEstado < 0) colEstado = colComentario + 1;
+
+    var idTarget = String(p.id || '').replace(/^#/, '').trim();
+    var telTarget = String(p.telefonoNorm || p.telRaw || '').replace(/\\D+/g, '').slice(-8);
+    var nomTarget = String(p.nombre || '').toLowerCase().trim();
+
+    var targetRowIdx = -1;
     for (var i = 1; i < data.length; i++) {
-      var rowId = String(data[i][0] || '').trim();
-      var rowTel = String(data[i][4] || '').replace(/\\D+/g, '').slice(-8);
-      if ((idTarget && rowId === idTarget) || (telTarget && rowTel && rowTel === telTarget)) {
-        if (p.rsp !== undefined) sheet.getRange(i + 1, 6).setValue(p.rsp);
-        if (p.adhirio !== undefined) sheet.getRange(i + 1, 7).setValue(p.adhirio);
-        if (p.comentarioNota) {
-          var prevCom = String(data[i][7] || '').replace(/\\[Intento auto fallido[^\\]]*\\]/gi, '').trim();
-          var nextCom = prevCom.indexOf(p.comentarioNota) >= 0 ? prevCom : (prevCom ? prevCom + ' · ' + p.comentarioNota : p.comentarioNota);
-          sheet.getRange(i + 1, 8).setValue(nextCom);
-        }
-        if (p.estado) sheet.getRange(i + 1, 9).setValue(p.estado);
+      var rowId = String(data[i][colId] || '').replace(/^#/, '').trim();
+      var rowTel = colTel >= 0 ? String(data[i][colTel] || '').replace(/\\D+/g, '').slice(-8) : '';
+      var rowNom = colNombre >= 0 ? String(data[i][colNombre] || '').toLowerCase().trim() : '';
+
+      if (
+        (idTarget && rowId === idTarget) ||
+        (telTarget && rowTel && rowTel === telTarget) ||
+        (nomTarget && rowNom && (rowNom === nomTarget || rowNom.indexOf(nomTarget) === 0 || nomTarget.indexOf(rowNom) === 0))
+      ) {
+        targetRowIdx = i + 1;
         break;
       }
     }
-    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'updateRow' })).setMimeType(ContentService.MimeType.JSON);
+
+    if (targetRowIdx > 0) {
+      if (p.rsp !== undefined && colRsp >= 0) sheet.getRange(targetRowIdx, colRsp + 1).setValue(p.rsp);
+      if (p.adhirio !== undefined && colAdhirio >= 0) sheet.getRange(targetRowIdx, colAdhirio + 1).setValue(p.adhirio);
+      if (p.comentarioNota && colComentario >= 0) {
+        var prevCom = String(data[targetRowIdx - 1][colComentario] || '').replace(/\\[Intento auto fallido[^\\]]*\\]/gi, '').trim();
+        var nextCom = prevCom.indexOf(p.comentarioNota) >= 0 ? prevCom : (prevCom ? prevCom + ' · ' + p.comentarioNota : p.comentarioNota);
+        sheet.getRange(targetRowIdx, colComentario + 1).setValue(nextCom);
+      } else if (p.comentario && colComentario >= 0) {
+        sheet.getRange(targetRowIdx, colComentario + 1).setValue(p.comentario);
+      }
+      if (p.estado && colEstado >= 0) sheet.getRange(targetRowIdx, colEstado + 1).setValue(p.estado);
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'updateRow', updatedRow: targetRowIdx })).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Contacto no encontrado en la hoja', idTarget: idTarget, telTarget: telTarget })).setMimeType(ContentService.MimeType.JSON);
   }
   if (body.action === 'appendRow' && body.payload) {
     const p = body.payload;

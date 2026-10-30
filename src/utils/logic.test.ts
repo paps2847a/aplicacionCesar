@@ -1954,6 +1954,74 @@ test('Matriz de transiciones inteligentes de WhatsApp y prioridad operativa de R
   assert.ok(tsv.includes('\tPrueba Fichas\t'), 'TSV debe usar tabulaciones como delimitador');
 });
 
+test('Cierre Diario no cuenta contactos revertidos a Nuevos y registra adhesiones legítimas de hoy', () => {
+  const ahora = new Date('2026-10-30T16:00:00.000Z').getTime();
+  
+  // Contacto 1: En etapa Nuevos (probado y devuelto a Nuevos)
+  const contactoRevertido = procesarContacto(
+    {
+      id: '991',
+      nombre: 'Prueba Revertido',
+      barrio: 'Palermo',
+      telRaw: '1199887766',
+      rsp: 'Nuevo',
+      adhirio: 'Pendiente',
+      comentario: 'Sin comentarios',
+      estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
+      actualizadoEnAppAt: '2026-10-30T15:00:00.000Z',
+    },
+    DEFAULT_VOICE_PROFILE
+  );
+
+  // Contacto 2: Firmó hoy
+  const contactoFirmoHoy = procesarContacto(
+    {
+      id: '992',
+      nombre: 'Vecino Firma Hoy',
+      barrio: 'Palermo',
+      telRaw: '1155443322',
+      rsp: 'Sí',
+      adhirio: 'Sí',
+      comentario: 'Firma conseguida [Firmó el 30/10 a las 14:00 hs]',
+      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+      actualizadoEnAppAt: '2026-10-30T14:00:00.000Z',
+    },
+    DEFAULT_VOICE_PROFILE
+  );
+
+  // Contacto 3: Ya había firmado en el pasado (histórico)
+  const contactoFirmoAntes = procesarContacto(
+    {
+      id: '993',
+      nombre: 'Florencia Ya Firmo',
+      barrio: 'Palermo',
+      telRaw: '1144332211',
+      rsp: 'Sí',
+      adhirio: 'Sí',
+      comentario: 'Ya adhirió previamente en sede. En pausa temporal',
+      estadoFlujo: 'POSTERGO_SALUD_O_VIAJE',
+      actualizadoEnAppAt: '2026-10-30T12:00:00.000Z',
+    },
+    DEFAULT_VOICE_PROFILE
+  );
+
+  const panel = generarPanelTareasDiarias(
+    [contactoRevertido, contactoFirmoHoy, contactoFirmoAntes],
+    {} as any,
+    [],
+    DEFAULT_VOICE_PROFILE,
+    ahora
+  );
+
+  // El revertido a Nuevos NO debe figurar como persona hablada hoy
+  const idsHablados = panel.resumenFormsYApps.estatusPersonasHabladasHoy.map((x) => x.contactId);
+  assert.ok(!idsHablados.includes('991'), 'Contacto en Nuevos no debe figurar en personas habladas');
+
+  // La adhesión de hoy debe ser 1 (sólo Vecino Firma Hoy, no Florencia que firmó antes)
+  assert.equal(panel.resumenFormsYApps.adhesionesConseguidasHoy, 1);
+  assert.equal(panel.resumenFormsYApps.adhesionesTotalesAcumuladas, 2);
+});
+
 
 
 

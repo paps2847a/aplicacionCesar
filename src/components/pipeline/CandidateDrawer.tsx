@@ -151,17 +151,69 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
 
   const auditDate = formatAuditDate(activeContact);
 
+  const yaFirmo =
+    activeContact.adhirio === 'Sí' ||
+    activeContact.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+    currentStageKey === 'adheridos';
+
   const handleStageChange = async (targetStage: MacroStageKey) => {
+    const ahora = new Date();
+    const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+    const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    const auditText = `${ddmm} a las ${hhmm} hs`;
+    const targetDef = MACRO_STAGES[targetStage];
+
+    if (targetStage === 'nuevos') {
+      const baseCom = (activeContact.comentario || '')
+        .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+        .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+        .replace(/\s*\[Firmó el [^\]]+\]/g, '')
+        .trim();
+      const updates: Partial<Contact> = {
+        estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
+        adhirio: 'Pendiente',
+        rsp: 'Nuevo',
+        primerContactoEnviado: false,
+        comentario: baseCom,
+        actualizadoEnAppAt: '',
+      };
+      setOptimisticUpdates({ contactId: contact.id, updates });
+      await onUpdateContact(contact.id, updates);
+      setFeedbackMsg(`✓ Contacto devuelto a "Nuevos" (limpio de auditoría)`);
+      setTimeout(() => setFeedbackMsg(null), 3500);
+      return;
+    }
+
+    if (targetStage === 'adheridos') {
+      const baseCom = (activeContact.comentario || '')
+        .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+        .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+        .replace(/\s*\[Firmó el [^\]]+\]/g, '')
+        .trim();
+      const newComentario = baseCom
+        ? `${baseCom} [Firmó el ${auditText}]`
+        : `[Firmó el ${auditText}]`;
+
+      const updates: Partial<Contact> = {
+        estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+        adhirio: 'Sí',
+        rsp: 'Sí',
+        primerContactoEnviado: true,
+        comentario: newComentario,
+        actualizadoEnAppAt: ahora.toISOString(),
+      };
+      setOptimisticUpdates({ contactId: contact.id, updates });
+      await onUpdateContact(contact.id, updates);
+      setFeedbackMsg(`✓ ¡Firma oficial registrada!`);
+      setTimeout(() => setFeedbackMsg(null), 3500);
+      return;
+    }
+
     let nextEstado: EstadoFlujo = activeContact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP';
     let nextAdhirio = activeContact.adhirio;
     let nextRsp = activeContact.rsp;
 
     switch (targetStage) {
-      case 'nuevos':
-        nextEstado = 'SIN_CONTACTAR_1ER_MSJ';
-        nextRsp = 'Nuevo';
-        nextAdhirio = 'Pendiente';
-        break;
       case 'conversacion':
         nextEstado = '1ER_MSJ_ENVIADO_SIN_RSP';
         nextRsp = activeContact.rsp === 'Sí' ? 'Sí' : 'No';
@@ -175,22 +227,11 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
       case 'pausa':
         nextEstado = 'POSTERGO_SALUD_O_VIAJE';
         break;
-      case 'adheridos':
-        nextEstado = 'YA_ADHIRIO_FIRMA_OK';
-        nextAdhirio = 'Sí';
-        nextRsp = 'Sí';
-        break;
       case 'descartados':
         nextEstado = 'DESCARTADO_O_BAJA';
         nextAdhirio = 'No';
         break;
     }
-
-    const ahora = new Date();
-    const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
-    const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-    const auditText = `${ddmm} a las ${hhmm} hs`;
-    const targetDef = MACRO_STAGES[targetStage];
 
     const baseCom = (activeContact.comentario || '')
       .replace(/\s*\[Modificado el [^\]]+\]/g, '')
@@ -204,7 +245,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
       estadoFlujo: nextEstado,
       adhirio: nextAdhirio,
       rsp: nextRsp,
-      primerContactoEnviado: targetStage !== 'nuevos',
+      primerContactoEnviado: true,
       comentario: newComentario,
       actualizadoEnAppAt: ahora.toISOString(),
     };
@@ -213,6 +254,33 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
     await onUpdateContact(contact.id, updates);
 
     setFeedbackMsg(`✓ Etapa cambiada a "${targetDef.label}" (${auditText})`);
+    setTimeout(() => setFeedbackMsg(null), 3500);
+  };
+
+  const handleDesmarcarFirma = async () => {
+    const ahora = new Date();
+    const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+    const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    const auditText = `${ddmm} a las ${hhmm} hs`;
+
+    const baseCom = (activeContact.comentario || '')
+      .replace(/\s*\[Firmó el [^\]]+\]/g, '')
+      .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+      .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+      .trim();
+    const newCom = baseCom
+      ? `${baseCom} [Firma desmarcada el ${auditText}]`
+      : `[Firma desmarcada el ${auditText}]`;
+
+    const updates: Partial<Contact> = {
+      adhirio: 'Pendiente',
+      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+      comentario: newCom,
+      actualizadoEnAppAt: ahora.toISOString(),
+    };
+    setOptimisticUpdates({ contactId: contact.id, updates });
+    await onUpdateContact(contact.id, updates);
+    setFeedbackMsg(`✓ Firma desmarcada correctamente (vuelve a Pendiente)`);
     setTimeout(() => setFeedbackMsg(null), 3500);
   };
 
@@ -358,7 +426,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
           {/* Header con Navegación Siguiente / Anterior */}
           <div className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200/80 bg-white/95 px-6 py-4 backdrop-blur-md">
             <div className="min-w-0 flex-1 mr-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-mono font-bold text-slate-400">
                   #{activeContact.id}
                 </span>
@@ -370,6 +438,25 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                 >
                   {currentStageDef.shortLabel}
                 </span>
+                {yaFirmo ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[10px] font-black text-emerald-900 shadow-2xs">
+                    <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                    <span>✓ Firmó Oficialmente</span>
+                    <button
+                      type="button"
+                      onClick={handleDesmarcarFirma}
+                      className="ml-1 text-[9px] font-bold text-rose-600 hover:text-rose-800 underline"
+                      title="Desmarcar firma si se marcó por error"
+                    >
+                      (deshacer)
+                    </button>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+                    <Clock className="h-2.5 w-2.5 text-slate-400" />
+                    <span>Pendiente de firma</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 {activeContact.barrio || 'CABA'} · Tel: {phoneForWA || 'Sin número'}
@@ -523,13 +610,29 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
 
               {/* Botones de Plan Acordado */}
               <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => handleStageChange('adheridos')}
-                  className="rounded-xl border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-extrabold text-emerald-800 hover:bg-emerald-100 transition"
-                >
-                  ✓ Ya Adhirió
-                </button>
+                {yaFirmo ? (
+                  <div className="rounded-xl border border-emerald-300 bg-emerald-100 px-2.5 py-1.5 text-[11px] font-black text-emerald-900 flex items-center gap-1.5 shadow-2xs">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
+                    <span>✓ Firma Registrada</span>
+                    <button
+                      type="button"
+                      onClick={handleDesmarcarFirma}
+                      className="ml-1 text-[10px] font-bold text-rose-700 hover:text-rose-900 underline"
+                      title="Desmarcar firma si fue un error"
+                    >
+                      Desmarcar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleStageChange('adheridos')}
+                    className="rounded-xl border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-extrabold text-emerald-800 hover:bg-emerald-100 transition flex items-center gap-1"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    + Marcar Firma Oficial
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleStageChange('agendados')}

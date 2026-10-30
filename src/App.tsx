@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { CheckCircle2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type {
@@ -53,6 +53,10 @@ export default function App() {
 
   // 2. Estado de Datos y Persistencia
   const [rawContacts, setRawContacts] = useState<RawContactRow[]>(() => INITIAL_RAW_CONTACTS);
+  const rawContactsRef = useRef<RawContactRow[]>(rawContacts);
+  useEffect(() => {
+    rawContactsRef.current = rawContacts;
+  }, [rawContacts]);
   const [controlEnvios, setControlEnvios] = useState<ControlEnvioRegistro[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEventItem[]>([]);
   const [profile, setProfile] = useState<VoiceProfile>(() => DEFAULT_VOICE_PROFILE);
@@ -247,11 +251,37 @@ export default function App() {
       const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
       const auditText = `${ddmm} a las ${hhmm} hs`;
 
+      const isRevertingToNew =
+        updates.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+        updates.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+        updates.rsp === 'Nuevo';
+
+      if (isRevertingToNew) {
+        setControlEnvios((prev) =>
+          prev.filter((r) => String(r.contactId) !== String(contactId))
+        );
+      }
+
       let calculatedComentario = updates.comentario;
 
       setRawContacts((prev) =>
         prev.map((c) => {
           if (String(c.id) !== String(contactId)) return c;
+
+          if (isRevertingToNew) {
+            const cleanCom = (updates.comentario !== undefined ? updates.comentario : c.comentario || '')
+              .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+              .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+              .replace(/\s*\[Firmó el [^\]]+\]/g, '')
+              .trim();
+            return {
+              ...c,
+              ...updates,
+              comentario: cleanCom,
+              actualizadoEnAppAt: updates.actualizadoEnAppAt !== undefined ? updates.actualizadoEnAppAt : '',
+              primerContactoEnviado: false,
+            };
+          }
 
           let finalComentario = updates.comentario !== undefined ? updates.comentario : c.comentario;
           if (
@@ -281,7 +311,9 @@ export default function App() {
       const enrichedUpdates = {
         ...updates,
         ...(calculatedComentario !== undefined ? { comentario: calculatedComentario } : {}),
-        actualizadoEnAppAt: updates.actualizadoEnAppAt || nowIso,
+        actualizadoEnAppAt: isRevertingToNew
+          ? (updates.actualizadoEnAppAt !== undefined ? updates.actualizadoEnAppAt : '')
+          : (updates.actualizadoEnAppAt || nowIso),
       };
 
       try {
@@ -303,14 +335,24 @@ export default function App() {
       }
 
       // Sincronización en segundo plano con Google Sheets (vía Puente Google Apps Script)
+      const existing = rawContactsRef.current.find((c) => String(c.id) === String(contactId));
+      const targetTel = updates.telRaw || existing?.telRaw || (existing as any)?.tel_norm || '';
+      const targetName = updates.nombre || existing?.nombre || '';
+      const targetRsp = updates.rsp !== undefined ? updates.rsp : existing?.rsp;
+      const targetAdhirio = updates.adhirio !== undefined ? updates.adhirio : existing?.adhirio;
+      const targetComentario = enrichedUpdates.comentario !== undefined ? enrichedUpdates.comentario : existing?.comentario;
+      const targetEstado = updates.estadoFlujoEtiqueta || (updates.estadoFlujo ? obtenerEtiquetaEstadoFlujo(updates.estadoFlujo) : existing?.estadoFlujoEtiqueta);
+
       if (appsScriptUrlInput.trim()) {
         const payload = {
           id: contactId,
-          telefonoNorm: updates.telRaw,
-          rsp: updates.rsp,
-          adhirio: updates.adhirio,
-          comentarioNota: enrichedUpdates.comentario,
-          estado: updates.estadoFlujoEtiqueta || (updates.estadoFlujo ? obtenerEtiquetaEstadoFlujo(updates.estadoFlujo) : undefined),
+          nombre: targetName,
+          telefonoNorm: targetTel,
+          telRaw: targetTel,
+          rsp: targetRsp,
+          adhirio: targetAdhirio,
+          comentarioNota: targetComentario,
+          estado: targetEstado,
         };
         void fetch('/api/sheets/push-live', {
           method: 'POST',

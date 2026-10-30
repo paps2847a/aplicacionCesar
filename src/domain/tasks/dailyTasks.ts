@@ -548,6 +548,14 @@ export function generarPanelTareasDiarias(
   }
 
   for (const c of contacts) {
+    if (
+      c.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+      c.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+      c.rsp === 'Nuevo'
+    ) {
+      continue;
+    }
+
     if (yaSeHabloConContactoHoy(c, ahoraMs)) {
       idsContactadosHoy.add(c.id);
       if (!mapaHoraPorContacto.has(c.id)) {
@@ -558,10 +566,22 @@ export function generarPanelTareasDiarias(
 
   const adhesionesTotales = contacts.filter((c) => c.adhirio === 'Sí');
   const adhesionesHoy = adhesionesTotales.filter((c) => {
-    if (idsContactadosHoy.has(c.id)) return true;
     const com = c.comentario || '';
-    if (com.includes(hoyBA.ddmm) || com.includes(hoyBA.isoDate)) return true;
-    if (c.actualizadoEnAppAt && c.actualizadoEnAppAt.startsWith(hoyBA.isoDate)) return true;
+    const firmoHoy =
+      com.includes(`[Firmó el ${hoyBA.ddmm}`) ||
+      com.includes(`[Firma registrada el ${hoyBA.ddmm}`) ||
+      (c as any).fechaAdhesion === hoyBA.isoDate ||
+      (c as any).fechaAdhirio === hoyBA.isoDate;
+    if (firmoHoy) return true;
+
+    if (
+      c.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' &&
+      c.actualizadoEnAppAt &&
+      c.actualizadoEnAppAt.startsWith(hoyBA.isoDate)
+    ) {
+      if (/ya adhirió previamente|firmó antes|previa|anterior/i.test(com)) return false;
+      if (com.includes(hoyBA.ddmm) || idsContactadosHoy.has(c.id)) return true;
+    }
     return false;
   });
 
@@ -577,6 +597,14 @@ export function generarPanelTareasDiarias(
   };
 
   for (const c of contacts) {
+    if (
+      c.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+      c.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+      c.rsp === 'Nuevo'
+    ) {
+      continue;
+    }
+
     const tocadoHoy =
       idsContactadosHoy.has(c.id) ||
       Boolean(c.actualizadoEnAppAt && c.actualizadoEnAppAt.startsWith(hoyBA.isoDate));
