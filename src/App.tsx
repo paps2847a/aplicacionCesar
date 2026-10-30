@@ -45,6 +45,7 @@ import { ModernSettingsView } from './components/config/ModernSettingsView';
 import { AutoFirstMessageModal } from './components/AutoFirstMessageModal';
 import { InteractiveMapPanel } from './components/InteractiveMapPanel';
 import { DailyClosureModal } from './components/modals/DailyClosureModal';
+import { esEventoFicticioLegacyCalendar } from './domain/calendar/calendarEvents';
 
 export default function App() {
   // 1. Navegación Principal Serena
