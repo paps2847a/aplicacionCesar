@@ -5,6 +5,13 @@ import pkg from 'whatsapp-web.js';
 import qrcode from 'qrcode';
 import { updateContactFields, getContactById } from '../repositories/contactRepository';
 import { recordEnvio } from '../repositories/controlEnvioRepository';
+import { getSetting } from '../repositories/settingsRepository';
+import {
+  computeSystemExecutablePath,
+  Browser,
+  ChromeReleaseChannel,
+  getInstalledBrowsers,
+} from '@puppeteer/browsers';
 import type {
   AutoFirstMessageQueueItem,
   AutoFirstMessageConfig,
@@ -17,6 +24,97 @@ const { Client, LocalAuth } = pkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+export async function findBrowserExecutable(): Promise<{ path?: string; name: string }> {
+  // 1. Setting explícito guardado en base de datos
+  try {
+    const saved = getSetting<string>('customChromePath');
+    if (saved && typeof saved === 'string' && fs.existsSync(saved.trim())) {
+      return { path: saved.trim(), name: `Personalizado (${saved.trim()})` };
+    }
+  } catch {}
+
+  // 2. Variable de entorno
+  const envPath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_BIN;
+  if (envPath && fs.existsSync(envPath)) {
+    return { path: envPath, name: `Variable de entorno (${envPath})` };
+  }
+
+  // 3. Google Chrome oficial del sistema vía @puppeteer/browsers
+  try {
+    const sysChrome = computeSystemExecutablePath({
+      browser: Browser.CHROME,
+      channel: ChromeReleaseChannel.STABLE,
+    });
+    if (sysChrome && fs.existsSync(sysChrome)) {
+      return { path: sysChrome, name: `Google Chrome oficial (${sysChrome})` };
+    }
+  } catch {}
+
+  // 4. Puppeteer cache local (~/.cache/puppeteer)
+  try {
+    const os = await import('os');
+    const cacheDir = path.join(os.homedir(), '.cache', 'puppeteer');
+    const installed = await getInstalledBrowsers({ cacheDir });
+    const chrome = installed.find(
+      (b) => (b.browser === 'chrome' || b.browser === 'chromium') && fs.existsSync(b.executablePath)
+    );
+    if (chrome) {
+      return { path: chrome.executablePath, name: `Chromium de Puppeteer (${chrome.buildId})` };
+    }
+  } catch {}
+
+  // 5. Rutas estándar en Windows, macOS y Linux
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  const userProfile = process.env.USERPROFILE || '';
+
+  const candidates: { path: string; name: string }[] = [
+    // Windows: Google Chrome
+    { path: path.join(programFiles, 'Google/Chrome/Application/chrome.exe'), name: 'Google Chrome (Program Files)' },
+    { path: path.join(programFilesX86, 'Google/Chrome/Application/chrome.exe'), name: 'Google Chrome (Program Files x86)' },
+    { path: path.join(localAppData, 'Google/Chrome/Application/chrome.exe'), name: 'Google Chrome (AppData Local)' },
+    { path: path.join(userProfile, 'AppData/Local/Google/Chrome/Application/chrome.exe'), name: 'Google Chrome (User AppData)' },
+    { path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', name: 'Google Chrome (C:)' },
+    { path: 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', name: 'Google Chrome (C: x86)' },
+
+    // Windows: Microsoft Edge (Chromium oficial preinstalado en todo Windows 10/11)
+    { path: path.join(programFilesX86, 'Microsoft/Edge/Application/msedge.exe'), name: 'Microsoft Edge (Chromium)' },
+    { path: path.join(programFiles, 'Microsoft/Edge/Application/msedge.exe'), name: 'Microsoft Edge (Chromium)' },
+    { path: path.join(localAppData, 'Microsoft/Edge/Application/msedge.exe'), name: 'Microsoft Edge (Chromium)' },
+    { path: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', name: 'Microsoft Edge (Chromium)' },
+    { path: 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe', name: 'Microsoft Edge (Chromium)' },
+
+    // Windows: Brave
+    { path: path.join(programFiles, 'BraveSoftware/Brave-Browser/Application/brave.exe'), name: 'Brave Browser' },
+    { path: path.join(localAppData, 'BraveSoftware/Brave-Browser/Application/brave.exe'), name: 'Brave Browser' },
+
+    // macOS
+    { path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', name: 'Google Chrome macOS' },
+    { path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge', name: 'Microsoft Edge macOS' },
+    { path: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser', name: 'Brave Browser macOS' },
+    { path: '/Applications/Chromium.app/Contents/MacOS/Chromium', name: 'Chromium macOS' },
+
+    // Linux
+    { path: '/usr/bin/google-chrome', name: 'Google Chrome Linux' },
+    { path: '/usr/bin/google-chrome-stable', name: 'Google Chrome Stable Linux' },
+    { path: '/usr/bin/chromium-browser', name: 'Chromium Browser Linux' },
+    { path: '/usr/bin/chromium', name: 'Chromium Linux' },
+    { path: '/snap/bin/chromium', name: 'Chromium Snap Linux' },
+    { path: '/usr/bin/brave-browser', name: 'Brave Linux' },
+  ];
+
+  for (const c of candidates) {
+    try {
+      if (c.path && fs.existsSync(c.path)) {
+        return c;
+      }
+    } catch {}
+  }
+
+  return { name: 'No detectado' };
+}
 
 export type WhatsAppConnectionStatus =
   | 'DISCONNECTED'
@@ -79,9 +177,16 @@ class WhatsAppService {
 
   // Rate limiting tracker (rolling 60 min)
   private sentTimestamps: number[] = [];
+  private detectedBrowserInfo: { name: string; path?: string } | null = null;
 
   constructor() {
     this.addLog('info', 'Servicio WhatsApp Web.js inicializado en el servidor.');
+    findBrowserExecutable().then((b) => {
+      this.detectedBrowserInfo = b;
+      if (b.path) {
+        this.addLog('info', `Navegador detectado automáticamente: ${b.name}`);
+      }
+    });
   }
 
   public getStatus() {
@@ -98,6 +203,7 @@ class WhatsAppService {
       rollingLastHourCount: this.sentTimestamps.length,
       maxHourlyLimit: 40,
       recentLogs: this.logs.slice(-50),
+      detectedBrowser: this.detectedBrowserInfo,
     };
   }
 
@@ -136,13 +242,16 @@ class WhatsAppService {
         fs.mkdirSync(sessionDir, { recursive: true });
       }
 
-      const systemChromium = [
-        process.env.PUPPETEER_EXECUTABLE_PATH,
-        process.env.CHROME_BIN,
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/usr/bin/google-chrome',
-      ].find((p) => p && fs.existsSync(p));
+      const browserInfo = await findBrowserExecutable();
+      this.detectedBrowserInfo = browserInfo;
+      if (browserInfo.path) {
+        this.addLog('info', `Usando navegador: ${browserInfo.name}`);
+      } else {
+        this.addLog(
+          'warn',
+          'No se encontró Google Chrome ni Edge instalado. Si falla, podés instalar Google Chrome o descargar Chromium con: npx puppeteer browsers install chrome'
+        );
+      }
 
       this.client = new Client({
         authStrategy: new LocalAuth({
@@ -151,7 +260,7 @@ class WhatsAppService {
         }),
         puppeteer: {
           headless: true,
-          executablePath: systemChromium || undefined,
+          executablePath: browserInfo.path || undefined,
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -233,8 +342,16 @@ class WhatsAppService {
       return { ok: true, status: this.status };
     } catch (err: any) {
       this.status = 'ERROR';
-      this.addLog('error', `Error al inicializar WhatsApp Web: ${err?.message || err}`);
-      return { ok: false, status: 'ERROR', message: err?.message || String(err) };
+      const msg = err?.message || String(err);
+      if (msg.includes('Could not find Chrome') || msg.includes('Failed to launch the browser process')) {
+        this.addLog(
+          'error',
+          `No se encontró Google Chrome en el sistema. Solución rápida: Asegurate de tener Google Chrome o Edge instalado en tu PC, o ejecutá en tu consola: npx puppeteer browsers install chrome`
+        );
+      } else {
+        this.addLog('error', `Error al inicializar WhatsApp Web: ${msg}`);
+      }
+      return { ok: false, status: 'ERROR', message: msg };
     }
   }
 

@@ -87,3 +87,26 @@ whatsappRouter.post('/queue/stop', (req: Request, res: Response) => {
   const result = whatsappService.stopQueue('Detenido manualmente vía API');
   res.json(result);
 });
+
+// 9. Detectar navegador en el sistema
+whatsappRouter.get('/detect-chrome', async (_req: Request, res: Response) => {
+  try {
+    const { findBrowserExecutable } = await import('../services/whatsappService');
+    const browser = await findBrowserExecutable();
+    res.json({ ok: true, browser });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
+
+// 10. Guardar ruta personalizada de Chrome
+whatsappRouter.post('/set-chrome-path', async (req: Request, res: Response) => {
+  try {
+    const { setSetting } = await import('../repositories/settingsRepository');
+    const { path: chromePath } = req.body;
+    setSetting('customChromePath', (chromePath || '').trim());
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});

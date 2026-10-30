@@ -91,6 +91,7 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
   const [logs, setLogs] = useState<WhatsAppLogEntry[]>([]);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [autoScrollLogs, setAutoScrollLogs] = useState<boolean>(true);
+  const [detectedBrowser, setDetectedBrowser] = useState<{ name: string; path?: string } | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   // Polling del estado del servidor
@@ -103,6 +104,7 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
         setStatus(data.status);
         setQrCodeDataUrl(data.qrCodeDataUrl);
         setClientInfo(data.clientInfo);
+        if (data.detectedBrowser) setDetectedBrowser(data.detectedBrowser);
         if (data.queue) setQueue(data.queue);
         if (typeof data.rollingLastHourCount === 'number') {
           setRollingLastHour(data.rollingLastHourCount);
@@ -299,14 +301,48 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
                 </span>
               </div>
 
-              {status === 'DISCONNECTED' && (
+              {/* Alerta de Error de Navegador */}
+              {status === 'ERROR' && (
+                <div className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-xs text-rose-950 space-y-2.5">
+                  <div className="flex items-center gap-2 font-black text-rose-900">
+                    <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                    <span>No se encontró Google Chrome en tu sistema</span>
+                  </div>
+                  <p className="text-[11px] text-rose-800 leading-relaxed">
+                    La app ahora busca automáticamente tu <strong>Google Chrome</strong> o <strong>Microsoft Edge</strong> instalado en Windows. Si no tenés Chrome o deseás descargar la versión exclusiva para esta app en tu computadora, ejecutá en tu terminal / CMD:
+                  </p>
+                  <div className="flex items-center gap-2 bg-slate-900 text-emerald-400 p-2.5 rounded-lg font-mono text-[11px]">
+                    <span className="flex-1 select-all overflow-x-auto">npx puppeteer browsers install chrome</span>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText('npx puppeteer browsers install chrome')}
+                      className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded transition shrink-0 font-sans font-bold"
+                    >
+                      Copiar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {detectedBrowser?.path && (
+                <div className="text-[11px] text-slate-600 flex items-center gap-1.5 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0" />
+                  <span className="truncate">Navegador: <strong>{detectedBrowser.name}</strong></span>
+                </div>
+              )}
+
+              {(status === 'DISCONNECTED' || status === 'ERROR' || status === 'AUTH_FAILURE') && (
                 <button
                   onClick={handleConnect}
                   disabled={loadingAction === 'connect'}
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-black text-white hover:bg-emerald-500 transition shadow-md disabled:opacity-50"
                 >
                   <RefreshCw className={`h-4 w-4 ${loadingAction === 'connect' ? 'animate-spin' : ''}`} />
-                  {loadingAction === 'connect' ? 'Conectando...' : 'Iniciar y Mostrar Código QR'}
+                  {loadingAction === 'connect'
+                    ? 'Conectando...'
+                    : status === 'ERROR'
+                    ? 'Reintentar y Mostrar Código QR'
+                    : 'Iniciar y Mostrar Código QR'}
                 </button>
               )}
             </div>
