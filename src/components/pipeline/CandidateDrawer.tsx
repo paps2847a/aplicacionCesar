@@ -35,6 +35,7 @@ import {
 import { generarMensajeContextual } from '../../domain/messaging/messageTemplates';
 import { crearEnlaceWhatsApp } from '../../domain/messaging/greetingsAndTone';
 import { analizarYCorregirNombreCompleto } from '../../domain/contacts/nameCorrection';
+import { geocodificarContactoLocal } from '../../utils/logic';
 import { formatAuditDate } from './CandidateCard';
 
 interface CandidateDrawerProps {
@@ -116,6 +117,12 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
   // Helper para autocompletar Nombre cuando responde en WA
   const [nombrePegadoInput, setNombrePegadoInput] = useState<string>('');
   const [respuestaAdaptarInput, setRespuestaAdaptarInput] = useState<string>('');
+
+  const addressValidation = useMemo(() => {
+    const raw = editCalle.trim();
+    if (!raw || raw.length < 3) return null;
+    return geocodificarContactoLocal(raw, editBarrio || 'Palermo', activeContact.id);
+  }, [editCalle, editBarrio, activeContact.id]);
 
   useEffect(() => {
     const cleanComment = (activeContact.comentario || '')
@@ -823,6 +830,30 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                     placeholder="Ej. Charcas 3700 / Scalabrini Ortiz"
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-emerald-500 focus:outline-hidden"
                   />
+                  {addressValidation && (
+                    <div className="mt-1">
+                      {addressValidation.exacta ? (
+                        <p className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
+                          <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0" />
+                          <span>Ubicada en {addressValidation.barrio}</span>
+                          {addressValidation.barrio && addressValidation.barrio.toLowerCase() !== editBarrio.toLowerCase() && (
+                            <button
+                              type="button"
+                              onClick={() => setEditBarrio(addressValidation.barrio)}
+                              className="underline text-emerald-800 hover:text-emerald-950 font-black ml-1"
+                            >
+                              (Auto-corregir barrio)
+                            </button>
+                          )}
+                        </p>
+                      ) : (
+                        <p className="text-[10px] font-bold text-amber-700 flex items-center gap-1">
+                          <AlertCircle className="h-3 w-3 text-amber-600 shrink-0" />
+                          <span>Dirección no reconocida en CABA. Verificá altura o esquinas.</span>
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>

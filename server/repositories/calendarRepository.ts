@@ -103,3 +103,8 @@ export function upsertCalendarEvent(ev: CalendarEventItem, source: string = 'man
     source
   );
 }
+
+export function deleteCalendarEvent(id: string): void {
+  const db = getDatabase();
+  db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id);
+}

@@ -27,6 +27,8 @@ import {
 import {
   getCalendarEvents,
   replaceCalendarEvents,
+  upsertCalendarEvent,
+  deleteCalendarEvent,
 } from './server/repositories/calendarRepository';
 import {
   getSetting,
@@ -955,6 +957,64 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
       const msg =
         error instanceof Error ? error.message : 'Error al conectar con el enlace iCal de Google Calendar';
       res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  // 6.b CRUD persistente de eventos de Calendar en SQLite
+  app.get('/api/calendar-events', (_req, res) => {
+    try {
+      const events = getCalendarEvents();
+      res.json({ ok: true, events });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Error leyendo eventos de calendario' });
+    }
+  });
+
+  app.put('/api/calendar-events', (req, res) => {
+    try {
+      const { events, source } = req.body;
+      if (Array.isArray(events)) {
+        replaceCalendarEvents(events, source || 'sync');
+        return res.json({ ok: true, count: events.length });
+      }
+      res.status(400).json({ ok: false, error: 'Formato de eventos inválido' });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Error guardando eventos de calendario' });
+    }
+  });
+
+  app.post('/api/calendar-events/replace', (req, res) => {
+    try {
+      const { events, source } = req.body;
+      if (Array.isArray(events)) {
+        replaceCalendarEvents(events, source || 'ical_sync');
+        return res.json({ ok: true, count: events.length });
+      }
+      res.status(400).json({ ok: false, error: 'Formato de eventos inválido' });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Error guardando eventos de calendario' });
+    }
+  });
+
+  app.post('/api/calendar-events', (req, res) => {
+    try {
+      const { event, source } = req.body;
+      if (event && event.id) {
+        upsertCalendarEvent(event, source || 'manual');
+        return res.json({ ok: true });
+      }
+      res.status(400).json({ ok: false, error: 'Evento inválido' });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Error guardando evento de calendario' });
+    }
+  });
+
+  app.delete('/api/calendar-events/:id', (req, res) => {
+    try {
+      deleteCalendarEvent(req.params.id);
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Error eliminando evento de calendario' });
     }
   });
 

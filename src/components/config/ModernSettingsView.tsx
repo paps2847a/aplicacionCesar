@@ -12,6 +12,11 @@ import {
   RefreshCw,
   ExternalLink,
   ShieldCheck,
+  X,
+  Plus,
+  Trash2,
+  Clock,
+  MapPin,
 } from 'lucide-react';
 import type { VoiceProfile, CalendarEventItem } from '../../types';
 import { CODIGO_APPS_SCRIPT_PUENTE } from '../../data/appsScriptBridge';
@@ -23,6 +28,7 @@ interface ModernSettingsViewProps {
   calendarIcalUrlInput: string;
   totalContacts: number;
   totalControlEnvios: number;
+  calendarEvents?: CalendarEventItem[];
   onUpdateProfile: (updated: VoiceProfile) => void;
   onUpdateSheetUrl: (url: string) => void;
   onUpdateAppsScriptUrl: (url: string) => void;
@@ -30,6 +36,9 @@ interface ModernSettingsViewProps {
   onExportCSV: () => void;
   onExportCSVExcel?: () => void;
   onCopyTSV?: () => void;
+  onSyncCalendar?: () => void;
+  onDeleteCalendarEvent?: (id: string) => void;
+  onAddCalendarEvent?: (event: CalendarEventItem) => void;
 }
 
 export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
@@ -39,6 +48,7 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   calendarIcalUrlInput,
   totalContacts,
   totalControlEnvios,
+  calendarEvents = [],
   onUpdateProfile,
   onUpdateSheetUrl,
   onUpdateAppsScriptUrl,
@@ -46,6 +56,9 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   onExportCSV,
   onExportCSVExcel,
   onCopyTSV,
+  onSyncCalendar,
+  onDeleteCalendarEvent,
+  onAddCalendarEvent,
 }) => {
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
   const [copiedTsv, setCopiedTsv] = useState<boolean>(false);
@@ -54,6 +67,33 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   const [localAppsScriptUrl, setLocalAppsScriptUrl] = useState<string>(appsScriptUrlInput);
   const [localIcalUrl, setLocalIcalUrl] = useState<string>(calendarIcalUrlInput);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+
+  // Compromiso manual de Calendar
+  const [showAddEvent, setShowAddEvent] = useState<boolean>(false);
+  const [newSummary, setNewSummary] = useState<string>('');
+  const [newFecha, setNewFecha] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [newStartTime, setNewStartTime] = useState<string>('14:30');
+  const [newEndTime, setNewEndTime] = useState<string>('15:30');
+  const [newLocation, setNewLocation] = useState<string>('Palermo, CABA');
+
+  const handleAddManualEvent = () => {
+    if (!newSummary.trim() || !onAddCalendarEvent) return;
+    const fechaISO = newFecha || new Date().toISOString().slice(0, 10);
+    const parts = fechaISO.split('-');
+    const fechaDDMM = parts[2] && parts[1] ? `${parts[2]}/${parts[1]}` : 'HOY';
+    const ev: CalendarEventItem = {
+      id: `manual_cal_${Date.now()}`,
+      summary: newSummary.trim(),
+      location: newLocation.trim() || 'CABA',
+      fecha: fechaDDMM,
+      fechaISO,
+      startTime: newStartTime || '14:30',
+      endTime: newEndTime || '15:30',
+    };
+    onAddCalendarEvent(ev);
+    setNewSummary('');
+    setShowAddEvent(false);
+  };
 
   const handleCopyAppsScript = () => {
     navigator.clipboard.writeText(CODIGO_APPS_SCRIPT_PUENTE);
@@ -66,6 +106,9 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
     onUpdateSheetUrl(localSheetUrl);
     onUpdateAppsScriptUrl(localAppsScriptUrl);
     onUpdateCalendarIcalUrl(localIcalUrl);
+    if (localIcalUrl.trim() && onSyncCalendar) {
+      onSyncCalendar();
+    }
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
   };
@@ -237,13 +280,154 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
             <label className="block text-[11px] font-bold text-slate-600 mb-1">
               URL privada iCal (.ics)
             </label>
-            <input
-              type="text"
-              value={localIcalUrl}
-              onChange={(e) => setLocalIcalUrl(e.target.value)}
-              placeholder="https://calendar.google.com/calendar/ical/.../basic.ics"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-emerald-500 focus:outline-hidden"
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={localIcalUrl}
+                onChange={(e) => setLocalIcalUrl(e.target.value)}
+                placeholder="https://calendar.google.com/calendar/ical/.../basic.ics"
+                className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+              />
+              {onSyncCalendar && (
+                <button
+                  type="button"
+                  onClick={onSyncCalendar}
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-2xs whitespace-nowrap flex items-center gap-1"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>Sincronizar</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Lista de Eventos y Compromisos Activos */}
+          <div className="pt-2 border-t border-slate-100 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-700">
+                Compromisos Activos ({calendarEvents.length})
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowAddEvent(!showAddEvent)}
+                className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-1 rounded-md hover:bg-blue-100 transition"
+              >
+                <Plus className="h-3 w-3" />
+                <span>{showAddEvent ? 'Cerrar' : 'Agregar compromiso'}</span>
+              </button>
+            </div>
+
+            {/* Formulario para agregar compromiso manual */}
+            {showAddEvent && (
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Título / Motivo</label>
+                  <input
+                    type="text"
+                    value={newSummary}
+                    onChange={(e) => setNewSummary(e.target.value)}
+                    placeholder="Ej. Terapia, Turno médico, Trámite personal"
+                    className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs"
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Fecha</label>
+                    <input
+                      type="date"
+                      value={newFecha}
+                      onChange={(e) => setNewFecha(e.target.value)}
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Desde</label>
+                    <input
+                      type="time"
+                      value={newStartTime}
+                      onChange={(e) => setNewStartTime(e.target.value)}
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Hasta</label>
+                    <input
+                      type="time"
+                      value={newEndTime}
+                      onChange={(e) => setNewEndTime(e.target.value)}
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Ubicación / Dirección</label>
+                  <input
+                    type="text"
+                    value={newLocation}
+                    onChange={(e) => setNewLocation(e.target.value)}
+                    placeholder="Ej. Godoy Cruz 3260, Palermo, CABA"
+                    className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddEvent(false)}
+                    className="px-2.5 py-1 rounded-md text-slate-500 hover:bg-slate-200 text-xs font-medium"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddManualEvent}
+                    className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs font-bold hover:bg-blue-500 shadow-2xs"
+                  >
+                    Guardar Compromiso
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Lista scrolleable de eventos */}
+            <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+              {calendarEvents.length === 0 ? (
+                <p className="text-[11px] text-slate-400 italic py-2 text-center">
+                  No hay eventos ni bloqueos cargados en el calendario.
+                </p>
+              ) : (
+                calendarEvents.map((ev) => (
+                  <div
+                    key={ev.id}
+                    className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200/70 text-xs hover:border-slate-300 transition"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                        <span className="truncate">{ev.summary}</span>
+                        <span className="shrink-0 text-[10px] font-medium text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200/60">
+                          {ev.fecha || ev.fechaISO || 'Hoy'} ({ev.startTime} - {ev.endTime} hs)
+                        </span>
+                      </div>
+                      {ev.location && (
+                        <p className="text-[10px] text-slate-500 truncate flex items-center gap-1 mt-0.5">
+                          <MapPin className="h-2.5 w-2.5 shrink-0" />
+                          <span>{ev.location}</span>
+                        </p>
+                      )}
+                    </div>
+                    {onDeleteCalendarEvent && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteCalendarEvent(ev.id)}
+                        className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition shrink-0"
+                        title="Eliminar este compromiso"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
 

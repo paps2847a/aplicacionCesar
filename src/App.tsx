@@ -713,6 +713,92 @@ export default function App() {
     [profile]
   );
 
+  const handleSyncCalendar = useCallback(async () => {
+    const url = calendarIcalUrlInput.trim();
+    if (!url) {
+      setSyncToast({
+        message: 'Por favor ingresá tu URL privada .ics de Google Calendar para sincronizar.',
+        type: 'warn',
+      });
+      return;
+    }
+    setSyncToast({
+      message: 'Conectando con Google Calendar iCal...',
+      type: 'info',
+    });
+    try {
+      const res = await fetch('/api/calendar/fetch-ical', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ icalUrl: url }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok && data.format === 'ical' && data.icsText) {
+          const parsed = parsearICalEventosCalendar(data.icsText);
+          if (parsed.length > 0) {
+            const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...parsed]);
+            setCalendarEvents(nextEvents);
+            void fetch('/api/calendar-events/replace', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ events: nextEvents, source: 'ical_sync' }),
+            });
+            setSyncToast({
+              message: `✓ Sincronizados ${parsed.length} eventos desde Google Calendar.`,
+              type: 'success',
+            });
+          } else {
+            setSyncToast({
+              message: 'Conectado a Google Calendar pero no se detectaron eventos futuros.',
+              type: 'warn',
+            });
+          }
+        } else if (data.ok && data.format === 'json' && Array.isArray(data.events)) {
+          const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...data.events]);
+          setCalendarEvents(nextEvents);
+          setSyncToast({
+            message: `✓ Sincronizados ${data.events.length} eventos desde Google Calendar.`,
+            type: 'success',
+          });
+        }
+      } else {
+        const err = await res.json();
+        setSyncToast({
+          message: err.error || 'Error al conectar con Google Calendar iCal.',
+          type: 'error',
+        });
+      }
+    } catch {
+      setSyncToast({
+        message: 'No se pudo conectar con el enlace de Google Calendar.',
+        type: 'error',
+      });
+    }
+  }, [calendarIcalUrlInput, calendarEvents]);
+
+  const handleDeleteCalendarEvent = useCallback((id: string) => {
+    setCalendarEvents((prev) => prev.filter((e) => e.id !== id));
+    void fetch(`/api/calendar-events/${id}`, { method: 'DELETE' });
+    setSyncToast({
+      message: 'Compromiso eliminado de la agenda.',
+      type: 'info',
+    });
+  }, []);
+
+  const handleAddCalendarEvent = useCallback((event: CalendarEventItem) => {
+    setCalendarEvents((prev) => deduplicarEventosCalendar([event, ...prev]));
+    void fetch('/api/calendar-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, source: 'manual' }),
+    });
+    setSyncToast({
+      message: `✓ Compromiso "${event.summary}" guardado con éxito.`,
+      type: 'success',
+    });
+  }, []);
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col font-sans selection:bg-emerald-100 selection:text-emerald-900">
       {/* 1. Barra de Navegación Serena y Minimalista */}
@@ -946,6 +1032,10 @@ export default function App() {
                 type: 'success',
               });
             }}
+            calendarEvents={calendarEvents}
+            onSyncCalendar={handleSyncCalendar}
+            onDeleteCalendarEvent={handleDeleteCalendarEvent}
+            onAddCalendarEvent={handleAddCalendarEvent}
           />
         )}
       </main>
