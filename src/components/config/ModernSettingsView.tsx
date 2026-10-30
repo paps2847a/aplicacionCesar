@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Settings,
   Database,
@@ -37,6 +37,7 @@ interface ModernSettingsViewProps {
   onExportCSVExcel?: () => void;
   onCopyTSV?: () => void;
   onSyncCalendar?: () => void;
+  onImportIcsText?: (text: string, filename?: string) => void;
   onDeleteCalendarEvent?: (id: string) => void;
   onAddCalendarEvent?: (event: CalendarEventItem) => void;
 }
@@ -57,9 +58,11 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   onExportCSVExcel,
   onCopyTSV,
   onSyncCalendar,
+  onImportIcsText,
   onDeleteCalendarEvent,
   onAddCalendarEvent,
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
   const [copiedTsv, setCopiedTsv] = useState<boolean>(false);
   const [localProfile, setLocalProfile] = useState<VoiceProfile>(profile);
@@ -67,6 +70,20 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   const [localAppsScriptUrl, setLocalAppsScriptUrl] = useState<string>(appsScriptUrlInput);
   const [localIcalUrl, setLocalIcalUrl] = useState<string>(calendarIcalUrlInput);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result;
+      if (typeof text === 'string' && onImportIcsText) {
+        onImportIcsText(text, file.name);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
 
   // Compromiso manual de Calendar
   const [showAddEvent, setShowAddEvent] = useState<boolean>(false);
@@ -292,12 +309,34 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={onSyncCalendar}
-                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-2xs whitespace-nowrap flex items-center gap-1"
+                  className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-2xs whitespace-nowrap flex items-center gap-1 cursor-pointer"
                 >
                   <RefreshCw className="h-3 w-3" />
                   <span>Sincronizar</span>
                 </button>
               )}
+            </div>
+
+            <div className="flex items-center gap-2 mt-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".ics,text/calendar"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 transition shadow-2xs cursor-pointer"
+                title="Subir archivo .ics exportado de Google Calendar"
+              >
+                <Upload className="h-3.5 w-3.5 text-blue-600" />
+                <span>Cargar archivo .ics directo</span>
+              </button>
+              <span className="text-[10px] text-slate-400">
+                Sincroniza SOLO los eventos reales del archivo .ics
+              </span>
             </div>
           </div>
 

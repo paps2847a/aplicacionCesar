@@ -72,8 +72,19 @@ function sanitizeSnapshot(snapshot: SharedAppStateSnapshot): SharedAppStateSnaps
     : snapshot.rawContacts;
 
   const cleanedCal = deduplicarEventosCalendar(snapshot.calendarEvents || []);
-  const sanitizedCalendar =
-    cleanedCal.length > 0 ? cleanedCal : deduplicarEventosCalendar(INITIAL_CALENDAR_EVENTS);
+  const sanitizedCalendar = cleanedCal.filter((e) => {
+    const sNorm = String(e.summary || '').toLowerCase();
+    const idNorm = String(e.id || '').toLowerCase();
+    return (
+      !sNorm.includes('dentista') &&
+      !sNorm.includes('reunión virtual') &&
+      !sNorm.includes('reunion virtual') &&
+      !sNorm.includes('almuerzo con frima') &&
+      !idNorm.includes('dentista') &&
+      !idNorm.includes('reunion-virtual') &&
+      !idNorm.includes('almuerzo-frima')
+    );
+  });
 
   return {
     ...snapshot,
@@ -114,7 +125,7 @@ function loadSharedState(): SharedAppStateSnapshot {
         updatedAt: new Date().toISOString(),
         rawContacts: contactsRes.contacts,
         controlEnvios: envios,
-        calendarEvents: calendar.length > 0 ? calendar : INITIAL_CALENDAR_EVENTS,
+        calendarEvents: calendar,
         sentContactIds: Array.isArray(settings.sentContactIds) ? settings.sentContactIds : [],
         alertaOcultaIds: Array.isArray(settings.alertaOcultaIds) ? settings.alertaOcultaIds : [],
         respuestasConsolidadasLog: settings.respuestasConsolidadasLog || {},
@@ -138,7 +149,7 @@ function loadSharedState(): SharedAppStateSnapshot {
     updatedAt: new Date().toISOString(),
     rawContacts: [],
     controlEnvios: [],
-    calendarEvents: INITIAL_CALENDAR_EVENTS,
+    calendarEvents: [],
   });
 }
 

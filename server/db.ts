@@ -123,6 +123,15 @@ function initSchema(db: DatabaseSync): void {
       value TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    DELETE FROM calendar_events 
+    WHERE lower(summary) LIKE '%dentista%' 
+       OR lower(summary) LIKE '%reunión virtual%' 
+       OR lower(summary) LIKE '%reunion virtual%' 
+       OR lower(summary) LIKE '%almuerzo con frima%'
+       OR id LIKE '%dentista%' 
+       OR id LIKE '%reunion-virtual%'
+       OR id LIKE '%almuerzo-frima%';
   `);
 }
 
@@ -248,6 +257,19 @@ function migrateFromLegacyJsonIfEmpty(db: DatabaseSync): void {
 
       for (const ev of data.calendarEvents) {
         if (!ev.id) continue;
+        const sNorm = String(ev.summary || '').toLowerCase();
+        const idNorm = String(ev.id || '').toLowerCase();
+        if (
+          sNorm.includes('dentista') ||
+          sNorm.includes('reunión virtual') ||
+          sNorm.includes('reunion virtual') ||
+          sNorm.includes('almuerzo con frima') ||
+          idNorm.includes('dentista') ||
+          idNorm.includes('reunion-virtual') ||
+          idNorm.includes('almuerzo-frima')
+        ) {
+          continue;
+        }
         stmt.run(
           ev.id,
           ev.summary || 'Compromiso',

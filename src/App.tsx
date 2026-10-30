@@ -53,7 +53,7 @@ export default function App() {
   // 2. Estado de Datos y Persistencia
   const [rawContacts, setRawContacts] = useState<RawContactRow[]>(() => INITIAL_RAW_CONTACTS);
   const [controlEnvios, setControlEnvios] = useState<ControlEnvioRegistro[]>([]);
-  const [calendarEvents, setCalendarEvents] = useState<CalendarEventItem[]>(() => INITIAL_CALENDAR_EVENTS);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEventItem[]>([]);
   const [profile, setProfile] = useState<VoiceProfile>(() => DEFAULT_VOICE_PROFILE);
 
   // 3. Ajustes de Conectividad
@@ -109,13 +109,31 @@ export default function App() {
               setControlEnvios(s.controlEnvios);
             }
             if (Array.isArray(s.calendarEvents) && s.calendarEvents.length > 0) {
-              setCalendarEvents(deduplicarEventosCalendar(s.calendarEvents));
+              const filtered = s.calendarEvents.filter(
+                (e) => !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+              );
+              setCalendarEvents(deduplicarEventosCalendar(filtered));
             }
             if (s.profile) setProfile(s.profile);
             if (s.sheetUrlInput) setSheetUrlInput(s.sheetUrlInput);
             if (s.appsScriptUrlInput) setAppsScriptUrlInput(s.appsScriptUrlInput);
             if (s.calendarIcalUrlInput) setCalendarIcalUrlInput(s.calendarIcalUrlInput);
           }
+        }
+
+        try {
+          const calRes = await fetch('/api/calendar-events');
+          if (calRes.ok) {
+            const calData = await calRes.json();
+            if (calData?.ok && Array.isArray(calData.events) && isMounted) {
+              const filtered = calData.events.filter(
+                (e: CalendarEventItem) => !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+              );
+              setCalendarEvents(deduplicarEventosCalendar(filtered));
+            }
+          }
+        } catch {
+          // ignore
         }
       } catch (err) {
         console.warn('Iniciando con datos de respaldo local:', err);
@@ -717,7 +735,7 @@ export default function App() {
     const url = calendarIcalUrlInput.trim();
     if (!url) {
       setSyncToast({
-        message: 'Por favor ingresá tu URL privada .ics de Google Calendar para sincronizar.',
+        message: 'Por favor ingresá tu URL privada .ics de Google Calendar o subí un archivo .ics.',
         type: 'warn',
       });
       return;
@@ -736,29 +754,46 @@ export default function App() {
         const data = await res.json();
         if (data.ok && data.format === 'ical' && data.icsText) {
           const parsed = parsearICalEventosCalendar(data.icsText);
-          if (parsed.length > 0) {
-            const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...parsed]);
+          const validIcsEvents = parsed.filter(
+            (e) => !esEventoFicticioLegacyCalendar(e) && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+          );
+          if (validIcsEvents.length > 0) {
+            const manualEvents = calendarEvents.filter(
+              (e) => e.source === 'manual' && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+            );
+            const nextEvents = deduplicarEventosCalendar([...validIcsEvents, ...manualEvents]);
             setCalendarEvents(nextEvents);
             void fetch('/api/calendar-events/replace', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ events: nextEvents, source: 'ical_sync' }),
+              body: JSON.stringify({ events: validIcsEvents, source: 'ical_sync' }),
             });
             setSyncToast({
-              message: `✓ Sincronizados ${parsed.length} eventos desde Google Calendar.`,
+              message: `✓ Sincronizados ${validIcsEvents.length} eventos reales desde el enlace iCal.`,
               type: 'success',
             });
           } else {
             setSyncToast({
-              message: 'Conectado a Google Calendar pero no se detectaron eventos futuros.',
+              message: 'Conectado a Google Calendar pero no se detectaron eventos futuros en el feed .ics.',
               type: 'warn',
             });
           }
         } else if (data.ok && data.format === 'json' && Array.isArray(data.events)) {
-          const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...data.events]);
+          const validEvents = data.events.filter(
+            (e: CalendarEventItem) => !esEventoFicticioLegacyCalendar(e) && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+          );
+          const manualEvents = calendarEvents.filter(
+            (e) => e.source === 'manual' && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+          );
+          const nextEvents = deduplicarEventosCalendar([...validEvents, ...manualEvents]);
           setCalendarEvents(nextEvents);
+          void fetch('/api/calendar-events/replace', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ events: validEvents, source: 'ical_sync' }),
+          });
           setSyncToast({
-            message: `✓ Sincronizados ${data.events.length} eventos desde Google Calendar.`,
+            message: `✓ Sincronizados ${validEvents.length} eventos desde Google Calendar.`,
             type: 'success',
           });
         }
@@ -776,6 +811,41 @@ export default function App() {
       });
     }
   }, [calendarIcalUrlInput, calendarEvents]);
+
+  const handleImportIcsText = useCallback((icsText: string, filename?: string) => {
+    if (!icsText || !icsText.includes('BEGIN:VCALENDAR')) {
+      setSyncToast({
+        message: 'El archivo seleccionado no tiene formato iCal (.ics) válido.',
+        type: 'error',
+      });
+      return;
+    }
+    const parsed = parsearICalEventosCalendar(icsText);
+    const validIcsEvents = parsed.filter(
+      (e) => !esEventoFicticioLegacyCalendar(e) && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+    );
+    if (validIcsEvents.length === 0) {
+      setSyncToast({
+        message: 'No se encontraron eventos futuros en el archivo .ics seleccionado.',
+        type: 'warn',
+      });
+      return;
+    }
+    const manualEvents = calendarEvents.filter(
+      (e) => e.source === 'manual' && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+    );
+    const nextEvents = deduplicarEventosCalendar([...validIcsEvents, ...manualEvents]);
+    setCalendarEvents(nextEvents);
+    void fetch('/api/calendar-events/replace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: validIcsEvents, source: 'ical_sync' }),
+    });
+    setSyncToast({
+      message: `✓ Sincronizados ${validIcsEvents.length} eventos reales desde ${filename || 'archivo .ics'}.`,
+      type: 'success',
+    });
+  }, [calendarEvents]);
 
   const handleDeleteCalendarEvent = useCallback((id: string) => {
     setCalendarEvents((prev) => prev.filter((e) => e.id !== id));
@@ -951,29 +1021,46 @@ export default function App() {
                   const data = await res.json();
                   if (data.ok && data.format === 'ical' && data.icsText) {
                     const parsed = parsearICalEventosCalendar(data.icsText);
-                    if (parsed.length > 0) {
-                      const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...parsed]);
+                    const validIcsEvents = parsed.filter(
+                      (e) => !esEventoFicticioLegacyCalendar(e) && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+                    );
+                    if (validIcsEvents.length > 0) {
+                      const manualEvents = calendarEvents.filter(
+                        (e) => e.source === 'manual' && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+                      );
+                      const nextEvents = deduplicarEventosCalendar([...validIcsEvents, ...manualEvents]);
                       setCalendarEvents(nextEvents);
                       void fetch('/api/calendar-events/replace', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ events: nextEvents, source: 'ical_sync' }),
+                        body: JSON.stringify({ events: validIcsEvents, source: 'ical_sync' }),
                       });
                       setSyncToast({
-                        message: `✓ Sincronizados ${parsed.length} eventos desde Google Calendar.`,
+                        message: `✓ Sincronizados ${validIcsEvents.length} eventos desde Google Calendar (ICS).`,
                         type: 'success',
                       });
                     } else {
                       setSyncToast({
-                        message: 'Conectado a Google Calendar pero no se detectaron eventos futuros.',
+                        message: 'Conectado a Google Calendar pero no se detectaron eventos futuros en el feed .ics.',
                         type: 'warn',
                       });
                     }
                   } else if (data.ok && data.format === 'json' && Array.isArray(data.events)) {
-                    const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...data.events]);
+                    const validEvents = data.events.filter(
+                      (e: CalendarEventItem) => !esEventoFicticioLegacyCalendar(e) && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+                    );
+                    const manualEvents = calendarEvents.filter(
+                      (e) => e.source === 'manual' && !/dentista|reuni[oó]n\s*virtual/i.test(e.summary)
+                    );
+                    const nextEvents = deduplicarEventosCalendar([...validEvents, ...manualEvents]);
                     setCalendarEvents(nextEvents);
+                    void fetch('/api/calendar-events/replace', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ events: validEvents, source: 'ical_sync' }),
+                    });
                     setSyncToast({
-                      message: `✓ Sincronizados ${data.events.length} eventos desde Google Calendar.`,
+                      message: `✓ Sincronizados ${validEvents.length} eventos desde Google Calendar.`,
                       type: 'success',
                     });
                   }
@@ -1034,6 +1121,7 @@ export default function App() {
             }}
             calendarEvents={calendarEvents}
             onSyncCalendar={handleSyncCalendar}
+            onImportIcsText={handleImportIcsText}
             onDeleteCalendarEvent={handleDeleteCalendarEvent}
             onAddCalendarEvent={handleAddCalendarEvent}
           />

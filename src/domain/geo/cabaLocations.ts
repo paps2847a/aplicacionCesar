@@ -746,6 +746,9 @@ export const EVENTOS_FICTICIOS_LEGACY_IDS = new Set([
   'cal-man-1',
   'cal-man-2',
   'cal-pas-1',
+  'cal-dentista',
+  'cal-reunion-virtual',
+  'cal-almuerzo-frima',
 ]);
 
 export const EVENTOS_FICTICIOS_LEGACY_SUMMARIES = new Set([

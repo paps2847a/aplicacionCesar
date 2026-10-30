@@ -47,7 +47,11 @@ export function replaceCalendarEvents(events: CalendarEventItem[], source: strin
   const db = getDatabase();
   db.exec('BEGIN TRANSACTION;');
   try {
-    db.prepare('DELETE FROM calendar_events WHERE source = ? OR source IS NULL').run(source);
+    if (source === 'ical_sync' || source === 'sync' || source === 'state_sync') {
+      db.prepare("DELETE FROM calendar_events WHERE source IN ('ical_sync', 'sync', 'state_sync', 'migrado') OR source IS NULL").run();
+    } else {
+      db.prepare('DELETE FROM calendar_events WHERE source = ? OR source IS NULL').run(source);
+    }
     const stmt = db.prepare(`
       INSERT OR REPLACE INTO calendar_events (
         id, summary, location, fecha, fecha_iso, start_time, end_time,
@@ -57,6 +61,19 @@ export function replaceCalendarEvents(events: CalendarEventItem[], source: strin
 
     for (const ev of events) {
       if (!ev.id) continue;
+      const sNorm = String(ev.summary || '').toLowerCase();
+      const idNorm = String(ev.id || '').toLowerCase();
+      if (
+        sNorm.includes('dentista') ||
+        sNorm.includes('reunión virtual') ||
+        sNorm.includes('reunion virtual') ||
+        sNorm.includes('almuerzo con frima') ||
+        idNorm.includes('dentista') ||
+        idNorm.includes('reunion-virtual') ||
+        idNorm.includes('almuerzo-frima')
+      ) {
+        continue;
+      }
       stmt.run(
         ev.id,
         ev.summary || 'Compromiso',
