@@ -70,5 +70,23 @@ function doPost(e) {
     }
     return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'updateRow' })).setMimeType(ContentService.MimeType.JSON);
   }
+  if (body.action === 'appendRow' && body.payload) {
+    const p = body.payload;
+    const lastRow = Math.max(1, sheet.getLastRow());
+    const nextId = p.id ? String(p.id).replace(/^#/, '') : String(lastRow);
+    const newRow = [
+      nextId,
+      p.nombre || '',
+      p.barrio || 'CABA',
+      p.email || '',
+      p.telRaw || p.telefonoNorm || '',
+      p.rsp || 'Nuevo',
+      p.adhirio || 'Pendiente',
+      p.comentario || '',
+      p.estado || '1. Sin contactar (1er mensaje pendiente)'
+    ];
+    sheet.appendRow(newRow);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'appendRow', id: nextId })).setMimeType(ContentService.MimeType.JSON);
+  }
   return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
 }`;

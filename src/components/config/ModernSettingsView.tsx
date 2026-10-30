@@ -28,6 +28,8 @@ interface ModernSettingsViewProps {
   onUpdateAppsScriptUrl: (url: string) => void;
   onUpdateCalendarIcalUrl: (url: string) => void;
   onExportCSV: () => void;
+  onExportCSVExcel?: () => void;
+  onCopyTSV?: () => void;
 }
 
 export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
@@ -42,8 +44,11 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   onUpdateAppsScriptUrl,
   onUpdateCalendarIcalUrl,
   onExportCSV,
+  onExportCSVExcel,
+  onCopyTSV,
 }) => {
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
+  const [copiedTsv, setCopiedTsv] = useState<boolean>(false);
   const [localProfile, setLocalProfile] = useState<VoiceProfile>(profile);
   const [localSheetUrl, setLocalSheetUrl] = useState<string>(sheetUrlInput);
   const [localAppsScriptUrl, setLocalAppsScriptUrl] = useState<string>(appsScriptUrlInput);
@@ -110,13 +115,56 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onExportCSV}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-xs"
-          >
-            <Download className="h-3.5 w-3.5 text-slate-500" />
-            <span>Descargar Padrón Completo en CSV</span>
-          </button>
+          <div className="space-y-2 pt-1">
+            {onExportCSVExcel && (
+              <button
+                type="button"
+                onClick={onExportCSVExcel}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 transition shadow-xs"
+                title="Separado por punto y coma (;) para abrir en Excel en español con todas las columnas divididas"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Descargar CSV para Excel (;)</span>
+              </button>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={onExportCSV}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-50 transition shadow-2xs"
+                title="CSV estándar RFC 4180 separado por comas"
+              >
+                <Download className="h-3 w-3 text-slate-400" />
+                <span>CSV Estándar (,)</span>
+              </button>
+
+              {onCopyTSV && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCopyTSV();
+                    setCopiedTsv(true);
+                    setTimeout(() => setCopiedTsv(false), 2500);
+                  }}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-50 transition shadow-2xs"
+                  title="Copia la tabla en portapapeles para pegar directo (Ctrl+V) en Excel o Google Sheets"
+                >
+                  {copiedTsv ? (
+                    <>
+                      <Check className="h-3 w-3 text-emerald-600" />
+                      <span className="text-emerald-700">¡Copiado!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3 text-slate-400" />
+                      <span>Copiar (TSV)</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* 2. Google Sheets y Puente Apps Script */}

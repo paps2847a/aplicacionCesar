@@ -16,6 +16,9 @@ import {
   Send,
   Layers,
   Check,
+  Plus,
+  UserPlus,
+  X,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Contact, EstadoFlujo, VoiceProfile } from '../../types';
@@ -33,8 +36,24 @@ interface CandidatePipelineViewProps {
   voiceProfile: VoiceProfile;
   whatsAppReady: boolean;
   onUpdateContact: (contactId: string, updates: Partial<Contact>) => Promise<void> | void;
-  onSendDirectWA?: (phone: string, text: string, contactId: string, nombre: string, barrio: string) => Promise<boolean>;
+  onSendDirectWA?: (
+    phone: string,
+    text: string,
+    contactId: string,
+    nombre: string,
+    barrio: string,
+    tipoPlantilla?: string
+  ) => Promise<boolean>;
   onOpenAutoWAModal: () => void;
+  selectedContactId?: string | null;
+  onSelectContactId?: (id: string | null) => void;
+  onAddNewContact?: (newContact: {
+    nombre: string;
+    tel: string;
+    barrio: string;
+    calleOCruce?: string;
+    comentario?: string;
+  }) => Promise<void> | void;
 }
 
 export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
@@ -44,18 +63,42 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   onUpdateContact,
   onSendDirectWA,
   onOpenAutoWAModal,
+  selectedContactId,
+  onSelectContactId,
+  onAddNewContact,
 }) => {
-  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
+  const activeSelectedId = selectedContactId !== undefined ? selectedContactId : internalSelectedId;
+
+  const handleSelectContact = useCallback(
+    (id: string | null) => {
+      if (onSelectContactId) onSelectContactId(id);
+      setInternalSelectedId(id);
+    },
+    [onSelectContactId]
+  );
 
   // Mantener el contacto seleccionado sincronizado en tiempo real con la lista viva de contactos
   const selectedContact = useMemo(() => {
-    if (!selectedContactId) return null;
-    return contacts.find((c) => String(c.id) === String(selectedContactId)) || null;
-  }, [contacts, selectedContactId]);
+    if (!activeSelectedId) return null;
+    return contacts.find((c) => String(c.id) === String(activeSelectedId)) || null;
+  }, [contacts, activeSelectedId]);
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedBarrio, setSelectedBarrio] = useState<string>('Todos');
   const [activeStageFilter, setActiveStageFilter] = useState<MacroStageKey | 'TODOS'>('TODOS');
+  const [operationalFilter, setOperationalFilter] = useState<
+    'TODOS' | 'SIN_RSP_48H' | 'FALTA_CONFIRMAR' | 'FALTAN_DATOS' | 'RETIRO_FICHAS'
+  >('TODOS');
   const [viewMode, setViewMode] = useState<'lanes' | 'list' | 'board'>('lanes');
+
+  // Estado del modal de nuevo contacto
+  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [nuevoNombre, setNuevoNombre] = useState<string>('');
+  const [nuevoTel, setNuevoTel] = useState<string>('');
+  const [nuevoBarrio, setNuevoBarrio] = useState<string>('Palermo');
+  const [nuevaCalle, setNuevaCalle] = useState<string>('');
+  const [nuevoComentario, setNuevoComentario] = useState<string>('');
 
   // Estado de etapas retraíbles (Por defecto TODAS retraídas a pedido del usuario)
   const [expandedStages, setExpandedStages] = useState<Record<MacroStageKey, boolean>>({
@@ -137,6 +180,32 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [contacts]);
 
+  // Conteo de filtros operativos
+  const operationalCounts = useMemo(() => {
+    let sinRsp = 0;
+    let faltaConf = 0;
+    let faltanDatos = 0;
+    let retiroFichas = 0;
+
+    for (const c of contacts) {
+      if (c.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP') sinRsp++;
+      if (c.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR') faltaConf++;
+      if (
+        c.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+        (!c.calleOCruce && !(c.comentario || '').match(/\b(calle|av|av\.|avenida)\b/i))
+      ) {
+        faltanDatos++;
+      }
+      if (
+        c.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+        (c.comentario || '').toLowerCase().includes('ficha')
+      ) {
+        retiroFichas++;
+      }
+    }
+    return { sinRsp, faltaConf, faltanDatos, retiroFichas };
+  }, [contacts]);
+
   // Filtrado de contactos
   const filteredContacts = useMemo(() => {
     return contacts.filter((c) => {
@@ -167,9 +236,45 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         }
       }
 
+      // 4. Filtro operativo
+      if (operationalFilter === 'SIN_RSP_48H') {
+        if (c.estadoFlujo !== '1ER_MSJ_ENVIADO_SIN_RSP') return false;
+      } else if (operationalFilter === 'FALTA_CONFIRMAR') {
+        if (c.estadoFlujo !== 'PASO_DATOS_FALTA_CONFIRMAR') return false;
+      } else if (operationalFilter === 'FALTAN_DATOS') {
+        const hasCalle = c.calleOCruce || (c.comentario && /\b(calle|av|av\.|avenida)\b/i.test(c.comentario));
+        if (c.estadoFlujo !== 'RESPONDIO_FALTA_DNI_O_ZONA' && hasCalle) return false;
+      } else if (operationalFilter === 'RETIRO_FICHAS') {
+        const hasFichas =
+          c.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+          (c.comentario || '').toLowerCase().includes('ficha');
+        if (!hasFichas) return false;
+      }
+
       return true;
     });
-  }, [contacts, searchQuery, selectedBarrio, activeStageFilter]);
+  }, [contacts, searchQuery, selectedBarrio, activeStageFilter, operationalFilter]);
+
+  // Navegación secuencial entre candidatos en el drawer
+  const currentIndex = useMemo(() => {
+    if (!selectedContact) return -1;
+    return filteredContacts.findIndex((c) => String(c.id) === String(selectedContact.id));
+  }, [filteredContacts, selectedContact]);
+
+  const hasPrevContact = currentIndex > 0;
+  const hasNextContact = currentIndex >= 0 && currentIndex < filteredContacts.length - 1;
+
+  const handlePrevContact = useCallback(() => {
+    if (hasPrevContact) {
+      handleSelectContact(filteredContacts[currentIndex - 1].id);
+    }
+  }, [hasPrevContact, currentIndex, filteredContacts, handleSelectContact]);
+
+  const handleNextContact = useCallback(() => {
+    if (hasNextContact) {
+      handleSelectContact(filteredContacts[currentIndex + 1].id);
+    }
+  }, [hasNextContact, currentIndex, filteredContacts, handleSelectContact]);
 
   // Agrupación por etapas
   const contactsByStage = useMemo(() => {
@@ -416,6 +521,223 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         </div>
       </div>
 
+      {/* 2.5 Chips de Filtros Operativos Rápidos + Botón Nuevo Contacto */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
+            <Filter className="h-3 w-3" /> Filtro operativo:
+          </span>
+          <button
+            type="button"
+            onClick={() => setOperationalFilter('TODOS')}
+            className={`rounded-xl px-2.5 py-1 text-xs font-bold transition ${
+              operationalFilter === 'TODOS'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Todos ({contacts.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setOperationalFilter(operationalFilter === 'SIN_RSP_48H' ? 'TODOS' : 'SIN_RSP_48H')}
+            className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-bold transition ${
+              operationalFilter === 'SIN_RSP_48H'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100'
+            }`}
+          >
+            <span>💬 Sin Rsp 1er msj</span>
+            <span className="rounded-full bg-white/60 px-1.5 py-0.2 text-[10px] font-black">
+              {operationalCounts.sinRsp}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setOperationalFilter(operationalFilter === 'FALTA_CONFIRMAR' ? 'TODOS' : 'FALTA_CONFIRMAR')}
+            className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-bold transition ${
+              operationalFilter === 'FALTA_CONFIRMAR'
+                ? 'bg-sky-600 text-white shadow-xs'
+                : 'bg-sky-50 border border-sky-200 text-sky-800 hover:bg-sky-100'
+            }`}
+          >
+            <span>📍 Falta confirmar</span>
+            <span className="rounded-full bg-white/60 px-1.5 py-0.2 text-[10px] font-black">
+              {operationalCounts.faltaConf}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setOperationalFilter(operationalFilter === 'FALTAN_DATOS' ? 'TODOS' : 'FALTAN_DATOS')}
+            className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-bold transition ${
+              operationalFilter === 'FALTAN_DATOS'
+                ? 'bg-orange-600 text-white shadow-xs'
+                : 'bg-orange-50 border border-orange-200 text-orange-800 hover:bg-orange-100'
+            }`}
+          >
+            <span>⚠️ Faltan datos</span>
+            <span className="rounded-full bg-white/60 px-1.5 py-0.2 text-[10px] font-black">
+              {operationalCounts.faltanDatos}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setOperationalFilter(operationalFilter === 'RETIRO_FICHAS' ? 'TODOS' : 'RETIRO_FICHAS')}
+            className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-bold transition ${
+              operationalFilter === 'RETIRO_FICHAS'
+                ? 'bg-purple-600 text-white shadow-xs'
+                : 'bg-purple-50 border border-purple-200 text-purple-800 hover:bg-purple-100'
+            }`}
+          >
+            <span>📋 Retiro de Fichas</span>
+            <span className="rounded-full bg-white/60 px-1.5 py-0.2 text-[10px] font-black">
+              {operationalCounts.retiroFichas}
+            </span>
+          </button>
+        </div>
+
+        {/* Botón Agregar Candidato */}
+        {onAddNewContact && (
+          <button
+            type="button"
+            onClick={() => setIsAddModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 text-xs font-bold shadow-xs transition"
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            <span>+ Nuevo Contacto</span>
+          </button>
+        )}
+      </div>
+
+      {/* Modal Nuevo Contacto */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                  <UserPlus className="h-4 w-4" />
+                </div>
+                <h3 className="text-sm font-black text-slate-900">Agregar Nuevo Contacto</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddModalOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!nuevoNombre.trim()) return;
+                if (onAddNewContact) {
+                  await onAddNewContact({
+                    nombre: nuevoNombre.trim(),
+                    tel: nuevoTel.trim(),
+                    barrio: nuevoBarrio.trim(),
+                    calleOCruce: nuevaCalle.trim(),
+                    comentario: nuevoComentario.trim(),
+                  });
+                }
+                setNuevoNombre('');
+                setNuevoTel('');
+                setNuevaCalle('');
+                setNuevoComentario('');
+                setIsAddModalOpen(false);
+                showToast(`Contacto "${nuevoNombre.trim()}" agregado`);
+              }}
+              className="mt-4 space-y-3"
+            >
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Nombre y Apellido *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={nuevoNombre}
+                  onChange={(e) => setNuevoNombre(e.target.value)}
+                  placeholder="Ej: Sofía Gómez"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:bg-white focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Teléfono
+                  </label>
+                  <input
+                    type="text"
+                    value={nuevoTel}
+                    onChange={(e) => setNuevoTel(e.target.value)}
+                    placeholder="Ej: 11 1234 5678"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:bg-white focus:border-emerald-500 focus:outline-hidden"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Barrio
+                  </label>
+                  <input
+                    type="text"
+                    value={nuevoBarrio}
+                    onChange={(e) => setNuevoBarrio(e.target.value)}
+                    placeholder="Palermo, Recoleta..."
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:bg-white focus:border-emerald-500 focus:outline-hidden"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Calle / Cruce / Dirección
+                </label>
+                <input
+                  type="text"
+                  value={nuevaCalle}
+                  onChange={(e) => setNuevaCalle(e.target.value)}
+                  placeholder="Ej: Av. Santa Fe 3200 o Gurruchaga y Honduras"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:bg-white focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                  Comentario / Notas
+                </label>
+                <textarea
+                  rows={2}
+                  value={nuevoComentario}
+                  onChange={(e) => setNuevoComentario(e.target.value)}
+                  placeholder="Ej: Se contactó por Instagram, prefiere horario tarde"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:bg-white focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 shadow-xs transition"
+                >
+                  Guardar Contacto
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* 3. VISTAS PRINCIPALES */}
 
       {/* VISTA 1: CARRILES HORIZONTALES POR ETAPA RETRAÍBLES (Por defecto retraídas) */}
@@ -497,8 +819,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                                 contact={c}
                                 layoutMode="horizontal"
                                 whatsAppReady={whatsAppReady}
-                                isSelected={selectedContactId === c.id}
-                                onSelect={(contact) => setSelectedContactId(contact.id)}
+                                isSelected={activeSelectedId === c.id}
+                                onSelect={(contact) => handleSelectContact(contact.id)}
                                 onStageChange={handleDirectStageChange}
                                 onSendDirectWA={onSendDirectWA}
                               />
@@ -529,8 +851,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                 contact={c}
                 layoutMode="horizontal"
                 whatsAppReady={whatsAppReady}
-                isSelected={selectedContactId === c.id}
-                onSelect={(contact) => setSelectedContactId(contact.id)}
+                isSelected={activeSelectedId === c.id}
+                onSelect={(contact) => handleSelectContact(contact.id)}
                 onStageChange={handleDirectStageChange}
                 onSendDirectWA={onSendDirectWA}
               />
@@ -577,8 +899,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                         contact={c}
                         layoutMode="compact"
                         whatsAppReady={whatsAppReady}
-                        isSelected={selectedContactId === c.id}
-                        onSelect={(contact) => setSelectedContactId(contact.id)}
+                        isSelected={activeSelectedId === c.id}
+                        onSelect={(contact) => handleSelectContact(contact.id)}
                         onStageChange={handleDirectStageChange}
                         onSendDirectWA={onSendDirectWA}
                       />
@@ -596,13 +918,17 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         contact={selectedContact}
         voiceProfile={voiceProfile}
         whatsAppReady={whatsAppReady}
-        onClose={() => setSelectedContactId(null)}
+        onClose={() => handleSelectContact(null)}
         onUpdateContact={async (id, updates) => {
           await onUpdateContact(id, updates);
           const nom = selectedContact?.primerNombre || selectedContact?.nombre || `Contacto #${id}`;
           showToast(`${nom} actualizado en auditoría`);
         }}
         onSendDirectWA={onSendDirectWA}
+        onNextContact={handleNextContact}
+        onPrevContact={handlePrevContact}
+        hasNextContact={hasNextContact}
+        hasPrevContact={hasPrevContact}
       />
 
       {/* 5. Feedback Visual Flotante (Toast de Auditoría) */}

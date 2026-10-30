@@ -10,6 +10,7 @@ import {
 } from './repositories/contactRepository';
 import {
   recordEnvio,
+  bulkRecordEnvios,
   getRecentEnvios,
   getAllSentContactKeys,
 } from './repositories/controlEnvioRepository';
@@ -140,6 +141,10 @@ apiRouter.get('/control-envios', (req: Request, res: Response) => {
 
 apiRouter.post('/control-envios', (req: Request, res: Response) => {
   try {
+    if (Array.isArray(req.body)) {
+      bulkRecordEnvios(req.body);
+      return res.json({ ok: true, count: req.body.length });
+    }
     const registro = req.body as ControlEnvioRegistro;
     if (!registro || !registro.idRegistro || !registro.contactId) {
       return res.status(400).json({ ok: false, error: 'Registro de envío incompleto' });

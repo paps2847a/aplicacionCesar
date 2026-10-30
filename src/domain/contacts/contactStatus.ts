@@ -519,6 +519,8 @@ export function inferirEstadoFlujo(
   if (yaAdhirioAntes(raw)) {
     if (
       raw.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+      com.includes('ficha') ||
+      com.includes('retiro') ||
       com.includes('buscar fichas') ||
       /x\d/i.test(com)
     ) {

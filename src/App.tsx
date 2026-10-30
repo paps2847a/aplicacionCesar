@@ -24,10 +24,16 @@ import {
   crearEnlaceWhatsApp,
   deduplicarEventosCalendar,
   exportarContactosACSV,
+  exportarContactosACSVExcelPuntoYComa,
+  exportarContactosATSVParaExcel,
   fusionarContactosDesdeSheetsConControl,
   generarColaEnvioAutomaticoPrimerContacto,
   generarCorteEstrategicoLocal,
+  geocodificarContactoLocal,
+  inferirTransicionInteligenteWA,
   normalizarTelefonoWA,
+  obtenerEtiquetaEstadoFlujo,
+  parsearICalEventosCalendar,
   parsearTSVoCSVContactos,
   procesarContacto,
 } from './utils/logic';
@@ -38,6 +44,7 @@ import { WhatsAppWebAutomationPanel } from './components/WhatsAppWebAutomationPa
 import { ModernSettingsView } from './components/config/ModernSettingsView';
 import { AutoFirstMessageModal } from './components/AutoFirstMessageModal';
 import { InteractiveMapPanel } from './components/InteractiveMapPanel';
+import { DailyClosureModal } from './components/modals/DailyClosureModal';
 
 export default function App() {
   // 1. Navegación Principal Serena
@@ -73,9 +80,11 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [syncToast]);
 
-  // 4. Automatización WhatsApp Web
+  // 4. Automatización WhatsApp Web & Modales Operativos
   const [whatsAppStatus, setWhatsAppStatus] = useState<string>('DISCONNECTED');
   const [showAutoFirstMessageModal, setShowAutoFirstMessageModal] = useState<boolean>(false);
+  const [showDailyClosureModal, setShowDailyClosureModal] = useState<boolean>(false);
+  const [pipelineSelectedContactId, setPipelineSelectedContactId] = useState<string | null>(null);
   const [modoColaBotActivo, setModoColaBotActivo] = useState<ModoColaAutomatizacionWA>('PRIMER_CONTACTO');
 
   // 5. Reloj de Corte Territorial
@@ -273,8 +282,92 @@ export default function App() {
       } catch (err) {
         console.error('Error persistiendo contacto en SQLite:', err);
       }
+
+      // Sincronización en segundo plano con Google Sheets (vía Puente Google Apps Script)
+      if (appsScriptUrlInput.trim()) {
+        const payload = {
+          id: contactId,
+          telefonoNorm: updates.telRaw,
+          rsp: updates.rsp,
+          adhirio: updates.adhirio,
+          comentarioNota: enrichedUpdates.comentario,
+          estado: updates.estadoFlujoEtiqueta || (updates.estadoFlujo ? obtenerEtiquetaEstadoFlujo(updates.estadoFlujo) : undefined),
+        };
+        void fetch('/api/sheets/push-live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            appsScriptUrl: appsScriptUrlInput.trim(),
+            action: 'updateRow',
+            payload,
+          }),
+        }).catch((err) => console.warn('Error actualizando Google Sheets en segundo plano:', err));
+      }
     },
-    []
+    [appsScriptUrlInput]
+  );
+
+  // Agregar nuevo contacto manual (con sincronización inmediata a SQLite y Google Sheets)
+  const handleAddNewContact = useCallback(
+    async (newContact: {
+      nombre: string;
+      tel: string;
+      barrio: string;
+      calleOCruce?: string;
+      comentario?: string;
+    }) => {
+      const ahora = new Date();
+      const id = `manual_${Date.now()}`;
+      const baseComentario = newContact.calleOCruce
+        ? `${newContact.calleOCruce}${newContact.comentario ? ` · ${newContact.comentario}` : ''}`
+        : newContact.comentario || '';
+      const rawRow: RawContactRow = {
+        id,
+        nombre: newContact.nombre,
+        telRaw: newContact.tel,
+        barrio: newContact.barrio || 'CABA',
+        comentario: baseComentario,
+        rsp: 'Nuevo',
+        adhirio: 'Pendiente',
+        actualizadoEnAppAt: ahora.toISOString(),
+      };
+
+      setRawContacts((prev) => [rawRow, ...prev]);
+
+      try {
+        await fetch('/api/contacts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(rawRow),
+        });
+      } catch (err) {
+        console.warn('Error guardando nuevo contacto en SQLite:', err);
+      }
+
+      // Impactar fila nueva en Google Sheets en vivo
+      if (appsScriptUrlInput.trim()) {
+        const payload = {
+          id,
+          nombre: newContact.nombre,
+          barrio: newContact.barrio || 'CABA',
+          telRaw: newContact.tel,
+          rsp: 'Nuevo',
+          adhirio: 'Pendiente',
+          comentario: baseComentario,
+          estado: '1. Sin contactar (1er mensaje pendiente)',
+        };
+        void fetch('/api/sheets/push-live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            appsScriptUrl: appsScriptUrlInput.trim(),
+            action: 'appendRow',
+            payload,
+          }),
+        }).catch((err) => console.warn('Error agregando fila a Google Sheets:', err));
+      }
+    },
+    [appsScriptUrlInput]
   );
 
   // Envío directo por WhatsApp Web (Simulación de escritura humana + SQLite)
@@ -284,7 +377,8 @@ export default function App() {
       message: string,
       contactId: string,
       nombre: string,
-      barrio: string
+      barrio: string,
+      tipoPlantilla?: string
     ): Promise<boolean> => {
       try {
         const res = await fetch('/api/whatsapp/send-one', {
@@ -296,7 +390,7 @@ export default function App() {
             contactId,
             nombre,
             barrio,
-            tipoAccion: 'mensaje_directo_ui',
+            tipoAccion: tipoPlantilla || 'mensaje_directo_ui',
           }),
         });
         const data = await res.json();
@@ -307,26 +401,69 @@ export default function App() {
           const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
           const auditText = `${ddmm} a las ${hhmm} hs`;
 
+          let updatedForPersist: RawContactRow | null = null;
+
           setRawContacts((prev) =>
             prev.map((c) => {
               if (String(c.id) !== String(contactId)) return c;
+              const trans = inferirTransicionInteligenteWA(c, message, tipoPlantilla);
               const baseCom = (c.comentario || '')
                 .replace(/\s*\[Modificado el [^\]]+\]/g, '')
                 .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
                 .trim();
               const newCom = baseCom
-                ? `${baseCom} [Modificado el ${auditText} a "1er mensaje enviado"]`
-                : `[Modificado el ${auditText} a "1er mensaje enviado"]`;
-              return {
+                ? `${baseCom} [Modificado el ${auditText} a "${trans.etiquetaLog}"]`
+                : `[Modificado el ${auditText} a "${trans.etiquetaLog}"]`;
+
+              const updated: RawContactRow = {
                 ...c,
                 primerContactoEnviado: true,
-                estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
+                estadoFlujo: trans.estadoFlujo,
+                estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(trans.estadoFlujo),
+                adhirio: trans.adhirio || c.adhirio,
+                rsp: trans.rsp || c.rsp,
                 ultimoContacto: nowIso.slice(0, 10),
                 actualizadoEnAppAt: nowIso,
                 comentario: newCom,
               };
+              updatedForPersist = updated;
+              return updated;
             })
           );
+
+          const log: ControlEnvioRegistro = {
+            idRegistro: `direct-${Date.now()}-${contactId}`,
+            contactId,
+            nombre,
+            barrio,
+            telRaw: phone,
+            tipoMensaje: tipoPlantilla || 'Envío Directo WA Web',
+            estadoAnterior: '',
+            estadoNuevo: updatedForPersist ? (updatedForPersist as any).estadoFlujo : '1ER_MSJ_ENVIADO_SIN_RSP',
+            estadoNuevoEtiqueta: updatedForPersist ? (updatedForPersist as any).estadoFlujoEtiqueta : '',
+            rspNuevo: updatedForPersist ? ((updatedForPersist as any).rsp || 'Sí') : 'Sí',
+            adhirioNuevo: updatedForPersist ? ((updatedForPersist as any).adhirio || 'Pendiente') : 'Pendiente',
+            comentario: message.slice(0, 80),
+            fechaHora: hhmm,
+            sincronizadoSheets: false,
+          };
+
+          setControlEnvios((prev) => [log, ...prev].slice(0, 150));
+
+          void fetch('/api/control-envios', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(log),
+          });
+
+          if (updatedForPersist) {
+            void fetch(`/api/contacts/${contactId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(updatedForPersist),
+            });
+          }
+
           return true;
         }
         return false;
@@ -587,6 +724,7 @@ export default function App() {
         whatsAppStatus={whatsAppStatus}
         isSyncingSheets={isSyncingSheets}
         onSyncSheets={handleActualizarDesdeSheets}
+        onOpenDailyClosureModal={() => setShowDailyClosureModal(true)}
         onOpenAutoWAModal={() => {
           setModoColaBotActivo('PRIMER_CONTACTO');
           setShowAutoFirstMessageModal(true);
@@ -603,6 +741,9 @@ export default function App() {
             onUpdateContact={handleUpdateContact}
             onSendDirectWA={handleSendDirectWA}
             onOpenAutoWAModal={() => setShowAutoFirstMessageModal(true)}
+            selectedContactId={pipelineSelectedContactId}
+            onSelectContactId={setPipelineSelectedContactId}
+            onAddNewContact={handleAddNewContact}
           />
         )}
 
@@ -613,6 +754,7 @@ export default function App() {
               clusters={microClusters}
               profile={profile}
               calendarEvents={calendarEvents}
+              agendaBloques={corteResultado.agendaSugeridaDias}
               onOpenWhatsApp={(c, text) => {
                 if (whatsAppStatus === 'READY') {
                   void handleSendDirectWA(c.tel || c.telRaw, text || '', c.id, c.nombre, c.barrio);
@@ -621,7 +763,8 @@ export default function App() {
                   window.open(url, '_blank');
                 }
               }}
-              onSelectContactForEdit={() => {
+              onSelectContactForEdit={(contact) => {
+                setPipelineSelectedContactId(contact.id);
                 setActiveTab('pipeline');
               }}
               onQuickStatusFromMap={(contactOrId, action) => {
@@ -668,6 +811,13 @@ export default function App() {
             totalControlEnvios={controlEnvios.length}
             onUpdateProfile={(up) => {
               const next = { ...profile, ...up };
+              if (up.direccionPartida) {
+                const geo = geocodificarContactoLocal(up.direccionPartida, 'Palermo', '0');
+                if (geo.lat && geo.lng) {
+                  next.latPartida = geo.lat;
+                  next.lngPartida = geo.lng;
+                }
+              }
               setProfile(next);
               void fetch('/api/settings', {
                 method: 'POST',
@@ -691,15 +841,111 @@ export default function App() {
                 body: JSON.stringify({ key: 'appsScriptUrlInput', value: u }),
               });
             }}
-            onUpdateCalendarIcalUrl={(u) => {
+            onUpdateCalendarIcalUrl={async (u) => {
               setCalendarIcalUrlInput(u);
               void fetch('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key: 'calendarIcalUrlInput', value: u }),
               });
+
+              if (!u.trim()) return;
+
+              try {
+                setSyncToast({
+                  message: 'Conectando con Google Calendar iCal...',
+                  type: 'info',
+                });
+                const res = await fetch('/api/calendar/fetch-ical', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ icalUrl: u.trim() }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.ok && data.format === 'ical' && data.icsText) {
+                    const parsed = parsearICalEventosCalendar(data.icsText);
+                    if (parsed.length > 0) {
+                      const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...parsed]);
+                      setCalendarEvents(nextEvents);
+                      void fetch('/api/calendar-events/replace', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ events: nextEvents, source: 'ical_sync' }),
+                      });
+                      setSyncToast({
+                        message: `✓ Sincronizados ${parsed.length} eventos desde Google Calendar.`,
+                        type: 'success',
+                      });
+                    } else {
+                      setSyncToast({
+                        message: 'Conectado a Google Calendar pero no se detectaron eventos futuros.',
+                        type: 'warn',
+                      });
+                    }
+                  } else if (data.ok && data.format === 'json' && Array.isArray(data.events)) {
+                    const nextEvents = deduplicarEventosCalendar([...calendarEvents, ...data.events]);
+                    setCalendarEvents(nextEvents);
+                    setSyncToast({
+                      message: `✓ Sincronizados ${data.events.length} eventos desde Google Calendar.`,
+                      type: 'success',
+                    });
+                  }
+                } else {
+                  const err = await res.json();
+                  setSyncToast({
+                    message: err.error || 'Error al conectar con Google Calendar iCal.',
+                    type: 'error',
+                  });
+                }
+              } catch (e) {
+                console.warn('Error fetching ical:', e);
+                setSyncToast({
+                  message: 'No se pudo conectar con el enlace de Google Calendar.',
+                  type: 'error',
+                });
+              }
             }}
-            onExportCSV={() => exportarContactosACSV(contacts)}
+            onExportCSV={() => {
+              const csvContent = exportarContactosACSV(contacts);
+              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `contactos_popurri_${new Date().toISOString().slice(0, 10)}.csv`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              setSyncToast({
+                message: '✓ Archivo CSV descargado con éxito.',
+                type: 'success',
+              });
+            }}
+            onExportCSVExcel={() => {
+              const csvContent = exportarContactosACSVExcelPuntoYComa(contacts);
+              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `contactos_popurri_excel_${new Date().toISOString().slice(0, 10)}.csv`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              setSyncToast({
+                message: '✓ CSV para Excel (;) descargado con éxito. Abre directo en columnas.',
+                type: 'success',
+              });
+            }}
+            onCopyTSV={() => {
+              const tsv = exportarContactosATSVParaExcel(contacts);
+              navigator.clipboard.writeText(tsv);
+              setSyncToast({
+                message: '✓ Padrón copiado al portapapeles. Pega con Ctrl+V en Excel o Sheets.',
+                type: 'success',
+              });
+            }}
           />
         )}
       </main>
@@ -718,7 +964,17 @@ export default function App() {
         initialModoCola={modoColaBotActivo}
       />
 
-      {/* 4. Notificaciones Flotantes de Sincronización y Estado */}
+      {/* 4. Modal de Cierre Diario de Jornada / Google Forms */}
+      <DailyClosureModal
+        isOpen={showDailyClosureModal}
+        onClose={() => setShowDailyClosureModal(false)}
+        contacts={contacts}
+        controlEnvios={controlEnvios}
+        corteResultado={corteResultado}
+        profile={profile}
+      />
+
+      {/* 5. Notificaciones Flotantes de Sincronización y Estado */}
       <AnimatePresence>
         {syncToast && (
           <motion.div

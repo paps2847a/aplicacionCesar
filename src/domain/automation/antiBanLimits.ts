@@ -571,7 +571,8 @@ export function aplicarResultadoEnvioAutoAContacto(
   raw: RawContactRow,
   resultado: ResultadoEnvioAuto,
   detalle?: string,
-  fechaHoraISO?: string
+  fechaHoraISO?: string,
+  modoCola?: ModoColaAutomatizacionWA
 ): RawContactRow {
   const ahora = fechaHoraISO ? new Date(fechaHoraISO) : new Date();
   const hoyBA = obtenerPartesFechaHoraBA(ahora.getTime());
@@ -588,8 +589,40 @@ export function aplicarResultadoEnvioAutoAContacto(
       : resultado;
 
   if (resultadoEfectivo === 'ENVIADO_OK') {
-    const notaAuto = `[1er msj auto enviado ${selloFecha}]`;
-    const nuevoComentario = comentarioSinFallosPrevios.includes('[1er msj')
+    let nextEstado: EstadoFlujo = '1ER_MSJ_ENVIADO_SIN_RSP';
+    let nextAdhirio: 'Sí' | 'No' | 'Pendiente' = raw.adhirio === 'Sí' ? 'Sí' : 'Pendiente';
+    let nextRsp: 'Sí' | 'No' | 'Nuevo' =
+      raw.rsp === 'Sí' && tieneNuevaInformacionEnColumnaG(comentarioSinFallosPrevios) ? 'Sí' : 'No';
+    let notaAuto = `[1er msj auto enviado ${selloFecha}]`;
+
+    if (modoCola === 'RECORDATORIO_MANIANA_HOY' || /recordatorio|en camino/i.test(detalle || '')) {
+      nextEstado = 'RECORDATORIO_DIA_ENVIADO';
+      nextRsp = 'Sí';
+      notaAuto = `[Recordatorio auto enviado ${selloFecha}]`;
+    } else if (modoCola === 'AGRADECIMIENTO_POST_FIRMA' || /agradecimiento/i.test(detalle || '')) {
+      nextEstado = 'YA_ADHIRIO_FIRMA_OK';
+      nextAdhirio = 'Sí';
+      nextRsp = 'Sí';
+      notaAuto = `[Agradecimiento post-firma enviado ${selloFecha}]`;
+    } else if (/café hub/i.test(detalle || '')) {
+      nextEstado = 'PREFIERE_CAFE_HUB_O_SEDE';
+      notaAuto = `[Convocatoria Café Hub enviada ${selloFecha}]`;
+    } else if (modoCola === 'SEGUIMIENTO_24H_48H_BAJA' || /cambio de chip/i.test(detalle || '')) {
+      nextEstado = 'RESPONDIO_FALTA_DNI_O_ZONA';
+      nextRsp = 'Sí';
+      notaAuto = `[Validación DNI/Zona enviada ${selloFecha}]`;
+    } else if (raw.estadoFlujo === 'ENCUENTRO_CONFIRMADO' || raw.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO') {
+      nextEstado = raw.estadoFlujo;
+      nextRsp = 'Sí';
+      notaAuto = `[Mensaje auto enviado ${selloFecha}]`;
+    } else if (raw.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') {
+      nextEstado = 'YA_ADHIRIO_FIRMA_OK';
+      nextAdhirio = 'Sí';
+      nextRsp = 'Sí';
+      notaAuto = `[Mensaje auto enviado ${selloFecha}]`;
+    }
+
+    const nuevoComentario = comentarioSinFallosPrevios.includes(notaAuto)
       ? comentarioSinFallosPrevios
       : comentarioSinFallosPrevios
       ? `${comentarioSinFallosPrevios} ${notaAuto}`
@@ -597,14 +630,14 @@ export function aplicarResultadoEnvioAutoAContacto(
 
     return sincronizarBarrioConDireccionComentario({
       ...raw,
-      rsp: raw.rsp === 'Sí' && tieneNuevaInformacionEnColumnaG(comentarioSinFallosPrevios) ? 'Sí' : 'No',
-      adhirio: raw.adhirio === 'Sí' ? 'Sí' : 'Pendiente',
+      rsp: nextRsp,
+      adhirio: nextAdhirio,
       primerContactoEnviado: true,
-      fechaPrimerContacto: ahora.toISOString().slice(0, 10),
+      fechaPrimerContacto: raw.fechaPrimerContacto || ahora.toISOString().slice(0, 10),
       ultimoContacto: ahora.toISOString().slice(0, 10),
       intentos: Math.max(1, (raw.intentos || 0) + 1),
-      estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
-      estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo('1ER_MSJ_ENVIADO_SIN_RSP'),
+      estadoFlujo: nextEstado,
+      estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(nextEstado),
       comentario: nuevoComentario,
       actualizadoEnAppAt: ahora.toISOString(),
     });

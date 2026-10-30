@@ -641,13 +641,15 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
   app.post('/api/sheets/push-live', async (req, res) => {
     try {
       const { appsScriptUrl, action, payload } = req.body;
-      if (!appsScriptUrl || !String(appsScriptUrl).startsWith('https://script.google.com/')) {
+      const savedUrl = await getSetting('appsScriptUrlInput');
+      const targetUrl = (appsScriptUrl && String(appsScriptUrl).trim()) || (savedUrl && String(savedUrl).trim()) || process.env.VITE_APPS_SCRIPT_URL;
+      if (!targetUrl || !String(targetUrl).startsWith('https://script.google.com/')) {
         return res.status(400).json({
           ok: false,
           error: 'Para guardar cambios automáticamente sin OAuth, pegá la URL de tu Google Apps Script.',
         });
       }
-      const scriptRes = await fetch(String(appsScriptUrl), {
+      const scriptRes = await fetch(String(targetUrl), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: action || 'updateRow', payload }),

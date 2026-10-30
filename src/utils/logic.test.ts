@@ -43,6 +43,11 @@ import {
   aplicarReglaSaludoMismoDia,
   generarPanelTareasDiarias,
   generarVariantePolimorficaPrimerContacto,
+  inferirTransicionInteligenteWA,
+  getMacroStageForContact,
+  exportarContactosACSV,
+  exportarContactosACSVExcelPuntoYComa,
+  exportarContactosATSVParaExcel,
 } from './logic';
 import {
   DEFAULT_VOICE_PROFILE,
@@ -1846,6 +1851,109 @@ test('Validador Anti-Pelones de fechas, regla de saludo en el mismo día, voz re
   );
   assert.ok(colaAgradecimientos.items.length > 0, 'Debe armar cola de agradecimientos post-adhesión');
 });
+
+test('Matriz de transiciones inteligentes de WhatsApp y prioridad operativa de Retiro de Fichas', () => {
+  // 1. Contacto nuevo en 1er contacto pasa a 1ER_MSJ_ENVIADO_SIN_RSP
+  const trans1 = inferirTransicionInteligenteWA(
+    {
+      estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
+      rsp: 'Nuevo',
+      adhirio: 'Pendiente',
+    },
+    'primer_contacto'
+  );
+  assert.equal(trans1.estadoFlujo, '1ER_MSJ_ENVIADO_SIN_RSP');
+  assert.equal(trans1.primerContactoEnviado, true);
+
+  // 2. Mensajes de terreno en camino / en puerta / recordatorio conservan ENCUENTRO_CONFIRMADO
+  const transTerreno = inferirTransicionInteligenteWA(
+    {
+      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+    },
+    'en_camino'
+  );
+  assert.equal(transTerreno.estadoFlujo, 'ENCUENTRO_CONFIRMADO');
+  assert.equal(transTerreno.recordatorioEnviado, true);
+
+  // 3. Contacto confirmado NO sufre regresión a 1er mensaje ante mensaje ad-hoc
+  const transNoRegresion = inferirTransicionInteligenteWA(
+    {
+      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+    },
+    'mensaje_general'
+  );
+  assert.equal(transNoRegresion.estadoFlujo, 'ENCUENTRO_CONFIRMADO');
+
+  // 4. Disculpas / reprogramación pasa a PASO_DATOS_FALTA_CONFIRMAR
+  const transReprog = inferirTransicionInteligenteWA(
+    {
+      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+    },
+    'disculpas_y_reprogramacion'
+  );
+  assert.equal(transReprog.estadoFlujo, 'PASO_DATOS_FALTA_CONFIRMAR');
+
+  // 5. Sin DNI CABA pasa a SIN_DNI_CABA_PEDIR_REFERIDOS
+  const transBaja = inferirTransicionInteligenteWA(
+    {
+      estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+    },
+    'no_caba_referidos'
+  );
+  assert.equal(transBaja.estadoFlujo, 'SIN_DNI_CABA_PEDIR_REFERIDOS');
+  assert.equal(transBaja.adhirio, 'No');
+
+  // 6. Agradecimiento post firma conserva YA_ADHIRIO_FIRMA_OK
+  const transFirma = inferirTransicionInteligenteWA(
+    {
+      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+      rsp: 'Sí',
+      adhirio: 'Sí',
+    },
+    'agradecimiento_post_firma'
+  );
+  assert.equal(transFirma.estadoFlujo, 'YA_ADHIRIO_FIRMA_OK');
+  assert.equal(transFirma.adhirio, 'Sí');
+
+  // 7. Prioridad operativa: PENDIENTE_RETIRO_FICHAS debe evaluarse antes de adheridos puros
+  const contactoConFichas = procesarContacto(
+    {
+      id: '999',
+      nombre: 'Prueba Fichas',
+      barrio: 'Palermo',
+      telRaw: '1122334455',
+      adhirio: 'Sí',
+      comentario: 'Firma lista, pendiente retiro de 5 fichas extras del local',
+      rsp: 'Sí',
+    },
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(contactoConFichas.estadoFlujo, 'PENDIENTE_RETIRO_FICHAS');
+  assert.equal(getMacroStageForContact(contactoConFichas), 'pausa');
+
+  // 8. Exportación CSV incluye BOM UTF-8 y encabezados correctos
+  const csv = exportarContactosACSV([contactoConFichas]);
+  assert.ok(csv.startsWith('\uFEFF'), 'CSV debe comenzar con BOM UTF-8 para apertura directa en Excel');
+  assert.ok(csv.includes('Prueba Fichas'), 'CSV debe contener el nombre del contacto');
+
+  // 9. Exportación CSV con punto y coma (;) para Excel en español
+  const csvExcel = exportarContactosACSVExcelPuntoYComa([contactoConFichas]);
+  assert.ok(csvExcel.startsWith('\uFEFF'), 'CSV Excel debe comenzar con BOM UTF-8');
+  assert.ok(csvExcel.includes(';Prueba Fichas;'), 'CSV Excel debe usar punto y coma como delimitador');
+
+  // 10. Exportación TSV para copiar y pegar en Sheets / Excel
+  const tsv = exportarContactosATSVParaExcel([contactoConFichas]);
+  assert.ok(tsv.includes('\tPrueba Fichas\t'), 'TSV debe usar tabulaciones como delimitador');
+});
+
 
 
 

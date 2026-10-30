@@ -407,6 +407,53 @@ export function exportarContactosATSVParaExcel(contacts: Contact[]): string {
 }
 
 /**
+ * Exporta el padrón en formato CSV con delimitador punto y coma (`;`),
+ * ideal para Microsoft Excel con configuración regional en español (Argentina / España / Latinoamérica).
+ * Abre directamente separando todas las columnas al hacer doble clic.
+ */
+export function exportarContactosACSVExcelPuntoYComa(contacts: Contact[]): string {
+  const incluyeEmail = contacts.some((c) => Boolean(c.email));
+  const header = incluyeEmail
+    ? ['#', 'Nombre', 'Barrio', 'Mail', 'Tel', 'RSP', 'Adhirió', 'Comentario', 'Estado', '1er Contacto']
+    : ['#', 'Nombre', 'Barrio', 'Tel', 'RSP', 'Adhirió', 'Comentario', 'Estado', '1er Contacto'];
+  const esc = (v: string) => {
+    const s = String(v ?? '').replace(/"/g, '""');
+    return s.includes(';') || s.includes('"') || s.includes('\n') || s.includes('\r') ? `"${s}"` : s;
+  };
+  const rows = contacts.map((c) => {
+    const etiqueta1erContacto = c.primerContactoEnviado
+      ? `Enviado${c.fechaPrimerContacto ? ` (${c.fechaPrimerContacto})` : ''}`
+      : 'Pendiente 1er Contacto';
+    const base = incluyeEmail
+      ? [
+          c.id,
+          c.nombre,
+          c.barrio,
+          c.email || '',
+          c.telRaw,
+          c.rsp === 'Sí' ? 'Sí' : 'No',
+          c.adhirio,
+          c.comentario,
+          c.estadoFlujoEtiqueta,
+          etiqueta1erContacto,
+        ]
+      : [
+          c.id,
+          c.nombre,
+          c.barrio,
+          c.telRaw,
+          c.rsp === 'Sí' ? 'Sí' : 'No',
+          c.adhirio,
+          c.comentario,
+          c.estadoFlujoEtiqueta,
+          etiqueta1erContacto,
+        ];
+    return base.map(esc).join(';');
+  });
+  return '\uFEFF' + [header.join(';'), ...rows].join('\r\n');
+}
+
+/**
  * Tope estricto anti-bloqueo de WhatsApp: SIEMPRE menor a 45 mensajes por tanda.
  */
 

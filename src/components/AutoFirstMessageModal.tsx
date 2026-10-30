@@ -238,8 +238,9 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
     const primeroTxt = nuevaCamp.items[0]
       ? ` · Inicia con #${nuevaCamp.items[0].contactId} ${nuevaCamp.items[0].nombre}`
       : '';
+    const totalEleg = nuevaCamp.totalElegiblesEnBase ?? nuevaCamp.totalElegiblesEnPadron ?? nuevaCamp.items.length;
     setStatusNotice(
-      `🎲 Nuevo cupo anti-bloqueo sorteado: ${nuevoCupo} primeros mensajes (de ${nuevaCamp.totalElegiblesEnPadron} elegibles sin 1er contacto)${primeroTxt}.`
+      `🎲 Nuevo cupo anti-bloqueo sorteado: ${nuevoCupo} primeros mensajes (de ${totalEleg} elegibles sin 1er contacto)${primeroTxt}.`
     );
   };
 
@@ -752,7 +753,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                   </div>
                 </div>
                 <div className="text-[11px] font-bold text-emerald-800 shrink-0">
-                  Elegibles en base: {campaign.totalElegiblesEnPadron} · En tanda hoy: {campaign.items.length} (&lt; 45)
+                  Elegibles en base: {campaign.totalElegiblesEnBase ?? campaign.totalElegiblesEnPadron ?? campaign.items.length} · En tanda hoy: {campaign.items.length} (&lt; 45)
                 </div>
               </div>
 

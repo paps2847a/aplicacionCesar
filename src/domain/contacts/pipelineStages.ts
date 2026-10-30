@@ -123,12 +123,7 @@ export const MACRO_STAGES_ORDER: MacroStageKey[] = [
  * Clasifica a cualquier candidato/contacto de forma determinística en una de las 5 macro-etapas.
  */
 export function getMacroStageForContact(contact: Contact): MacroStageKey {
-  // 1. Ya adhirió (Prioridad absoluta de éxito)
-  if (contact.adhirio === 'Sí' || contact.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') {
-    return 'adheridos';
-  }
-
-  // 2. Descartados o bajas
+  // 1. Descartados o bajas
   if (
     contact.situacion === 'DESCARTADO_NO_CABA' ||
     contact.estadoFlujo === 'DESCARTADO_O_BAJA' ||
@@ -138,12 +133,24 @@ export function getMacroStageForContact(contact: Contact): MacroStageKey {
     return 'descartados';
   }
 
-  // 3. Pausa especial o retiro de fichas
+  // 2. Retiro de fichas pendiente (Logística pendiente de recolección de avales adicionales)
+  if (
+    contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+    contact.situacion === 'RETIRO_FICHAS' ||
+    /x[123]|fichas\s+extra/i.test(contact.comentario || '')
+  ) {
+    return 'pausa';
+  }
+
+  // 3. Ya adhirió (Proceso concluido exitosamente sin tareas pendientes)
+  if (contact.adhirio === 'Sí' || contact.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') {
+    return 'adheridos';
+  }
+
+  // 4. Pausa temporal por salud o viaje
   if (
     contact.estadoFlujo === 'POSTERGO_SALUD_O_VIAJE' ||
-    contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
-    contact.situacion === 'SITUACION_SALUD' ||
-    contact.situacion === 'RETIRO_FICHAS'
+    contact.situacion === 'SITUACION_SALUD'
   ) {
     return 'pausa';
   }
@@ -266,4 +273,150 @@ export function getRecommendedActionForContact(contact: Contact): {
         iconType: 'check',
       };
   }
+}
+
+/**
+ * Matriz de Transiciones Inteligentes según el tipo de mensaje enviado por WhatsApp.
+ * Evita retroceder estados de contactos agendados o adheridos y promueve el estado automáticamente.
+ */
+export function inferirTransicionInteligenteWA(
+  c: {
+    estadoFlujo?: EstadoFlujo;
+    adhirio?: 'Sí' | 'No' | 'Pendiente';
+    rsp?: 'Sí' | 'No' | 'Nuevo';
+    comentario?: string;
+  },
+  message: string,
+  tipoPlantilla?: string
+): {
+  estadoFlujo: EstadoFlujo;
+  adhirio?: 'Sí' | 'No' | 'Pendiente';
+  rsp?: 'Sí' | 'No' | 'Nuevo';
+  primerContactoEnviado?: boolean;
+  recordatorioEnviado?: boolean;
+  etiquetaLog: string;
+} {
+  const effectiveTemplate = tipoPlantilla || (message && !message.includes(' ') ? message : undefined);
+  const msgLower = (message || '').toLowerCase();
+  const currentEst = c.estadoFlujo;
+
+  // 1. Agradecimiento Post-Firma
+  if (
+    effectiveTemplate === 'agradecimiento_post_firma' ||
+    msgLower.includes('agradecerte') ||
+    msgLower.includes('muchas gracias por haber sumado tu firma') ||
+    msgLower.includes('ficha firmada')
+  ) {
+    return {
+      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+      adhirio: 'Sí',
+      rsp: 'Sí',
+      primerContactoEnviado: true,
+      etiquetaLog: 'Agradecimiento Post-Firma',
+    };
+  }
+
+  // 2. Sin DNI en CABA (pedir referidos) / Baja
+  if (
+    effectiveTemplate === 'sin_dni_caba' ||
+    effectiveTemplate === 'no_caba_referidos' ||
+    effectiveTemplate === 'baja_amable_sin_respuesta' ||
+    msgLower.includes('referidos') ||
+    msgLower.includes('no vivís en caba') ||
+    msgLower.includes('no te preocupes que no te escribimos más')
+  ) {
+    return {
+      estadoFlujo: 'SIN_DNI_CABA_PEDIR_REFERIDOS',
+      adhirio: 'No',
+      rsp: c.rsp || 'No',
+      primerContactoEnviado: true,
+      etiquetaLog: 'Sin DNI CABA / Referidos',
+    };
+  }
+
+  // 3. Recordatorio / En camino / En puerta / Confirmación de encuentro
+  if (
+    effectiveTemplate === 'confirmacion_visita' ||
+    effectiveTemplate === 'recordatorio_dia' ||
+    effectiveTemplate === 'recordatorio_maniana_encuentro' ||
+    effectiveTemplate === 'en_camino' ||
+    effectiveTemplate === 'en_puerta' ||
+    effectiveTemplate === 'llegando' ||
+    msgLower.includes('en camino') ||
+    msgLower.includes('en la puerta') ||
+    msgLower.includes('recordatorio') ||
+    msgLower.includes('te confirmo') ||
+    msgLower.includes('quedamos entonces') ||
+    msgLower.includes('agendamos entonces')
+  ) {
+    return {
+      estadoFlujo: currentEst === 'ENCUENTRO_CONFIRMADO' ? 'ENCUENTRO_CONFIRMADO' : 'RECORDATORIO_DIA_ENVIADO',
+      adhirio: c.adhirio || 'Pendiente',
+      rsp: 'Sí',
+      primerContactoEnviado: true,
+      recordatorioEnviado: true,
+      etiquetaLog: 'Recordatorio / En camino',
+    };
+  }
+
+  // 4. Disculpas / Reprogramar
+  if (
+    effectiveTemplate === 'disculpas_y_reprogramacion' ||
+    msgLower.includes('disculpas') ||
+    msgLower.includes('reprogramar') ||
+    msgLower.includes('no pude cumplir')
+  ) {
+    return {
+      estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
+      adhirio: c.adhirio || 'Pendiente',
+      rsp: 'Sí',
+      primerContactoEnviado: true,
+      etiquetaLog: 'Disculpa / Reprogramación',
+    };
+  }
+
+  // 5. Convocatoria a Café HUB / Punto
+  if (
+    effectiveTemplate === 'convocatoria_cafe_hub' ||
+    msgLower.includes('café') ||
+    msgLower.includes('punto de encuentro')
+  ) {
+    return {
+      estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE',
+      adhirio: c.adhirio || 'Pendiente',
+      rsp: c.rsp === 'Nuevo' ? 'No' : c.rsp,
+      primerContactoEnviado: true,
+      etiquetaLog: 'Invitación Café Hub',
+    };
+  }
+
+  // 6. Conservación de estados avanzados si no es ninguno de los anteriores
+  if (currentEst === 'ENCUENTRO_CONFIRMADO' || currentEst === 'RECORDATORIO_DIA_ENVIADO') {
+    return {
+      estadoFlujo: currentEst,
+      adhirio: c.adhirio || 'Pendiente',
+      rsp: 'Sí',
+      primerContactoEnviado: true,
+      etiquetaLog: 'Mensaje a Agendado',
+    };
+  }
+
+  if (currentEst === 'YA_ADHIRIO_FIRMA_OK') {
+    return {
+      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+      adhirio: 'Sí',
+      rsp: 'Sí',
+      primerContactoEnviado: true,
+      etiquetaLog: 'Mensaje a Adherido',
+    };
+  }
+
+  // 7. Primer contacto por defecto
+  return {
+    estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
+    adhirio: c.adhirio || 'Pendiente',
+    rsp: c.rsp === 'Nuevo' ? 'No' : c.rsp,
+    primerContactoEnviado: true,
+    etiquetaLog: '1er mensaje enviado',
+  };
 }

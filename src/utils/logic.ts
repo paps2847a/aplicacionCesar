@@ -14,6 +14,7 @@
 export * from '../domain/contacts/nameCorrection';
 export * from '../domain/contacts/phoneUtils';
 export * from '../domain/contacts/contactStatus';
+export * from '../domain/contacts/pipelineStages';
 
 export * from '../domain/geo/cabaLocations';
 export * from '../domain/geo/cafesHub';

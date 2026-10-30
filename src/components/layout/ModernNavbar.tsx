@@ -10,6 +10,7 @@ import {
   Sparkles,
   CheckCircle2,
   AlertCircle,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -24,6 +25,7 @@ interface ModernNavbarProps {
   isSyncingSheets: boolean;
   onSyncSheets: () => void;
   onOpenAutoWAModal: () => void;
+  onOpenDailyClosureModal?: () => void;
 }
 
 export const ModernNavbar: React.FC<ModernNavbarProps> = ({
@@ -35,6 +37,7 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
   isSyncingSheets,
   onSyncSheets,
   onOpenAutoWAModal,
+  onOpenDailyClosureModal,
 }) => {
   const tabs = [
     {
@@ -137,6 +140,17 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2.5 shrink-0">
+          {onOpenDailyClosureModal && (
+            <button
+              onClick={onOpenDailyClosureModal}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-2xs whitespace-nowrap"
+              title="Cierre Diario de Jornada & Google Forms"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Cierre Forms</span>
+            </button>
+          )}
+
           <button
             onClick={onSyncSheets}
             disabled={isSyncingSheets}
