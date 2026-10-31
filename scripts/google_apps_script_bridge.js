@@ -38,32 +38,117 @@ function doGet() {
 function doPost(e) {
   const body = JSON.parse(e.postData.contents);
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  
   if (body.action === 'replaceAll' && Array.isArray(body.payload)) {
     sheet.clearContents();
     sheet.getRange(1, 1, body.payload.length, body.payload[0].length).setValues(body.payload);
-    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'replaceAll' })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'replaceAll', totalRows: body.payload.length })).setMimeType(ContentService.MimeType.JSON);
   }
+  
   if (body.action === 'updateRow' && body.payload) {
     const p = body.payload;
     const data = sheet.getDataRange().getValues();
-    const idTarget = String(p.id || '').trim();
-    const telTarget = String(p.telefonoNorm || '').replace(/\D+/g, '').slice(-8);
+    if (data.length < 2) return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Hoja sin filas de datos' })).setMimeType(ContentService.MimeType.JSON);
+    
+    // Auto-detectar columnas a partir de la fila de encabezados (fila 0)
+    var header = data[0];
+    var colId = 0, colNombre = 1, colBarrio = -1, colEmail = -1, colTel = -1, colRsp = -1, colAdhirio = -1, colComentario = -1, colEstado = -1;
+    for (var c = 0; c < header.length; c++) {
+      var h = String(header[c] || '').toLowerCase().trim();
+      if (h === '#' || h.indexOf('id') === 0 || h.indexOf('orden') >= 0) colId = c;
+      else if (h.indexOf('nombre') >= 0 || h.indexOf('vecino') >= 0) colNombre = c;
+      else if (h.indexOf('barrio') >= 0 || h.indexOf('comuna') >= 0 || h.indexOf('zona') >= 0) colBarrio = c;
+      else if (h.indexOf('mail') >= 0 || h.indexOf('correo') >= 0) colEmail = c;
+      else if (h.indexOf('tel') >= 0 || h.indexOf('cel') >= 0 || h.indexOf('wa') >= 0 || h.indexOf('contacto') >= 0) colTel = c;
+      else if (h.indexOf('rsp') >= 0 || h.indexOf('respond') >= 0) colRsp = c;
+      else if (h.indexOf('adhir') >= 0) colAdhirio = c;
+      else if (h.indexOf('comentario') >= 0 || h.indexOf('nota') >= 0 || h.indexOf('direcc') >= 0 || h.indexOf('disponib') >= 0) colComentario = c;
+      else if (h.indexOf('estado') >= 0 || h.indexOf('etapa') >= 0) colEstado = c;
+    }
+    
+    // Fallback inteligente si no hay encabezados explícitos
+    if (colBarrio < 0) colBarrio = 2;
+    var tieneMail = (header.length >= 8 && String(header[3] || '').toLowerCase().indexOf('mail') >= 0);
+    if (colEmail < 0 && tieneMail) colEmail = 3;
+    if (colTel < 0) colTel = tieneMail ? 4 : 3;
+    if (colRsp < 0) colRsp = colTel + 1;
+    if (colAdhirio < 0) colAdhirio = colRsp + 1;
+    if (colComentario < 0) colComentario = colAdhirio + 1;
+    if (colEstado < 0) colEstado = colComentario + 1;
+
+    var idTarget = String(p.id || '').replace(/^#/, '').trim();
+    var telTarget = String(p.telefonoNorm || p.telRaw || '').replace(/\\D+/g, '').slice(-8);
+    var nomTarget = String(p.nombre || '').toLowerCase().trim();
+
+    var targetRowIdx = -1;
     for (var i = 1; i < data.length; i++) {
-      var rowId = String(data[i][0] || '').trim();
-      var rowTel = String(data[i][4] || '').replace(/\D+/g, '').slice(-8);
-      if ((idTarget && rowId === idTarget) || (telTarget && rowTel && rowTel === telTarget)) {
-        if (p.rsp !== undefined) sheet.getRange(i + 1, 6).setValue(p.rsp);
-        if (p.adhirio !== undefined) sheet.getRange(i + 1, 7).setValue(p.adhirio);
-        if (p.comentarioNota) {
-          var prevCom = String(data[i][7] || '').replace(/\[Intento auto fallido[^\]]*\]/gi, '').trim();
-          var nextCom = prevCom.indexOf(p.comentarioNota) >= 0 ? prevCom : (prevCom ? prevCom + ' · ' + p.comentarioNota : p.comentarioNota);
-          sheet.getRange(i + 1, 8).setValue(nextCom);
-        }
-        if (p.estado) sheet.getRange(i + 1, 9).setValue(p.estado);
+      var rowId = String(data[i][colId] || '').replace(/^#/, '').trim();
+      var rowTel = colTel >= 0 ? String(data[i][colTel] || '').replace(/\\D+/g, '').slice(-8) : '';
+      var rowNom = colNombre >= 0 ? String(data[i][colNombre] || '').toLowerCase().trim() : '';
+
+      if (
+        (idTarget && rowId === idTarget) ||
+        (telTarget && rowTel && rowTel === telTarget) ||
+        (nomTarget && rowNom && (rowNom === nomTarget || rowNom.indexOf(nomTarget) === 0 || nomTarget.indexOf(rowNom) === 0))
+      ) {
+        targetRowIdx = i + 1;
         break;
       }
     }
-    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'updateRow' })).setMimeType(ContentService.MimeType.JSON);
+
+    if (targetRowIdx > 0) {
+      if (p.nombre !== undefined && colNombre >= 0) sheet.getRange(targetRowIdx, colNombre + 1).setValue(p.nombre);
+      if (p.barrio !== undefined && colBarrio >= 0) sheet.getRange(targetRowIdx, colBarrio + 1).setValue(p.barrio);
+      if ((p.telRaw !== undefined || p.telefonoNorm !== undefined) && colTel >= 0) {
+        sheet.getRange(targetRowIdx, colTel + 1).setValue(p.telRaw || p.telefonoNorm);
+      }
+      if (p.email !== undefined && colEmail >= 0) sheet.getRange(targetRowIdx, colEmail + 1).setValue(p.email);
+      if (p.rsp !== undefined && colRsp >= 0) sheet.getRange(targetRowIdx, colRsp + 1).setValue(p.rsp);
+      if (p.adhirio !== undefined && colAdhirio >= 0) sheet.getRange(targetRowIdx, colAdhirio + 1).setValue(p.adhirio);
+      if (p.comentario !== undefined && colComentario >= 0) {
+        sheet.getRange(targetRowIdx, colComentario + 1).setValue(p.comentario);
+      } else if (p.comentarioNota && colComentario >= 0) {
+        var prevCom = String(data[targetRowIdx - 1][colComentario] || '').replace(/\\[Intento auto fallido[^\\]]*\\]/gi, '').trim();
+        var nextCom = prevCom.indexOf(p.comentarioNota) >= 0 ? prevCom : (prevCom ? prevCom + ' · ' + p.comentarioNota : p.comentarioNota);
+        sheet.getRange(targetRowIdx, colComentario + 1).setValue(nextCom);
+      }
+      if (p.estado && colEstado >= 0) sheet.getRange(targetRowIdx, colEstado + 1).setValue(p.estado);
+      
+      return ContentService.createTextOutput(JSON.stringify({
+        ok: true,
+        action: 'updateRow',
+        updatedRow: targetRowIdx,
+        nombre: p.nombre,
+        barrio: p.barrio
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      ok: false,
+      error: 'Contacto no encontrado en la hoja',
+      idTarget: idTarget,
+      telTarget: telTarget,
+      nomTarget: nomTarget
+    })).setMimeType(ContentService.MimeType.JSON);
   }
-  return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+  
+  if (body.action === 'appendRow' && body.payload) {
+    const p = body.payload;
+    const lastRow = Math.max(1, sheet.getLastRow());
+    const nextId = p.id ? String(p.id).replace(/^#/, '') : String(lastRow);
+    const newRow = [
+      nextId,
+      p.nombre || '',
+      p.barrio || 'CABA',
+      p.email || '',
+      p.telRaw || p.telefonoNorm || '',
+      p.rsp || 'Nuevo',
+      p.adhirio || 'Pendiente',
+      p.comentario || '',
+      p.estado || '1. Sin contactar (1er mensaje pendiente)'
+    ];
+    sheet.appendRow(newRow);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'appendRow', id: nextId })).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, note: 'Acción no reconocida' })).setMimeType(ContentService.MimeType.JSON);
 }

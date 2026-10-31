@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { CheckCircle2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle, RefreshCw, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type {
   AutoFirstMessageCampaign,
@@ -39,6 +39,7 @@ import {
 } from './utils/logic';
 import { ModernNavbar, ModernTabType } from './components/layout/ModernNavbar';
 import { CandidatePipelineView } from './components/pipeline/CandidatePipelineView';
+import { SmartTerritoryPlanningView } from './components/planning/SmartTerritoryPlanningView';
 import { PlanHoyModernView } from './components/corte/PlanHoyModernView';
 import { WhatsAppWebAutomationPanel } from './components/WhatsAppWebAutomationPanel';
 import { ModernSettingsView } from './components/config/ModernSettingsView';
@@ -76,6 +77,33 @@ export default function App() {
     message: string;
     type: 'success' | 'warn' | 'error' | 'info';
   } | null>(null);
+
+  // Estado para el botón flotante universal de Deshacer (8 segundos)
+  const [undoToast, setUndoToast] = useState<{
+    id: string;
+    contactId: string;
+    contactName: string;
+    description: string;
+    previousSnapshot: Partial<Contact>;
+  } | null>(null);
+  const [undoSecondsLeft, setUndoSecondsLeft] = useState<number>(8);
+
+  useEffect(() => {
+    if (!undoToast) return;
+
+    const timer = setInterval(() => {
+      setUndoSecondsLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setUndoToast(null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [undoToast?.id]);
 
   useEffect(() => {
     if (!syncToast) return;
@@ -244,12 +272,73 @@ export default function App() {
 
   // Actualización atómica de un contacto (UI inmediata + persistencia SQLite)
   const handleUpdateContact = useCallback(
-    async (contactId: string, updates: Partial<Contact>) => {
+    async (contactId: string, updates: Partial<Contact>, isUndoAction = false) => {
       const ahora = new Date();
       const nowIso = ahora.toISOString();
       const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
       const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
       const auditText = `${ddmm} a las ${hhmm} hs`;
+
+      const existing = rawContactsRef.current.find((c) => String(c.id) === String(contactId));
+
+      // Capturar snapshot para el botón flotante de Deshacer (8s)
+      if (existing && !isUndoAction) {
+        const previousSnapshot: Partial<Contact> = {
+          nombre: existing.nombre,
+          primerNombre: existing.primerNombre,
+          barrio: existing.barrio,
+          telRaw: existing.telRaw,
+          tel: existing.tel,
+          calleOCruce: existing.calleOCruce,
+          email: existing.email,
+          rsp: existing.rsp,
+          adhirio: existing.adhirio,
+          estadoFlujo: existing.estadoFlujo,
+          estadoFlujoEtiqueta: existing.estadoFlujoEtiqueta,
+          comentario: existing.comentario,
+          primerContactoEnviado: existing.primerContactoEnviado,
+          actualizadoEnAppAt: existing.actualizadoEnAppAt,
+        };
+
+        const nom = existing.primerNombre || existing.nombre || `Contacto #${contactId}`;
+        let desc = `Modificado: ${nom}`;
+
+        if (updates.adhirio === 'Sí' && existing.adhirio !== 'Sí') {
+          desc = `✓ Marcó como FIRMÓ: ${nom}`;
+        } else if (updates.adhirio === 'Pendiente' && existing.adhirio === 'Sí') {
+          desc = `Desmarcó firma: ${nom}`;
+        } else if (updates.estadoFlujo === 'ENCUENTRO_CONFIRMADO' && existing.estadoFlujo !== 'ENCUENTRO_CONFIRMADO') {
+          desc = `✓ Confirmó encuentro: ${nom}`;
+        } else if (updates.estadoFlujo === 'POSTERGO_SALUD_O_VIAJE') {
+          desc = `📅 Visita reprogramada: ${nom}`;
+        } else if (updates.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' && existing.estadoFlujo === 'ENCUENTRO_CONFIRMADO') {
+          desc = `Desmarcó confirmación: ${nom}`;
+        } else if (
+          updates.nombre !== undefined ||
+          updates.telRaw !== undefined ||
+          updates.calleOCruce !== undefined ||
+          updates.barrio !== undefined
+        ) {
+          desc = `✏️ Datos editados: ${nom}`;
+        } else if (updates.estadoFlujo !== undefined) {
+          desc = `Estado cambiado: ${nom}`;
+        }
+
+        setUndoToast({
+          id: Date.now().toString(),
+          contactId: String(contactId),
+          contactName: nom,
+          description: desc,
+          previousSnapshot,
+        });
+        setUndoSecondsLeft(8);
+      } else if (isUndoAction) {
+        setUndoToast(null);
+        setSyncToast({
+          message: `↩ Cambio deshecho: ${existing?.nombre || 'Contacto'} restaurado a su estado previo.`,
+          type: 'success',
+        });
+      }
 
       const isRevertingToNew =
         updates.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
@@ -335,9 +424,10 @@ export default function App() {
       }
 
       // Sincronización en segundo plano con Google Sheets (vía Puente Google Apps Script)
-      const existing = rawContactsRef.current.find((c) => String(c.id) === String(contactId));
-      const targetTel = updates.telRaw || existing?.telRaw || (existing as any)?.tel_norm || '';
-      const targetName = updates.nombre || existing?.nombre || '';
+      const targetTel = updates.telRaw !== undefined ? updates.telRaw : existing?.telRaw || (existing as any)?.tel_norm || '';
+      const targetName = updates.nombre !== undefined ? updates.nombre : existing?.nombre || '';
+      const targetBarrio = updates.barrio !== undefined ? updates.barrio : existing?.barrio || '';
+      const targetEmail = updates.email !== undefined ? updates.email : existing?.email || '';
       const targetRsp = updates.rsp !== undefined ? updates.rsp : existing?.rsp;
       const targetAdhirio = updates.adhirio !== undefined ? updates.adhirio : existing?.adhirio;
       const targetComentario = enrichedUpdates.comentario !== undefined ? enrichedUpdates.comentario : existing?.comentario;
@@ -347,14 +437,17 @@ export default function App() {
         const payload = {
           id: contactId,
           nombre: targetName,
+          barrio: targetBarrio,
+          email: targetEmail,
           telefonoNorm: targetTel,
           telRaw: targetTel,
           rsp: targetRsp,
           adhirio: targetAdhirio,
+          comentario: targetComentario,
           comentarioNota: targetComentario,
           estado: targetEstado,
         };
-        void fetch('/api/sheets/push-live', {
+        fetch('/api/sheets/push-live', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -362,11 +455,40 @@ export default function App() {
             action: 'updateRow',
             payload,
           }),
-        }).catch((err) => console.warn('Error actualizando Google Sheets en segundo plano:', err));
+        })
+          .then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data?.data?.ok === false) {
+              const errDetail = data?.error || data?.data?.error || 'Revisá permisos en Apps Script';
+              console.warn('Advertencia Google Sheets:', errDetail);
+              setSyncToast({
+                message: `⚠️ Guardado en app local. Google Sheets no se actualizó: ${errDetail}`,
+                type: 'warn',
+              });
+            }
+          })
+          .catch((err) => {
+            console.warn('Error actualizando Google Sheets en segundo plano:', err);
+            setSyncToast({
+              message: '⚠️ Guardado en SQLite local. Error de red al conectar con Google Sheets.',
+              type: 'warn',
+            });
+          });
+      } else {
+        // Si no está configurado el Apps Script, no bloqueamos la app pero registramos advertencia
+        console.info('Guardado localmente en SQLite. Para impactar en Google Sheets configurá la URL de Apps Script.');
       }
     },
     [appsScriptUrlInput]
   );
+
+  // Ejecución de Deshacer para restaurar el snapshot anterior
+  const handleExecuteUndo = useCallback(async () => {
+    if (!undoToast) return;
+    const target = undoToast;
+    setUndoToast(null);
+    await handleUpdateContact(target.contactId, target.previousSnapshot, true);
+  }, [undoToast, handleUpdateContact]);
 
   // Agregar nuevo contacto manual (con sincronización inmediata a SQLite y Google Sheets)
   const handleAddNewContact = useCallback(
@@ -646,6 +768,85 @@ export default function App() {
       setIsSyncingSheets(false);
     }
   }, [isSyncingSheets, controlEnvios, sheetUrlInput, appsScriptUrlInput, rawContacts, calendarEvents]);
+
+  // Subir todos los contactos locales acumulados a Google Sheets en 1 clic
+  const handlePushAllToSheets = useCallback(async () => {
+    if (!appsScriptUrlInput.trim()) {
+      setSyncToast({
+        message: '⚠️ Para subir datos a Google Sheets necesitás ingresar la URL de tu Apps Script en Configuración.',
+        type: 'warn',
+      });
+      setActiveTab('configuracion');
+      return;
+    }
+
+    setIsSyncingSheets(true);
+    setSyncToast({
+      message: 'Subiendo todos los contactos a Google Sheets...',
+      type: 'info',
+    });
+
+    try {
+      const headers = [
+        '#',
+        'Nombre y Apellido',
+        'Barrio',
+        'Email',
+        'Teléfono',
+        'Rsp',
+        'Adhirió',
+        'Comentarios / Disponibilidad',
+        'Estado',
+      ];
+      const rows = rawContacts.map((c, idx) => {
+        const idLimpio = String(c.id || idx + 1).replace(/^#/, '');
+        const proc = procesarContacto(c, profile);
+        return [
+          idLimpio,
+          c.nombre || '',
+          c.barrio || 'CABA',
+          c.email || '',
+          c.telRaw || '',
+          c.rsp || 'Nuevo',
+          c.adhirio || 'Pendiente',
+          c.comentario || '',
+          c.estadoFlujoEtiqueta || proc.estadoFlujoEtiqueta || '',
+        ];
+      });
+
+      const res = await fetch('/api/sheets/push-live', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appsScriptUrl: appsScriptUrlInput.trim(),
+          action: 'replaceAll',
+          payload: [headers, ...rows],
+        }),
+      });
+
+      const resData = await res.json().catch(() => ({}));
+      if (res.ok && resData?.data?.ok) {
+        setSyncToast({
+          message: `✓ ¡Éxito! Se actualizaron ${rows.length} filas en tu Google Sheets en vivo.`,
+          type: 'success',
+        });
+      } else {
+        const msg = resData?.error || resData?.data?.error || 'Error al escribir en Google Sheets';
+        setSyncToast({
+          message: `⚠️ Google Sheets no se pudo actualizar: ${msg}`,
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      console.error('Error subiendo a Google Sheets:', err);
+      setSyncToast({
+        message: `Error de red al conectar con Google Sheets: ${err?.message || ''}`,
+        type: 'error',
+      });
+    } finally {
+      setIsSyncingSheets(false);
+    }
+  }, [appsScriptUrlInput, rawContacts, profile]);
 
   // Aplicar resultados individuales de la cola automática
   const handleApplyAutoItemResult = useCallback(
@@ -946,46 +1147,24 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'mapa' && (
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6">
-            <InteractiveMapPanel
-              contacts={contacts}
-              clusters={microClusters}
-              profile={profile}
-              calendarEvents={calendarEvents}
-              agendaBloques={corteResultado.agendaSugeridaDias}
-              onOpenWhatsApp={(c, text) => {
-                if (whatsAppStatus === 'READY') {
-                  void handleSendDirectWA(c.tel || c.telRaw, text || '', c.id, c.nombre, c.barrio);
-                } else {
-                  const url = crearEnlaceWhatsApp(c.tel || c.telRaw, text || '');
-                  window.open(url, '_blank');
-                }
-              }}
-              onSelectContactForEdit={(contact) => {
-                setPipelineSelectedContactId(contact.id);
-                setActiveTab('pipeline');
-              }}
-              onQuickStatusFromMap={(contactOrId, action) => {
-                const id = typeof contactOrId === 'string' ? contactOrId : contactOrId.id;
-                if (action === 'YA_ADHIRIO') {
-                  void handleUpdateContact(id, { adhirio: 'Sí', estadoFlujo: 'YA_ADHIRIO_FIRMA_OK' });
-                } else if (action === 'CONFIRMO_CAFE_HUB' || action === 'PASA_PUERTA_A_PUERTA') {
-                  void handleUpdateContact(id, { estadoFlujo: 'ENCUENTRO_CONFIRMADO' });
-                }
-              }}
-            />
-          </div>
-        )}
-
-        {activeTab === 'plan_hoy' && (
-          <PlanHoyModernView
+        {(activeTab === 'planificacion' || activeTab === 'mapa' || activeTab === 'plan_hoy') && (
+          <SmartTerritoryPlanningView
+            initialSubView={activeTab === 'mapa' ? 'mapa' : 'itinerario'}
+            contacts={contacts}
+            clusters={microClusters}
+            profile={profile}
+            calendarEvents={calendarEvents}
             corteResultado={corteResultado}
-            voiceProfile={profile}
+            whatsAppStatus={whatsAppStatus}
             whatsAppReady={whatsAppStatus === 'READY'}
             onRefreshCorte={() => setAhoraCorteMs(Date.now())}
             onUpdateContact={handleUpdateContact}
             onSendDirectWA={handleSendDirectWA}
+            onSelectContactForEdit={(contact) => {
+              setPipelineSelectedContactId(contact.id);
+              setActiveTab('pipeline');
+            }}
+            onNavigateToWhatsApp={() => setActiveTab('whatsapp')}
           />
         )}
 
@@ -1167,6 +1346,9 @@ export default function App() {
             onImportIcsText={handleImportIcsText}
             onDeleteCalendarEvent={handleDeleteCalendarEvent}
             onAddCalendarEvent={handleAddCalendarEvent}
+            onPushAllToSheets={handlePushAllToSheets}
+            onSyncSheets={handleActualizarDesdeSheets}
+            isSyncingSheets={isSyncingSheets}
           />
         )}
       </main>
@@ -1195,8 +1377,46 @@ export default function App() {
         profile={profile}
       />
 
-      {/* 5. Notificaciones Flotantes de Sincronización y Estado */}
+      {/* 5. Notificaciones Flotantes: Deshacer (8 segundos) & Sincronización */}
       <AnimatePresence>
+        {undoToast && (
+          <motion.div
+            key={undoToast.id}
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3.5 rounded-2xl bg-slate-900/95 text-white px-5 py-3 shadow-2xl border border-slate-700/80 backdrop-blur-md text-xs font-bold"
+          >
+            <div className="flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-slate-100 max-w-xs sm:max-w-md truncate">
+                {undoToast.description}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 pl-2 border-l border-slate-700">
+              <button
+                type="button"
+                onClick={handleExecuteUndo}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-3 py-1.5 transition shadow-sm"
+                title="Deshacer el cambio recién hecho"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Deshacer ({undoSecondsLeft}s)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setUndoToast(null)}
+                className="p-1 text-slate-400 hover:text-white transition"
+                title="Descartar aviso"
+              >
+                ✕
+              </button>
+            </div>
+          </motion.div>
+        )}
+
         {syncToast && (
           <motion.div
             initial={{ opacity: 0, y: 30, scale: 0.95 }}

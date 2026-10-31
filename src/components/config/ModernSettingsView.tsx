@@ -40,6 +40,9 @@ interface ModernSettingsViewProps {
   onImportIcsText?: (text: string, filename?: string) => void;
   onDeleteCalendarEvent?: (id: string) => void;
   onAddCalendarEvent?: (event: CalendarEventItem) => void;
+  onPushAllToSheets?: () => void;
+  onSyncSheets?: () => void;
+  isSyncingSheets?: boolean;
 }
 
 export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
@@ -61,6 +64,9 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   onImportIcsText,
   onDeleteCalendarEvent,
   onAddCalendarEvent,
+  onPushAllToSheets,
+  onSyncSheets,
+  isSyncingSheets = false,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
@@ -229,15 +235,30 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
 
         {/* 2. Google Sheets y Puente Apps Script */}
         <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs space-y-4">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-800">
-              <FileSpreadsheet className="h-4 w-4" />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-800">
+                <FileSpreadsheet className="h-4 w-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                  Google Sheets & Puente Nativo
+                </h4>
+                <p className="text-[11px] text-slate-500">Sincronización bidireccional en tiempo real</p>
+              </div>
             </div>
-            <div>
-              <h4 className="text-xs font-black uppercase tracking-wider text-slate-900">
-                Google Sheets & Puente Nativo
-              </h4>
-              <p className="text-[11px] text-slate-500">Evita el Error 400 por Google Advanced Protection</p>
+
+            {/* Badges de Conectividad */}
+            <div className="flex flex-col items-end gap-1">
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                  localAppsScriptUrl.trim()
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                }`}
+              >
+                {localAppsScriptUrl.trim() ? '🟢 Bidireccional (Escritura Activa)' : '🟡 Solo Lectura'}
+              </span>
             </div>
           </div>
 
@@ -259,7 +280,7 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
 
           <div>
             <label className="block text-[11px] font-bold text-slate-700 mb-1">
-              2. URL de Web App Google Apps Script (Para sincronización bidireccional)
+              2. URL de Web App Google Apps Script (Para guardar cambios en la planilla)
             </label>
             <input
               type="text"
@@ -268,15 +289,47 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
               placeholder="https://script.google.com/macros/s/.../exec"
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-emerald-500 focus:outline-hidden"
             />
+            <p className="text-[10px] text-amber-700 font-semibold mt-1">
+              ⚠️ Al implementar Apps Script: en <strong>"Quién tiene acceso"</strong> elegí <strong>"Cualquier persona"</strong> (no "Solo yo"), para que la app pueda actualizar celdas sin error.
+            </p>
           </div>
 
           <button
             onClick={handleCopyAppsScript}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-xs font-extrabold text-indigo-900 hover:bg-indigo-100 transition shadow-2xs"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-extrabold text-indigo-900 hover:bg-indigo-100 transition shadow-2xs"
           >
             {copiedScript ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-            <span>{copiedScript ? '¡Código Copiado!' : 'Copiar Código de Apps Script'}</span>
+            <span>{copiedScript ? '¡Código Apps Script Copiado!' : 'Copiar Código de Apps Script Actualizado'}</span>
           </button>
+
+          {/* Acciones de Sincronización Manual */}
+          <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
+            {onPushAllToSheets && (
+              <button
+                type="button"
+                onClick={onPushAllToSheets}
+                disabled={isSyncingSheets || !localAppsScriptUrl.trim()}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white hover:bg-emerald-500 transition shadow-2xs disabled:opacity-50"
+                title="Sube todos los contactos con sus datos editados a Google Sheets"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                <span>Subir Todo a Sheets</span>
+              </button>
+            )}
+
+            {onSyncSheets && (
+              <button
+                type="button"
+                onClick={onSyncSheets}
+                disabled={isSyncingSheets}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-2xs disabled:opacity-50"
+                title="Descarga las últimas filas desde Google Sheets"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${isSyncingSheets ? 'animate-spin' : ''}`} />
+                <span>Leer de Sheets</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* 3. Google Calendar Anti-Choque */}

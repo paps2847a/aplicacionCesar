@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
-export type ModernTabType = 'pipeline' | 'mapa' | 'plan_hoy' | 'whatsapp' | 'configuracion';
+export type ModernTabType = 'pipeline' | 'planificacion' | 'whatsapp' | 'configuracion' | 'mapa' | 'plan_hoy';
 
 interface ModernNavbarProps {
   activeTab: ModernTabType;
@@ -47,13 +47,8 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
       badge: totalContacts,
     },
     {
-      id: 'mapa' as ModernTabType,
-      label: 'Mapa & Cafés',
-      icon: MapPin,
-    },
-    {
-      id: 'plan_hoy' as ModernTabType,
-      label: 'Plan de Hoy',
+      id: 'planificacion' as ModernTabType,
+      label: 'Planificación & Campañas',
       icon: Calendar,
     },
     {
@@ -96,7 +91,9 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
         <nav className="hidden md:flex items-center gap-1 rounded-2xl bg-slate-100/90 p-1.5 border border-slate-200/60 shadow-inner shrink-0">
           {tabs.map((tab) => {
             const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
+            const isActive =
+              activeTab === tab.id ||
+              (tab.id === 'planificacion' && (activeTab === 'mapa' || activeTab === 'plan_hoy'));
 
             return (
               <button
@@ -175,7 +172,9 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
       <div className="flex md:hidden border-t border-slate-200/60 bg-white px-2 py-1 justify-around">
         {tabs.map((tab) => {
           const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
+          const isActive =
+            activeTab === tab.id ||
+            (tab.id === 'planificacion' && (activeTab === 'mapa' || activeTab === 'plan_hoy'));
           return (
             <button
               key={tab.id}

@@ -48,6 +48,7 @@ import {
   exportarContactosACSV,
   exportarContactosACSVExcelPuntoYComa,
   exportarContactosATSVParaExcel,
+  obtenerEtiquetaEstadoFlujo,
 } from './logic';
 import {
   DEFAULT_VOICE_PROFILE,
@@ -2021,6 +2022,91 @@ test('Cierre Diario no cuenta contactos revertidos a Nuevos y registra adhesione
   assert.equal(panel.resumenFormsYApps.adhesionesConseguidasHoy, 1);
   assert.equal(panel.resumenFormsYApps.adhesionesTotalesAcumuladas, 2);
 });
+
+test('Reunión semanal en Chile 1408 en día viernes no se agenda HOY viernes sino el próximo miércoles 04/11', () => {
+  // Viernes 30 de octubre de 2026, 17:06 hs (como en el reporte de usuario)
+  const ahoraViernes = new Date('2026-10-30T17:06:00-03:00').getTime();
+  const contactos = INITIAL_RAW_CONTACTS.map((r) =>
+    procesarContacto(r, DEFAULT_VOICE_PROFILE, ahoraViernes)
+  );
+
+  const corte = generarCorteEstrategicoLocal(
+    contactos,
+    DEFAULT_VOICE_PROFILE,
+    'Todos',
+    undefined,
+    ahoraViernes
+  );
+
+  const bloqueSede = corte.agendaSugeridaDias.find((b) => b.id === 'agenda-sede-chile-1408');
+  assert.ok(bloqueSede, 'Debe existir el bloque de reunión en Chile 1408');
+
+  // En viernes 30/10, el próximo miércoles es 04/11 (no hoy 30/10)
+  assert.equal(
+    bloqueSede!.fechaClave,
+    '04/11',
+    `La reunión de los miércoles debe agendarse el 04/11 y no hoy 30/10 (quedó en ${bloqueSede!.fechaClave})`
+  );
+
+  // La etiqueta del día debe ser MIÉRCOLES 04/11 y NUNCA contener HOY
+  assert.ok(
+    !bloqueSede!.diaEtiqueta.includes('HOY'),
+    `La etiqueta del día NO debe decir HOY en un viernes: ${bloqueSede!.diaEtiqueta}`
+  );
+  assert.ok(
+    bloqueSede!.diaEtiqueta.toLowerCase().includes('miércoles') ||
+      bloqueSede!.diaEtiqueta.toLowerCase().includes('miercoles'),
+    `La etiqueta debe corresponder al miércoles: ${bloqueSede!.diaEtiqueta}`
+  );
+
+  // Los dos contactos específicos de Chile 1408 deben estar incluidos
+  const idsSede = bloqueSede!.contactosIncluidos.map((c) => c.id);
+  assert.ok(idsSede.includes('15'), 'Ana Clara Odello (#15) debe estar incluida');
+  assert.ok(idsSede.includes('74'), 'Celeste Constanza Bucari (#74) debe estar incluida');
+});
+
+test('Módulo de planificación territorial y automatización de campañas (4 fases): motor, ajuste manual, difusión y confirmación dinámica', () => {
+  const contactos = INITIAL_RAW_CONTACTS.map((r) =>
+    procesarContacto(r, DEFAULT_VOICE_PROFILE, Date.now())
+  );
+  const corte = generarCorteEstrategicoLocal(
+    contactos,
+    DEFAULT_VOICE_PROFILE,
+    'Todos',
+    undefined,
+    Date.now()
+  );
+
+  // FASE 1: Motor de optimización genera bloques con paradas secuenciales diurnas
+  assert.ok(corte.agendaSugeridaDias.length > 0, 'El motor debe generar bloques de agenda para los circuitos');
+  const bloque = corte.agendaSugeridaDias[0];
+  assert.ok(bloque.contactosIncluidos.length > 0, 'El bloque debe agrupar contactos del barrio');
+  assert.ok(bloque.horaInicioCalculada, 'Debe calcular hora de inicio para el circuito');
+
+  // FASE 2: Ajuste manual del planificador (modalidad Café Hub vs Puerta a Puerta)
+  const contactoPrueba = bloque.contactosIncluidos[0];
+  const mensajeCafe = generarMensajeContextual(contactoPrueba, DEFAULT_VOICE_PROFILE, 'propuesta_bloque_agenda');
+  assert.ok(mensajeCafe.texto.includes('firma de adhesión'), 'Debe incluir mención a la firma de adhesión');
+  assert.ok(mensajeCafe.texto.includes('DNI físico'), 'Debe recordar tener DNI físico de CABA a mano');
+
+  // FASE 3: Difusión automatizada y transiciones de estado
+  const transitionData = inferirTransicionInteligenteWA(contactoPrueba, 'Hola, ¿cómo estás? Te confirmo la visita');
+  assert.ok(transitionData.estadoFlujo, 'Debe sugerir transición de estado al emitir propuesta');
+
+  // FASE 4: Fase de confirmación dinámica y semáforo de firma
+  // 1. Confirmó propuesta
+  assert.equal(
+    obtenerEtiquetaEstadoFlujo('ENCUENTRO_CONFIRMADO'),
+    '8. Encuentro confirmado (En agenda de ruta)'
+  );
+  // 2. Firmó (Semáforo verde)
+  assert.equal(
+    obtenerEtiquetaEstadoFlujo('YA_ADHIRIO_FIRMA_OK'),
+    '10. ✅ Proceso terminado — Ya adhirió (Listo)'
+  );
+});
+
+
 
 
 

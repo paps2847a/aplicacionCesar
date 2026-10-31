@@ -13,6 +13,8 @@ import {
   Check,
   ChevronDown,
   Sparkles,
+  Pencil,
+  X,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import type { Contact } from '../../types';
@@ -33,6 +35,7 @@ interface CandidateCardProps {
   onQuickAction?: (contact: Contact) => void;
   onStageChange?: (contact: Contact, targetStage: MacroStageKey) => void;
   onSendDirectWA?: (phone: string, text: string, contactId: string, nombre: string, barrio: string) => Promise<boolean>;
+  onUpdateContact?: (contactId: string, updates: Partial<Contact>) => Promise<void> | void;
 }
 
 function parseCommentAuditDate(text: string): Date | null {
@@ -128,6 +131,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   onQuickAction,
   onStageChange,
   onSendDirectWA,
+  onUpdateContact,
 }) => {
   const stageKey = getMacroStageForContact(contact);
   const stageDef = MACRO_STAGES[stageKey];
@@ -136,6 +140,71 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   const [showStageMenu, setShowStageMenu] = useState(false);
   const [openUpward, setOpenUpward] = useState(false);
   const menuContainerRef = useRef<HTMLDivElement>(null);
+
+  const cleanComment = (contact.comentario || '')
+    .replace(/\[Modificado el [^\]]+\]/g, '')
+    .replace(/\[Último cambio:? [^\]]+\]/g, '')
+    .trim();
+
+  // Estado de edición in-situ
+  const [isInlineEditing, setIsInlineEditing] = useState(false);
+  const [inlineNombre, setInlineNombre] = useState(contact.nombre || '');
+  const [inlineTel, setInlineTel] = useState(contact.telRaw || contact.tel || '');
+  const [inlineBarrio, setInlineBarrio] = useState(contact.barrio || '');
+  const [inlineCalle, setInlineCalle] = useState(contact.calleOCruce || '');
+  const [inlineComentario, setInlineComentario] = useState(cleanComment);
+  const [isSavingInline, setIsSavingInline] = useState(false);
+
+  useEffect(() => {
+    setInlineNombre(contact.nombre || '');
+    setInlineTel(contact.telRaw || contact.tel || '');
+    setInlineBarrio(contact.barrio || '');
+    setInlineCalle(contact.calleOCruce || '');
+    setInlineComentario(cleanComment);
+  }, [contact.nombre, contact.telRaw, contact.tel, contact.barrio, contact.calleOCruce, cleanComment]);
+
+  const handleSaveInline = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onUpdateContact) {
+      setIsInlineEditing(false);
+      return;
+    }
+    setIsSavingInline(true);
+    try {
+      const ahora = new Date();
+      const ddmm = ahora.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+      const hhmm = ahora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+      const auditText = `${ddmm} a las ${hhmm} hs`;
+
+      let baseCom = inlineComentario
+        .replace(/\s*\[Modificado el [^\]]+\]/g, '')
+        .replace(/\s*\[Último cambio:? [^\]]+\]/g, '')
+        .trim();
+
+      const calleTrim = inlineCalle.trim();
+      if (calleTrim && !baseCom.toLowerCase().includes(calleTrim.toLowerCase())) {
+        baseCom = baseCom ? `${calleTrim}. ${baseCom}` : calleTrim;
+      }
+
+      const newComentario = baseCom
+        ? `${baseCom} [Modificado el ${auditText}]`
+        : `[Modificado el ${auditText}]`;
+
+      const updates: Partial<Contact> = {
+        nombre: inlineNombre.trim() || contact.nombre,
+        telRaw: inlineTel.trim() || contact.telRaw,
+        barrio: inlineBarrio.trim() || contact.barrio,
+        calleOCruce: calleTrim,
+        comentario: newComentario,
+        actualizadoEnAppAt: ahora.toISOString(),
+      };
+
+      await onUpdateContact(contact.id, updates);
+      setIsInlineEditing(false);
+    } finally {
+      setIsSavingInline(false);
+    }
+  };
 
   useEffect(() => {
     if (!showStageMenu) return;
@@ -175,11 +244,6 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     }
     setShowStageMenu((prev) => !prev);
   };
-
-  const cleanComment = (contact.comentario || '')
-    .replace(/\[Modificado el [^\]]+\]/g, '')
-    .replace(/\[Último cambio:? [^\]]+\]/g, '')
-    .trim();
 
   const auditDate = formatAuditDate(contact);
   const phone = contact.tel || contact.telRaw;
@@ -363,15 +427,21 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
             </div>
 
             {/* Botones de Acción */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap justify-end">
+              {/* Semáforo de Firma: Rojo (No firmó) vs Verde Oscuro (Firmó) */}
               {yaFirmo ? (
-                <span
-                  className="inline-flex items-center gap-1 rounded-xl bg-emerald-100 border border-emerald-300 px-2.5 py-1.5 text-xs font-black text-emerald-900 shadow-2xs cursor-default"
-                  title="Firma oficial registrada para este contacto"
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onStageChange) onStageChange(contact, 'agendados');
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-100 hover:bg-emerald-200/90 border border-emerald-400 px-2.5 py-1.5 text-xs font-black text-emerald-950 shadow-2xs transition"
+                  title="✓ Firmó oficialmente. Clic para desmarcar firma y volver a pendiente."
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
-                  <span>✓ Ya Firmó</span>
-                </span>
+                  <Check className="h-3.5 w-3.5 text-emerald-800 stroke-[3]" />
+                  <span>Firmó</span>
+                </button>
               ) : (
                 <button
                   type="button"
@@ -379,28 +449,143 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                     e.stopPropagation();
                     if (onStageChange) onStageChange(contact, 'adheridos');
                   }}
-                  className="inline-flex items-center gap-1 rounded-xl border border-emerald-200 bg-white hover:bg-emerald-50 px-2.5 py-1.5 text-xs font-black text-emerald-700 transition shadow-2xs"
-                  title="Registrar firma oficial para este contacto"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-300 px-2.5 py-1.5 text-xs font-black text-rose-800 shadow-2xs transition"
+                  title="✗ No firmó aún. Clic para registrar firma oficial inmediata."
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                  <span>+ Marcar Firma</span>
+                  <X className="h-3.5 w-3.5 text-rose-600 stroke-[3]" />
+                  <span>No firmó</span>
                 </button>
               )}
 
+              {/* Botón de Edición Rápida In-Situ (Lápiz) */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsInlineEditing(!isInlineEditing);
+                }}
+                className={`inline-flex items-center justify-center rounded-xl p-1.5 transition ${
+                  isInlineEditing
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'border border-slate-200 bg-white text-slate-500 hover:text-slate-900 hover:bg-slate-100 shadow-2xs'
+                }`}
+                title={isInlineEditing ? 'Cerrar edición rápida' : 'Edición directa in-situ (Lápiz)'}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+
+              {/* Botón Reorientado: Escribirle */}
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect(contact);
                 }}
-                className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50 transition shadow-2xs"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-black text-white hover:bg-emerald-700 transition shadow-2xs"
+                title="Escribirle por WhatsApp y abrir panel de conversación"
               >
-                <span>Detalles</span>
-                <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+                <MessageSquare className="h-3.5 w-3.5" />
+                <span>Escribirle</span>
               </button>
             </div>
           </div>
         </div>
+
+        {/* Panel de Edición Directa In-Situ (Desplegado en la misma tarjeta) */}
+        {isInlineEditing && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="mt-4 pt-3.5 border-t border-slate-200/90 rounded-2xl bg-slate-50/80 p-4 space-y-3 shadow-inner"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                <Pencil className="h-3.5 w-3.5 text-emerald-600" />
+                Edición directa in-situ (#{contact.id})
+              </span>
+              <span className="text-[11px] font-medium text-slate-500">
+                Guardá los cambios directamente sin abrir el panel lateral
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Nombre y Apellido</label>
+                <input
+                  type="text"
+                  value={inlineNombre}
+                  onChange={(e) => setInlineNombre(e.target.value)}
+                  placeholder="Ej. Juan Pérez"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Teléfono</label>
+                <input
+                  type="text"
+                  value={inlineTel}
+                  onChange={(e) => setInlineTel(e.target.value)}
+                  placeholder="Ej. 54 9 11 1234-5678"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Barrio de CABA</label>
+                <input
+                  type="text"
+                  value={inlineBarrio}
+                  onChange={(e) => setInlineBarrio(e.target.value)}
+                  placeholder="Ej. Palermo, Saavedra..."
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Calle / Cruce / Dirección</label>
+                <input
+                  type="text"
+                  value={inlineCalle}
+                  onChange={(e) => setInlineCalle(e.target.value)}
+                  placeholder="Ej. Charcas 3700 / Scalabrini Ortiz"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Nota territorial (Columna G)</label>
+                <input
+                  type="text"
+                  value={inlineComentario}
+                  onChange={(e) => setInlineComentario(e.target.value)}
+                  placeholder="Disponibilidad, franja u observaciones..."
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsInlineEditing(false);
+                }}
+                className="rounded-xl border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 transition shadow-2xs"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveInline}
+                disabled={isSavingInline}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 px-4 py-1.5 text-xs font-black text-white transition shadow-2xs disabled:opacity-50"
+              >
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                <span>{isSavingInline ? 'Guardando...' : 'Guardar Datos'}</span>
+              </button>
+            </div>
+          </div>
+        )}
       </motion.div>
     );
   }
@@ -477,27 +662,123 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
         </div>
       )}
 
-      <div className="mt-3.5 flex items-center justify-between border-t border-slate-100 pt-2.5 text-xs">
-        <span className="text-[11px] text-slate-400 font-medium">
-          {contact.primerContactoEnviado ? '1er msj enviado' : 'Sin contactar'}
-        </span>
+      <div className="mt-3.5 flex items-center justify-between border-t border-slate-100 pt-2.5 text-xs gap-1.5 flex-wrap">
+        {/* Semáforo de Firma Compacto */}
+        {yaFirmo ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onStageChange) onStageChange(contact, 'agendados');
+            }}
+            className="inline-flex items-center gap-1 rounded-lg bg-emerald-100 hover:bg-emerald-200/90 border border-emerald-400 px-2 py-0.5 text-[10px] font-black text-emerald-950 transition"
+            title="✓ Firmó oficialmente. Clic para desmarcar."
+          >
+            <Check className="h-3 w-3 text-emerald-800 stroke-[3]" />
+            <span>Firmó</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onStageChange) onStageChange(contact, 'adheridos');
+            }}
+            className="inline-flex items-center gap-1 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 px-2 py-0.5 text-[10px] font-black text-rose-800 transition"
+            title="✗ No firmó aún. Clic para registrar firma oficial."
+          >
+            <X className="h-3 w-3 text-rose-600 stroke-[3]" />
+            <span>No firmó</span>
+          </button>
+        )}
 
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (onQuickAction) {
-              onQuickAction(contact);
-            } else {
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsInlineEditing(!isInlineEditing);
+            }}
+            className={`rounded-lg p-1 transition ${
+              isInlineEditing
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'border border-slate-200 bg-white text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+            title="Edición rápida in-situ"
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
               onSelect(contact);
-            }
-          }}
-          className="inline-flex items-center gap-1 text-[11px] font-extrabold text-emerald-700 hover:text-emerald-800 transition"
-        >
-          <span>{recAction.shortLabel}</span>
-          <ChevronRight className="h-3.5 w-3.5" />
-        </button>
+            }}
+            className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-black text-white hover:bg-emerald-700 transition shadow-2xs"
+            title="Escribirle por WhatsApp"
+          >
+            <MessageSquare className="h-3 w-3" />
+            <span>Escribirle</span>
+          </button>
+        </div>
       </div>
+
+      {/* Editor in-situ para modo compacto */}
+      {isInlineEditing && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="mt-3 pt-2.5 border-t border-slate-200/90 rounded-xl bg-slate-50/90 p-2.5 space-y-2 text-left"
+        >
+          <div>
+            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Nombre</label>
+            <input
+              type="text"
+              value={inlineNombre}
+              onChange={(e) => setInlineNombre(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Teléfono</label>
+            <input
+              type="text"
+              value={inlineTel}
+              onChange={(e) => setInlineTel(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Dirección / Cruce</label>
+            <input
+              type="text"
+              value={inlineCalle}
+              onChange={(e) => setInlineCalle(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-1.5 pt-1">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsInlineEditing(false);
+              }}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-100"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveInline}
+              disabled={isSavingInline}
+              className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-black text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              {isSavingInline ? 'Guardando...' : 'Guardar'}
+            </button>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 };

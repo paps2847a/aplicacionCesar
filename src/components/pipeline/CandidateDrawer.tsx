@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
+  Check,
   MapPin,
   Phone,
   Calendar,
@@ -421,7 +422,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
           animate={{ x: 0 }}
           exit={{ x: '100%' }}
           transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-          className="relative z-10 flex h-full w-full max-w-xl flex-col bg-white shadow-2xl border-l border-slate-200 overflow-y-auto"
+          className="relative z-10 flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl border-l border-slate-200 overflow-y-auto"
         >
           {/* Header con Navegación Siguiente / Anterior */}
           <div className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200/80 bg-white/95 px-6 py-4 backdrop-blur-md">
@@ -438,24 +439,28 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                 >
                   {currentStageDef.shortLabel}
                 </span>
+
+                {/* Semáforo visual en el encabezado del panel */}
                 {yaFirmo ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[10px] font-black text-emerald-900 shadow-2xs">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                    <span>✓ Firmó Oficialmente</span>
-                    <button
-                      type="button"
-                      onClick={handleDesmarcarFirma}
-                      className="ml-1 text-[9px] font-bold text-rose-600 hover:text-rose-800 underline"
-                      title="Desmarcar firma si se marcó por error"
-                    >
-                      (deshacer)
-                    </button>
-                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDesmarcarFirma}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 hover:bg-emerald-200/90 border border-emerald-400 px-3 py-1 text-xs font-black text-emerald-950 shadow-2xs transition"
+                    title="✓ Firmó oficialmente. Clic para desmarcar firma y volver a pendiente."
+                  >
+                    <Check className="h-3.5 w-3.5 text-emerald-800 stroke-[3]" />
+                    <span>Firmó (deshacer)</span>
+                  </button>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-500">
-                    <Clock className="h-2.5 w-2.5 text-slate-400" />
-                    <span>Pendiente de firma</span>
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleStageChange('adheridos')}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 hover:bg-rose-100 border border-rose-300 px-3 py-1 text-xs font-black text-rose-800 shadow-2xs transition"
+                    title="✗ No firmó aún. Clic para registrar firma oficial inmediata."
+                  >
+                    <X className="h-3.5 w-3.5 text-rose-600 stroke-[3]" />
+                    <span>No firmó (marcar)</span>
+                  </button>
                 )}
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -518,197 +523,7 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
           </AnimatePresence>
 
           <div className="p-6 space-y-6">
-            {/* 1. Línea de Vida (Pipeline Stepper Interactivo) */}
-            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/60 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-700">
-                  Línea de Vida del Candidato
-                </span>
-                <span className="text-[11px] font-medium text-slate-500">
-                  Tocá cualquier etapa para mover
-                </span>
-              </div>
-
-              {/* Stepper horizontal */}
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                {MACRO_STAGES_ORDER.map((stageKey) => {
-                  const def = MACRO_STAGES[stageKey];
-                  const isCurrent = stageKey === currentStageKey;
-
-                  return (
-                    <button
-                      key={stageKey}
-                      type="button"
-                      onClick={() => handleStageChange(stageKey)}
-                      className={`group relative flex flex-col items-center justify-center rounded-xl p-2 text-center transition-all ${
-                        isCurrent
-                          ? 'bg-white shadow-sm ring-2 ring-emerald-500/30 border border-emerald-500 font-black'
-                          : 'bg-white/70 hover:bg-white border border-slate-200/80 hover:border-slate-300'
-                      }`}
-                    >
-                      <div
-                        className={`mb-1 h-2 w-2 rounded-full ${
-                          isCurrent ? def.dotColor : 'bg-slate-300 group-hover:bg-slate-400'
-                        }`}
-                      />
-                      <span className={`text-[10px] ${isCurrent ? def.badgeText : 'text-slate-600'}`}>
-                        {def.shortLabel}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Selector Desplegable de los 14 Estatus Granulares */}
-              <div className="pt-2 border-t border-slate-200/60">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[11px] font-bold text-slate-600">
-                    Estatus Granular Detallado
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleMarcarSinDniCaba}
-                    className="text-[10px] font-bold text-amber-700 hover:text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 hover:bg-amber-100 transition"
-                  >
-                    🚫 Marcar Sin DNI en CABA
-                  </button>
-                </div>
-                <select
-                  value={activeContact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP'}
-                  onChange={(e) => {
-                    const est = e.target.value as EstadoFlujo;
-                    onUpdateContact(activeContact.id, { estadoFlujo: est });
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
-                >
-                  <option value="SIN_CONTACTAR_1ER_MSJ">1. Sin contactar (Enviar 1er mensaje)</option>
-                  <option value="FALTA_NOMBRE_Y_APELLIDO">2. Teléfono sin nombre (Pedir nombre y apellido)</option>
-                  <option value="1ER_MSJ_ENVIADO_SIN_RSP">3. 1er mensaje enviado (Sin respuesta aún)</option>
-                  <option value="RESPONDIO_FALTA_DNI_O_ZONA">4. Respondió Sí — Falta corroborar DNI CABA / zona</option>
-                  <option value="PIDIO_MAS_INFO_ENVIADA">5. Pidió más info (5 ejes enviados)</option>
-                  <option value="PREFIERE_CAFE_HUB_O_SEDE">6. Prefiere Punto / Café Hub / Sede Chile 1408</option>
-                  <option value="PASO_DATOS_FALTA_CONFIRMAR">7. Pasó día/franja/dirección — Falta confirmar encuentro</option>
-                  <option value="ENCUENTRO_CONFIRMADO">8. Encuentro confirmado (En agenda de ruta)</option>
-                  <option value="RECORDATORIO_DIA_ENVIADO">9. Recordatorio del día / En camino enviado</option>
-                  <option value="YA_ADHIRIO_FIRMA_OK">10. Proceso terminado — Ya adhirió (Listo)</option>
-                  <option value="PENDIENTE_RETIRO_FICHAS">11. Adhirió + Retirar fichas extra (X1/X2/X3)</option>
-                  <option value="POSTERGO_SALUD_O_VIAJE">12. En pausa temporal (Salud / Viaje)</option>
-                  <option value="SIN_DNI_CABA_PEDIR_REFERIDOS">13. Sin DNI en CABA (Consultar referidos CABA — Pendiente envío)</option>
-                  <option value="DESCARTADO_O_BAJA">14. Archivado / Sin DNI CABA ya respondido / Baja</option>
-                </select>
-              </div>
-            </div>
-
-            {/* 2. Fijar Día y Turno Rápido (Selector de Plan acordado) */}
-            <div className="rounded-2xl border border-slate-200/80 bg-white p-4 space-y-3 shadow-2xs">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-800">
-                  Plan Acordado & Turno Rápido
-                </span>
-                <span className="text-[10px] text-slate-500">Se guarda en Agenda y Sheets</span>
-              </div>
-
-              {/* Botones de Plan Acordado */}
-              <div className="flex flex-wrap gap-1.5">
-                {yaFirmo ? (
-                  <div className="rounded-xl border border-emerald-300 bg-emerald-100 px-2.5 py-1.5 text-[11px] font-black text-emerald-900 flex items-center gap-1.5 shadow-2xs">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
-                    <span>✓ Firma Registrada</span>
-                    <button
-                      type="button"
-                      onClick={handleDesmarcarFirma}
-                      className="ml-1 text-[10px] font-bold text-rose-700 hover:text-rose-900 underline"
-                      title="Desmarcar firma si fue un error"
-                    >
-                      Desmarcar
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleStageChange('adheridos')}
-                    className="rounded-xl border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-extrabold text-emerald-800 hover:bg-emerald-100 transition flex items-center gap-1"
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                    + Marcar Firma Oficial
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleStageChange('agendados')}
-                  className="rounded-xl border border-emerald-600 bg-emerald-600 px-2.5 py-1.5 text-[11px] font-black text-white hover:bg-emerald-500 transition shadow-2xs"
-                >
-                  ✓ Confirmó Propuesta
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onUpdateContact(activeContact.id, {
-                      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
-                      comentario: `${activeContact.comentario || ''} [Prefiere Puerta a Puerta]`.trim(),
-                    });
-                  }}
-                  className="rounded-xl border border-sky-300 bg-sky-50 px-2.5 py-1.5 text-[11px] font-extrabold text-sky-800 hover:bg-sky-100 transition flex items-center gap-1"
-                >
-                  <Home className="h-3 w-3" />
-                  Puerta a Puerta
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onUpdateContact(activeContact.id, {
-                      estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE',
-                      comentario: `${activeContact.comentario || ''} [Prefiere Café Hub]`.trim(),
-                    });
-                  }}
-                  className="rounded-xl border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-extrabold text-amber-800 hover:bg-amber-100 transition flex items-center gap-1"
-                >
-                  <Coffee className="h-3 w-3" />
-                  Prefiere Café
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedTemplate('disculpas_y_reprogramacion')}
-                  className="rounded-xl border border-purple-300 bg-purple-50 px-2.5 py-1.5 text-[11px] font-extrabold text-purple-800 hover:bg-purple-100 transition flex items-center gap-1"
-                >
-                  <Calendar className="h-3 w-3" />
-                  Reprogramar
-                </button>
-              </div>
-
-              {/* Pills de Turnos Rápidos */}
-              <div>
-                <span className="text-[10px] font-bold text-slate-500 block mb-1">
-                  Turno habitual del vecino:
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    { label: 'Mañana (9-12:30)', franja: 'Mañana' },
-                    { label: 'Mediodía (12:30-15)', franja: 'Mediodía' },
-                    { label: 'Tarde (15-18)', franja: 'Tarde' },
-                    { label: 'Vespertino (18-20:30)', franja: 'Vespertino' },
-                    { label: 'Fin de Semana', franja: 'Fin de Semana' },
-                  ].map((t) => (
-                    <button
-                      key={t.franja}
-                      type="button"
-                      onClick={() => {
-                        const base = activeContact.comentario || '';
-                        const updated = `${base} [Turno: ${t.franja}]`.trim();
-                        onUpdateContact(activeContact.id, { comentario: updated });
-                        setFeedbackMsg(`✓ Turno fijado: ${t.label}`);
-                        setTimeout(() => setFeedbackMsg(null), 3000);
-                      }}
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-100 transition"
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* 3. Redactor de Mensaje WhatsApp con Todas las Plantillas */}
+            {/* 1. Redactor de Mensaje WhatsApp con Todas las Plantillas (Prioridad 1 al entrar) */}
             <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -838,7 +653,190 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
               )}
             </div>
 
-            {/* 4. Edición de Datos Personales, Terreno y Notas */}
+            {/* 2. Línea de Vida, Estatus Granular & Plan / Turno Acordado */}
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/60 p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  Línea de Vida del Candidato
+                </span>
+                <span className="text-[11px] font-medium text-slate-500">
+                  Tocá cualquier etapa para mover
+                </span>
+              </div>
+
+              {/* Stepper horizontal */}
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                {MACRO_STAGES_ORDER.map((stageKey) => {
+                  const def = MACRO_STAGES[stageKey];
+                  const isCurrent = stageKey === currentStageKey;
+
+                  return (
+                    <button
+                      key={stageKey}
+                      type="button"
+                      onClick={() => handleStageChange(stageKey)}
+                      className={`group relative flex flex-col items-center justify-center rounded-xl p-2 text-center transition-all ${
+                        isCurrent
+                          ? 'bg-white shadow-sm ring-2 ring-emerald-500/30 border border-emerald-500 font-black'
+                          : 'bg-white/70 hover:bg-white border border-slate-200/80 hover:border-slate-300'
+                      }`}
+                    >
+                      <div
+                        className={`mb-1 h-2 w-2 rounded-full ${
+                          isCurrent ? def.dotColor : 'bg-slate-300 group-hover:bg-slate-400'
+                        }`}
+                      />
+                      <span className={`text-[10px] ${isCurrent ? def.badgeText : 'text-slate-600'}`}>
+                        {def.shortLabel}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Selector Desplegable de los 14 Estatus Granulares */}
+              <div className="pt-2 border-t border-slate-200/60">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-bold text-slate-600">
+                    Estatus Granular Detallado
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleMarcarSinDniCaba}
+                    className="text-[10px] font-bold text-amber-700 hover:text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 hover:bg-amber-100 transition"
+                  >
+                    🚫 Marcar Sin DNI en CABA
+                  </button>
+                </div>
+                <select
+                  value={activeContact.estadoFlujo || '1ER_MSJ_ENVIADO_SIN_RSP'}
+                  onChange={(e) => {
+                    const est = e.target.value as EstadoFlujo;
+                    onUpdateContact(activeContact.id, { estadoFlujo: est });
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                >
+                  <option value="SIN_CONTACTAR_1ER_MSJ">1. Sin contactar (Enviar 1er mensaje)</option>
+                  <option value="FALTA_NOMBRE_Y_APELLIDO">2. Teléfono sin nombre (Pedir nombre y apellido)</option>
+                  <option value="1ER_MSJ_ENVIADO_SIN_RSP">3. 1er mensaje enviado (Sin respuesta aún)</option>
+                  <option value="RESPONDIO_FALTA_DNI_O_ZONA">4. Respondió Sí — Falta corroborar DNI CABA / zona</option>
+                  <option value="PIDIO_MAS_INFO_ENVIADA">5. Pidió más info (5 ejes enviados)</option>
+                  <option value="PREFIERE_CAFE_HUB_O_SEDE">6. Prefiere Punto / Café Hub / Sede Chile 1408</option>
+                  <option value="PASO_DATOS_FALTA_CONFIRMAR">7. Pasó día/franja/dirección — Falta confirmar encuentro</option>
+                  <option value="ENCUENTRO_CONFIRMADO">8. Encuentro confirmado (En agenda de ruta)</option>
+                  <option value="RECORDATORIO_DIA_ENVIADO">9. Recordatorio del día / En camino enviado</option>
+                  <option value="YA_ADHIRIO_FIRMA_OK">10. Proceso terminado — Ya adhirió (Listo)</option>
+                  <option value="PENDIENTE_RETIRO_FICHAS">11. Adhirió + Retirar fichas extra (X1/X2/X3)</option>
+                  <option value="POSTERGO_SALUD_O_VIAJE">12. En pausa temporal (Salud / Viaje)</option>
+                  <option value="SIN_DNI_CABA_PEDIR_REFERIDOS">13. Sin DNI en CABA (Consultar referidos CABA — Pendiente envío)</option>
+                  <option value="DESCARTADO_O_BAJA">14. Archivado / Sin DNI CABA ya respondido / Baja</option>
+                </select>
+              </div>
+
+              {/* Botones de Plan Acordado & Semáforo de Firma */}
+              <div className="pt-2 border-t border-slate-200/60 space-y-2">
+                <span className="text-[11px] font-bold text-slate-600 block">
+                  Acciones Rápidas de Plan & Firma:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {yaFirmo ? (
+                    <button
+                      type="button"
+                      onClick={handleDesmarcarFirma}
+                      className="rounded-xl border border-emerald-400 bg-emerald-100 px-3 py-1.5 text-xs font-black text-emerald-950 flex items-center gap-1.5 shadow-2xs hover:bg-emerald-200 transition"
+                      title="Desmarcar firma oficial y volver a pendiente"
+                    >
+                      <Check className="h-3.5 w-3.5 text-emerald-800 stroke-[3]" />
+                      <span>✓ Firmó Oficialmente (Desmarcar)</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleStageChange('adheridos')}
+                      className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-black text-rose-800 hover:bg-rose-100 transition flex items-center gap-1.5 shadow-2xs"
+                      title="Registrar firma oficial para este contacto"
+                    >
+                      <X className="h-3.5 w-3.5 text-rose-600 stroke-[3]" />
+                      <span>✗ No firmó (Marcar Firma)</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleStageChange('agendados')}
+                    className="rounded-xl border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-black text-white hover:bg-emerald-500 transition shadow-2xs"
+                  >
+                    ✓ Confirmó Propuesta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUpdateContact(activeContact.id, {
+                        estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+                        comentario: `${activeContact.comentario || ''} [Prefiere Puerta a Puerta]`.trim(),
+                      });
+                    }}
+                    className="rounded-xl border border-sky-300 bg-sky-50 px-2.5 py-1.5 text-xs font-extrabold text-sky-800 hover:bg-sky-100 transition flex items-center gap-1"
+                  >
+                    <Home className="h-3.5 w-3.5" />
+                    Puerta a Puerta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUpdateContact(activeContact.id, {
+                        estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE',
+                        comentario: `${activeContact.comentario || ''} [Prefiere Café Hub]`.trim(),
+                      });
+                    }}
+                    className="rounded-xl border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-extrabold text-amber-800 hover:bg-amber-100 transition flex items-center gap-1"
+                  >
+                    <Coffee className="h-3.5 w-3.5" />
+                    Prefiere Café
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTemplate('disculpas_y_reprogramacion')}
+                    className="rounded-xl border border-purple-300 bg-purple-50 px-2.5 py-1.5 text-xs font-extrabold text-purple-800 hover:bg-purple-100 transition flex items-center gap-1"
+                  >
+                    <Calendar className="h-3.5 w-3.5" />
+                    Reprogramar
+                  </button>
+                </div>
+              </div>
+
+              {/* Turno Habitual */}
+              <div className="pt-2 border-t border-slate-200/60">
+                <span className="text-[10px] font-bold text-slate-500 block mb-1">
+                  Turno habitual del vecino:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: 'Mañana (9-12:30)', franja: 'Mañana' },
+                    { label: 'Mediodía (12:30-15)', franja: 'Mediodía' },
+                    { label: 'Tarde (15-18)', franja: 'Tarde' },
+                    { label: 'Vespertino (18-20:30)', franja: 'Vespertino' },
+                    { label: 'Fin de Semana', franja: 'Fin de Semana' },
+                  ].map((t) => (
+                    <button
+                      key={t.franja}
+                      type="button"
+                      onClick={() => {
+                        const base = activeContact.comentario || '';
+                        const updated = `${base} [Turno: ${t.franja}]`.trim();
+                        onUpdateContact(activeContact.id, { comentario: updated });
+                        setFeedbackMsg(`✓ Turno fijado: ${t.label}`);
+                        setTimeout(() => setFeedbackMsg(null), 3000);
+                      }}
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-100 transition shadow-2xs"
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* 3. Edición de Datos Personales, Terreno y Notas */}
             <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">

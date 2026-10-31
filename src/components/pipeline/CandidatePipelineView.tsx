@@ -412,6 +412,14 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
     [onUpdateContact, showToast]
   );
 
+  const handleQuickUpdateContact = useCallback(
+    async (contactId: string, updates: Partial<Contact>) => {
+      await onUpdateContact(contactId, updates);
+      showToast('✓ Cambios guardados con éxito');
+    },
+    [onUpdateContact, showToast]
+  );
+
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6 space-y-6">
       {/* 1. Barra Superior de Métricas de Etapa (KPI Cards con filtro interactivo) */}
@@ -877,6 +885,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                                 onSelect={(contact) => handleSelectContact(contact.id)}
                                 onStageChange={handleDirectStageChange}
                                 onSendDirectWA={onSendDirectWA}
+                                onUpdateContact={handleQuickUpdateContact}
                               />
                             ))}
                           </div>
@@ -909,6 +918,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                 onSelect={(contact) => handleSelectContact(contact.id)}
                 onStageChange={handleDirectStageChange}
                 onSendDirectWA={onSendDirectWA}
+                onUpdateContact={handleQuickUpdateContact}
               />
             ))
           )}
@@ -957,6 +967,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                         onSelect={(contact) => handleSelectContact(contact.id)}
                         onStageChange={handleDirectStageChange}
                         onSendDirectWA={onSendDirectWA}
+                        onUpdateContact={handleQuickUpdateContact}
                       />
                     ))
                   )}

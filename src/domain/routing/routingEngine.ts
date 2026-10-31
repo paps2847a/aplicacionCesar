@@ -908,6 +908,8 @@ export function generarCorteEstrategicoLocal(
   const dia2BA = sumarDiasAFechaBA(ahoraMs, 2);
   const dia3BA = sumarDiasAFechaBA(ahoraMs, 3);
   const dia4BA = sumarDiasAFechaBA(ahoraMs, 4);
+  const dia5BA = sumarDiasAFechaBA(ahoraMs, 5);
+  const dia6BA = sumarDiasAFechaBA(ahoraMs, 6);
 
   // Recalcular alertas vencidas y diagnóstico +48h tomando exactamente `ahoraMs`
   const contacts: Contact[] = contactsInput.map((c): Contact => {
@@ -1002,7 +1004,7 @@ export function generarCorteEstrategicoLocal(
     recomendacionesBarrio.find((r) => r.barrio !== topBarrio)?.barrio ||
     'Palermo';
 
-  // Eventos de Google Calendar para los próximos días
+  // Eventos de Google Calendar para los próximos días (semana completa de 7 días continuos)
   const diasOperativos = [
     {
       diaBA: hoyBA,
@@ -1033,6 +1035,18 @@ export function generarCorteEstrategicoLocal(
       prefijo: dia4BA.nombreDia.toUpperCase(),
       esHoy: false,
       eventos: filtrarEventosCalendarParaDia(eventosCalendar, dia4BA),
+    },
+    {
+      diaBA: dia5BA,
+      prefijo: dia5BA.nombreDia.toUpperCase(),
+      esHoy: false,
+      eventos: filtrarEventosCalendarParaDia(eventosCalendar, dia5BA),
+    },
+    {
+      diaBA: dia6BA,
+      prefijo: dia6BA.nombreDia.toUpperCase(),
+      esHoy: false,
+      eventos: filtrarEventosCalendarParaDia(eventosCalendar, dia6BA),
     },
   ];
 
@@ -1938,12 +1952,31 @@ export function generarCorteEstrategicoLocal(
   const conteoCircuitosPorDia: Record<string, number> = {};
 
   // Las reuniones en Chile 1408 son los miércoles (18:30 a 20:30 hs, según Google Calendar "Hagamos Popurrí")
-  const diaMiercolesSede =
+  let diaMiercolesSede =
     diasOperativos.find(
       (d) =>
         d.diaBA.dayOfWeek === 3 ||
         ['miércoles', 'miercoles'].includes(d.diaBA.nombreDia.toLowerCase())
-    ) || diasOperativos[0];
+    );
+
+  if (!diaMiercolesSede) {
+    for (let offset = 0; offset < 7; offset++) {
+      const dBA = sumarDiasAFechaBA(ahoraMs, offset);
+      if (dBA.dayOfWeek === 3 || ['miércoles', 'miercoles'].includes(dBA.nombreDia.toLowerCase())) {
+        diaMiercolesSede = {
+          diaBA: dBA,
+          prefijo: offset === 0 ? 'HOY' : offset === 1 ? 'MAÑANA' : dBA.nombreDia.toUpperCase(),
+          esHoy: offset === 0,
+          eventos: filtrarEventosCalendarParaDia(eventosCalendar, dBA),
+        };
+        break;
+      }
+    }
+  }
+
+  if (!diaMiercolesSede) {
+    diaMiercolesSede = diasOperativos[0];
+  }
 
   if (contactosSedeChile.length > 0) {
     if (!intervalosOcupadosPorDia[diaMiercolesSede.diaBA.ddmm]) {
@@ -2017,9 +2050,10 @@ export function generarCorteEstrategicoLocal(
   });
 
   if (contactosSedeChile.length > 0) {
-    const etiqMiercoles = diaMiercolesSede.esHoy
-      ? `HOY (${diaMiercolesSede.diaBA.nombreDia} ${diaMiercolesSede.diaBA.ddmm}) · Reunión en Chile 1408`
-      : `ENCUENTRO SEMANAL SEDE (${diaMiercolesSede.diaBA.nombreDia} ${diaMiercolesSede.diaBA.ddmm})`;
+    const etiqMiercoles =
+      diaMiercolesSede.prefijo === 'HOY' || diaMiercolesSede.prefijo === 'MAÑANA'
+        ? `${diaMiercolesSede.prefijo} (${diaMiercolesSede.diaBA.nombreDia} ${diaMiercolesSede.diaBA.ddmm})`
+        : `${diaMiercolesSede.diaBA.nombreDia.toUpperCase()} ${diaMiercolesSede.diaBA.ddmm}`;
     agendaSugeridaDias.push(
       construirBloqueAgendaSincronizado({
         id: 'agenda-sede-chile-1408',
