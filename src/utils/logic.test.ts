@@ -2170,5 +2170,48 @@ test('exportarContactosACSV, exportarContactosACSVExcelPuntoYComa y exportarCont
   assert.ok(tsv.includes('César Test'), 'TSV debe contener los datos del contacto');
 });
 
+test('Reunión semanal en Chile 1408 en día viernes no se agenda HOY viernes sino el próximo miércoles 04/11', () => {
+  // Viernes 30 de octubre de 2026, 17:06 hs (como en el reporte de usuario)
+  const ahoraViernes = new Date('2026-10-30T17:06:00-03:00').getTime();
+  const contactos = INITIAL_RAW_CONTACTS.map((r) =>
+    procesarContacto(r, DEFAULT_VOICE_PROFILE, ahoraViernes)
+  );
+
+  const corte = generarCorteEstrategicoLocal(
+    contactos,
+    DEFAULT_VOICE_PROFILE,
+    'Todos',
+    undefined,
+    ahoraViernes
+  );
+
+  const bloqueSede = corte.agendaSugeridaDias.find((b) => b.id === 'agenda-sede-chile-1408');
+  assert.ok(bloqueSede, 'Debe existir el bloque de reunión en Chile 1408');
+
+  // En viernes 30/10, el próximo miércoles es 04/11 (no hoy 30/10)
+  assert.equal(
+    bloqueSede!.fechaClave,
+    '04/11',
+    `La reunión de los miércoles debe agendarse el 04/11 y no hoy 30/10 (quedó en ${bloqueSede!.fechaClave})`
+  );
+
+  // La etiqueta del día debe ser MIÉRCOLES 04/11 y NUNCA contener HOY
+  assert.ok(
+    !bloqueSede!.diaEtiqueta.includes('HOY'),
+    `La etiqueta del día NO debe decir HOY en un viernes: ${bloqueSede!.diaEtiqueta}`
+  );
+  assert.ok(
+    bloqueSede!.diaEtiqueta.toLowerCase().includes('miércoles') ||
+      bloqueSede!.diaEtiqueta.toLowerCase().includes('miercoles'),
+    `La etiqueta debe corresponder al miércoles: ${bloqueSede!.diaEtiqueta}`
+  );
+
+  // Los dos contactos específicos de Chile 1408 deben estar incluidos
+  const idsSede = bloqueSede!.contactosIncluidos.map((c) => c.id);
+  assert.ok(idsSede.includes('15'), 'Ana Clara Odello (#15) debe estar incluida');
+  assert.ok(idsSede.includes('74'), 'Celeste Constanza Bucari (#74) debe estar incluida');
+});
+
+
 
 
