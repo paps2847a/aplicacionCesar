@@ -49,7 +49,9 @@ import {
   generarCorteEstrategicoLocal,
   generarPanelTareasDiarias,
   inferirBarrioDesdeTextoCABA,
+  limpiarErroresFalsosRestriccionWA,
   normalizarTelefonoWA,
+  obtenerEtiquetaEstadoFlujo,
   obtenerPartesFechaHoraBA,
   parsearICalEventos,
   parsearTSVoCSVContactos,
@@ -205,6 +207,30 @@ export default function App() {
 
   // 5. Reloj de Corte Territorial
   const [ahoraCorteMs, setAhoraCorteMs] = useState<number>(() => Date.now());
+
+  // 6. Sistema Universal de Deshacer (8 segundos)
+  const [undoAction, setUndoAction] = useState<{
+    contactId: string;
+    nombre: string;
+    prevRow: RawContactRow;
+    description: string;
+    expiresAt: number;
+  } | null>(null);
+  const [undoSecondsLeft, setUndoSecondsLeft] = useState<number>(8);
+  const isUndoRunningRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!undoAction) return;
+    const interval = setInterval(() => {
+      const diffMs = undoAction.expiresAt - Date.now();
+      const secs = Math.max(0, Math.ceil(diffMs / 1000));
+      setUndoSecondsLeft(secs);
+      if (diffMs <= 0) {
+        setUndoAction(null);
+      }
+    }, 250);
+    return () => clearInterval(interval);
+  }, [undoAction]);
 
   const showNotice = useCallback(
     (text: string, type: 'ok' | 'warn' | 'info' = 'ok') => {
@@ -496,6 +522,23 @@ export default function App() {
         );
       }
 
+      if (!isUndoRunningRef.current && contactoActual) {
+        const nom = contactoActual.nombre || `Contacto #${contactId}`;
+        const desc = updates.estadoFlujo
+          ? `cambió a "${obtenerEtiquetaEstadoFlujo(updates.estadoFlujo)}"`
+          : updates.adhirio === 'Sí'
+          ? 'marcó como Adhirió/Firmó'
+          : 'modificación de datos';
+        setUndoAction({
+          contactId: String(contactId),
+          nombre: nom,
+          prevRow: { ...contactoActual },
+          description: desc,
+          expiresAt: Date.now() + 8000,
+        });
+        setUndoSecondsLeft(8);
+      }
+
       try {
         const payload = rowCalculada || cambiosInput;
         await fetch(`/api/contacts/${contactId}`, {
@@ -509,6 +552,52 @@ export default function App() {
     },
     [pushUpdateToGoogleSheets]
   );
+
+  // Deshacer el cambio recién hecho dentro de la ventana de 8 segundos
+  const handleUndo = useCallback(async () => {
+    if (!undoAction) return;
+    const { contactId, nombre, prevRow } = undoAction;
+    setUndoAction(null);
+    isUndoRunningRef.current = true;
+    try {
+      editEpochRef.current += 1;
+      recentLocalEditsByIdRef.current.set(String(contactId).trim(), {
+        timestamp: Date.now(),
+        row: prevRow,
+      });
+      setRawContacts((prev) =>
+        prev.map((c) => (String(c.id) === String(contactId) ? prevRow : c))
+      );
+      void pushUpdateToGoogleSheets(prevRow, 'deshacer_cambio', false);
+      await fetch(`/api/contacts/${contactId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prevRow),
+      });
+      showNotice(`↩ Se deshizo el cambio en ${nombre}.`, 'info');
+    } catch (err) {
+      console.error('Error al deshacer cambio:', err);
+      showNotice('⚠️ No se pudo deshacer el cambio anterior.', 'warn');
+    } finally {
+      isUndoRunningRef.current = false;
+    }
+  }, [undoAction, pushUpdateToGoogleSheets, showNotice]);
+
+  // Limpiar notas de falsos errores de restricción o timeouts en contactos
+  const handleCleanFalseErrors = useCallback(() => {
+    const { actualizados, limpiadosCount } = limpiarErroresFalsosRestriccionWA(rawContactsRef.current);
+    if (limpiadosCount > 0) {
+      setRawContacts(actualizados);
+      void fetch('/api/contacts/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contacts: actualizados }),
+      });
+      showNotice(`🧹 Se limpiaron notas de falsos errores en ${limpiadosCount} contacto(s).`, 'ok');
+    } else {
+      showNotice('No se encontraron contactos con notas de falsos errores para limpiar.', 'info');
+    }
+  }, [showNotice]);
 
   // Crear un nuevo contacto desde la App o el Escáner de Fichas
   const handleCreateContact = useCallback(
@@ -1492,6 +1581,7 @@ export default function App() {
             appsScriptUrl={appsScriptUrlInput}
             onApplyItemResult={handleApplyAutoItemResult}
             onApplyBatchResults={handleApplyAutoBatchResults}
+            onCleanFalseErrors={handleCleanFalseErrors}
             initialModoCola={modoColaBotActivo}
           />
         )}
@@ -1652,6 +1742,7 @@ export default function App() {
         appsScriptUrl={appsScriptUrlInput}
         onApplyItemResult={handleApplyAutoItemResult}
         onApplyBatchResults={handleApplyAutoBatchResults}
+        onCleanFalseErrors={handleCleanFalseErrors}
         initialModoCola={modoColaBotActivo}
       />
 
@@ -2414,6 +2505,36 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Banner Flotante Universal de Deshacer (8 segundos) */}
+      {undoAction && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-2xl border-2 border-[#323232] bg-[#FFF06B] px-4 py-2.5 shadow-[4px_4px_0px_#323232] text-xs font-black text-[#323232] animate-in fade-in slide-in-from-bottom-2">
+          <div className="flex items-center gap-2">
+            <RotateCcw className="h-4 w-4 text-[#323232]" />
+            <span>
+              Cambio en <strong>{undoAction.nombre}</strong> ({undoAction.description})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleUndo}
+              className="px-3 py-1.5 rounded-xl border border-[#323232] bg-[#323232] text-[#FFF06B] hover:bg-black font-black flex items-center gap-1.5 transition active:scale-95 shadow-xs cursor-pointer"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Deshacer ({undoSecondsLeft}s)
+            </button>
+            <button
+              type="button"
+              onClick={() => setUndoAction(null)}
+              className="p-1 rounded-lg hover:bg-black/10 transition font-bold cursor-pointer"
+              title="Cerrar aviso"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         </div>
       )}
