@@ -429,7 +429,7 @@ class WhatsAppService {
           (est === 'SIN_CONTACTAR_1ER_MSJ' ||
             est === 'FALTA_NOMBRE_Y_APELLIDO' ||
             est === '1ER_MSJ_ENVIADO_SIN_RSP' ||
-            est === '2DO_SEG_ENVIADO_SIN_RSP' ||
+            est === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
             match.rsp !== 'Sí')
         ) {
           // No pisar estados ya más avanzados (Encuentro confirmado, Adhirió, Baja, etc.)

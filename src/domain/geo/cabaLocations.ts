@@ -801,7 +801,8 @@ export function geocodificarDireccionCABA(
     inferirBarrioDesdeDireccionOComentario(direccionOCalle, barrioHint) ||
     normalizarBarrioCABA(barrioHint) ||
     'Palermo';
-  return geocodificarContactoLocal(barrioEfectivo, direccionOCalle);
+  const geo = geocodificarContactoLocal(barrioEfectivo, direccionOCalle);
+  return { lat: geo.lat, lng: geo.lng, exacto: geo.exacta };
 }
 
 

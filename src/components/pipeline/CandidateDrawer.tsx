@@ -289,7 +289,8 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
   };
 
   const handleMarkFichas = async (cant: 1 | 2 | 3) => {
-    const actualizado = marcarEntregaFichasExtra(contact, cant, 7);
+    const xCant: 'X1' | 'X2' | 'X3' = cant === 1 ? 'X1' : cant === 3 ? 'X3' : 'X2';
+    const actualizado = marcarEntregaFichasExtra(contact, xCant, Date.now());
     await onUpdateContact(contact.id, {
       rsp: actualizado.rsp,
       adhirio: actualizado.adhirio,

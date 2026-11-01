@@ -41,11 +41,14 @@ import {
   crearEnlaceWhatsApp,
   deduplicarEventosCalendar,
   exportarContactosACSV,
+  exportarContactosACSVExcelPuntoYComa,
+  exportarContactosATSVParaExcel,
   filtrarEventosCalendarVigentes,
   fusionarContactosDesdeSheetsConControl,
   generarColaEnvioAutomaticoPrimerContacto,
   generarCorteEstrategicoLocal,
   generarPanelTareasDiarias,
+  inferirBarrioDesdeTextoCABA,
   normalizarTelefonoWA,
   obtenerPartesFechaHoraBA,
   parsearICalEventos,
@@ -289,9 +292,7 @@ export default function App() {
       (c) => c.adhirio === 'Sí' || c.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK'
     ).length;
     const vencidos = contacts.filter(
-      (c) =>
-        c.adhirio !== 'Sí' &&
-        (c.estadoFlujo === 'CITA_VENCIDA_REPROGRAMAR' || c.tieneCitaVencidaSinConcretar)
+      (c) => Boolean(c.alertaVencido?.activa) && c.adhirio !== 'Sí'
     ).length;
     return {
       total: contacts.length,
@@ -456,9 +457,6 @@ export default function App() {
       }
       if (updates.fechaAdhesion !== undefined) {
         cambiosInput.fechaAdhesion = updates.fechaAdhesion;
-      }
-      if (updates.esCerradoOArchivadoSinDniCaba !== undefined) {
-        cambiosInput.esCerradoOArchivadoSinDniCaba = updates.esCerradoOArchivadoSinDniCaba;
       }
 
       const preserveIdentityColumns =
@@ -1244,17 +1242,12 @@ export default function App() {
           if (data?.ok && Array.isArray(data.rows) && data.rows.length > 0) {
             const enrichedRows: FichaEscaneadaRow[] = data.rows.map((r: FichaEscaneadaRow) => {
               const matched = buscarCandidatoDeFichaEnPadron(r, rawContacts);
-              const barrioInferido = sincronizarBarrioConDireccionComentario(
-                r.barrio || matched?.barrio || 'CABA',
-                r.domicilio,
-                r.domicilio
-              );
+              const fallbackBarrio = r.barrio || matched?.barrio || 'Palermo';
+              const barrioInferido =
+                inferirBarrioDesdeTextoCABA(r.domicilio, fallbackBarrio) || fallbackBarrio;
               return {
                 ...r,
-                barrio:
-                  barrioInferido !== 'CABA'
-                    ? barrioInferido
-                    : r.barrio || matched?.barrio || 'Palermo',
+                barrio: barrioInferido,
                 telefono: r.telefono || matched?.telRaw || '',
                 partido: r.partido || 'Regeneración',
               };
@@ -1299,11 +1292,9 @@ export default function App() {
 
     for (const row of validRows) {
       const existing = buscarCandidatoDeFichaEnPadron(row, rawContacts);
-      const barrioResuelto = sincronizarBarrioConDireccionComentario(
-        row.barrio || existing?.barrio || 'Palermo',
-        row.domicilio,
-        row.domicilio
-      );
+      const fallbackBarrio = row.barrio || existing?.barrio || 'Palermo';
+      const barrioResuelto =
+        inferirBarrioDesdeTextoCABA(row.domicilio, fallbackBarrio) || fallbackBarrio;
 
       const notaFicha = [
         row.dni ? `Matrícula/DNI: ${row.dni}` : '',
@@ -1615,7 +1606,37 @@ export default function App() {
                 });
               }
             }}
-            onExportCSV={() => exportarContactosACSV(contacts)}
+            onExportCSV={() => {
+              const csvContent = exportarContactosACSV(contacts);
+              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `contactos_popurri_${new Date().toISOString().slice(0, 10)}.csv`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              showNotice('✓ Archivo CSV descargado con éxito.', 'ok');
+            }}
+            onExportCSVExcel={() => {
+              const csvContent = exportarContactosACSVExcelPuntoYComa(contacts);
+              const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `contactos_popurri_excel_${new Date().toISOString().slice(0, 10)}.csv`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              showNotice('✓ CSV para Excel (;) descargado con éxito. Abre directo en columnas.', 'ok');
+            }}
+            onCopyTSV={() => {
+              const tsv = exportarContactosATSVParaExcel(contacts);
+              void navigator.clipboard.writeText(tsv);
+              showNotice('✓ Padrón copiado al portapapeles. Pegá con Ctrl+V en Excel o Sheets.', 'ok');
+            }}
           />
         )}
       </main>
@@ -2194,18 +2215,17 @@ export default function App() {
                           value={row.domicilio}
                           onChange={(e) => {
                             const val = e.target.value;
-                            const barrioAuto = sincronizarBarrioConDireccionComentario(
-                              row.barrio || 'CABA',
-                              val,
-                              val
-                            );
+                            const barrioAuto =
+                              inferirBarrioDesdeTextoCABA(val, row.barrio || 'Palermo') ||
+                              row.barrio ||
+                              'Palermo';
                             setScannedRows((prev) =>
                               prev.map((r, i) =>
                                 i === idx
                                   ? {
                                       ...r,
                                       domicilio: val,
-                                      barrio: barrioAuto !== 'CABA' ? barrioAuto : r.barrio,
+                                      barrio: barrioAuto,
                                     }
                                   : r
                               )

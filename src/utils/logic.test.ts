@@ -11,6 +11,9 @@ import {
   generarCorteEstrategicoLocal,
   calcularHojaDeRuta,
   parsearTSVoCSVContactos,
+  exportarContactosACSV,
+  exportarContactosACSVExcelPuntoYComa,
+  exportarContactosATSVParaExcel,
   repararContactosDesfasados,
   inferirBarrioDesdeDireccionOComentario,
   sincronizarBarrioConDireccionComentario,
@@ -2136,5 +2139,36 @@ test('Feedback-8: Sincronización bidireccional App <-> Google Sheets nunca revi
     assert.equal(procesada.estadoFlujoEtiqueta, chip.label);
   }
 });
+
+test('exportarContactosACSV, exportarContactosACSVExcelPuntoYComa y exportarContactosATSVParaExcel generan formatos válidos con encabezados y BOM UTF-8', () => {
+  const c = procesarContacto(
+    {
+      id: '1',
+      nombre: 'César Test',
+      barrio: 'Palermo',
+      telRaw: '1123456789',
+      rsp: 'Sí',
+      adhirio: 'Sí',
+      comentario: 'Firma lista',
+      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+    },
+    DEFAULT_VOICE_PROFILE
+  );
+
+  const csv = exportarContactosACSV([c]);
+  assert.ok(csv.startsWith('\uFEFF'), 'CSV estándar debe incluir BOM UTF-8');
+  assert.ok(csv.includes('#,Nombre,Barrio'), 'CSV estándar debe contener encabezado con comas');
+  assert.ok(csv.includes('César Test'), 'CSV estándar debe contener los datos del contacto');
+
+  const csvExcel = exportarContactosACSVExcelPuntoYComa([c]);
+  assert.ok(csvExcel.startsWith('\uFEFF'), 'CSV Excel debe incluir BOM UTF-8');
+  assert.ok(csvExcel.includes('#;Nombre;Barrio'), 'CSV Excel debe contener encabezado con punto y coma');
+  assert.ok(csvExcel.includes('César Test'), 'CSV Excel debe contener los datos del contacto');
+
+  const tsv = exportarContactosATSVParaExcel([c]);
+  assert.ok(tsv.includes('#\tNombre\tBarrio'), 'TSV debe contener columnas separadas por tabs');
+  assert.ok(tsv.includes('César Test'), 'TSV debe contener los datos del contacto');
+});
+
 
 

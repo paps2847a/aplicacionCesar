@@ -860,8 +860,7 @@ export function actualizarDatosContactoEnApp(
       }
     } else if (
       rawActual.adhirio === 'Sí' &&
-      cambios.adhirio === undefined &&
-      cambios.estadoFlujo !== 'PENDIENTE_RETIRO_FICHAS'
+      cambios.adhirio === undefined
     ) {
       // Si ya había adherido (ficha verde con botón de mensaje deshabilitado) y el usuario cambia manualmente
       // el estatus para poder volver a escribirle, pasa `adhirio` a 'Pendiente' para habilitar el envío.

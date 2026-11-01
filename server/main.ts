@@ -52,6 +52,7 @@ import {
   obtenerEtiquetaEstadoFlujo,
   obtenerPartesFechaHoraBA,
   adaptarMensajeConRespuestaVecinoLocal,
+  inferirBarrioDesdeTextoCABA,
   parsearICalEventos,
   sincronizarBarrioConDireccionComentario,
 } from '../src/utils/logic';
@@ -539,11 +540,10 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
       const rows = (Array.isArray(parsed) ? parsed : []).map((r: any, idx: number) => {
         const domicilioStr = String(r.domicilio || '').trim();
         const barrioGemini = String(r.barrio || '').trim();
-        const barrioInferido = sincronizarBarrioConDireccionComentario(
-          barrioGemini || 'CABA',
-          domicilioStr,
-          domicilioStr
-        );
+        const barrioInferido =
+          inferirBarrioDesdeTextoCABA(domicilioStr, barrioGemini || 'Palermo') ||
+          barrioGemini ||
+          'Palermo';
         return {
           id: `scan-${Date.now()}-${idx + 1}`,
           apellidoYNombre: String(r.apellidoYNombre || '').trim(),

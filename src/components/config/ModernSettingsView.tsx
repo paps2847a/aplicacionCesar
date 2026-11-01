@@ -48,6 +48,8 @@ interface ModernSettingsViewProps {
   onClearAllCalendarEvents?: () => void;
   onImportCSVText?: (text: string) => void;
   onExportCSV: () => void;
+  onExportCSVExcel?: () => void;
+  onCopyTSV?: () => void;
 }
 
 export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
@@ -73,8 +75,11 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
   onClearAllCalendarEvents,
   onImportCSVText,
   onExportCSV,
+  onExportCSVExcel,
+  onCopyTSV,
 }) => {
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
+  const [copiedTsv, setCopiedTsv] = useState<boolean>(false);
   const [showScriptCode, setShowScriptCode] = useState<boolean>(false);
   const [localProfile, setLocalProfile] = useState<VoiceProfile>(profile);
   const [localSheetUrl, setLocalSheetUrl] = useState<string>(sheetUrlInput);
@@ -161,7 +166,6 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
       location: newEvLocation.trim() || 'CABA',
       fecha: fechaNorm,
       fechaISO: `${year}-${mm}-${dd}`,
-      status: 'confirmed',
     });
 
     setNewEvSummary('');
@@ -706,10 +710,48 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
               type="button"
               onClick={onExportCSV}
               className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3 py-2.5 text-xs font-black text-[#323232] hover:bg-[#ffe838] transition shadow-[2px_2px_0px_#323232]"
+              title="CSV estándar RFC 4180 con BOM UTF-8"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>Exportar Padrón CSV</span>
+              <span>Exportar CSV Estándar (,)</span>
             </button>
+
+            {onExportCSVExcel && (
+              <button
+                type="button"
+                onClick={onExportCSVExcel}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-[#323232] bg-emerald-400 px-3 py-2.5 text-xs font-black text-[#323232] hover:bg-emerald-300 transition shadow-[2px_2px_0px_#323232]"
+                title="CSV separado por punto y coma (;) para abrir directo en Excel en español"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Descargar CSV para Excel (;)</span>
+              </button>
+            )}
+
+            {onCopyTSV && (
+              <button
+                type="button"
+                onClick={() => {
+                  onCopyTSV();
+                  setCopiedTsv(true);
+                  setTimeout(() => setCopiedTsv(false), 2500);
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-[#323232] bg-white px-3 py-2.5 text-xs font-bold text-[#323232] hover:bg-[#ECEAE2] transition"
+                title="Copia la tabla en portapapeles para pegar directo (Ctrl+V) en Excel o Google Sheets"
+              >
+                {copiedTsv ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span className="text-emerald-700 font-black">¡Copiado al Portapapeles!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" />
+                    <span>Copiar TSV para Sheets/Excel</span>
+                  </>
+                )}
+              </button>
+            )}
 
             <button
               type="button"

@@ -467,7 +467,8 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   const handleMarkFichasExtra = async (cantidad: 1 | 2 | 3, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onUpdateContact) return;
-    const actualizado = marcarEntregaFichasExtra(contact, cantidad, 7);
+    const xCant: 'X1' | 'X2' | 'X3' = cantidad === 1 ? 'X1' : cantidad === 3 ? 'X3' : 'X2';
+    const actualizado = marcarEntregaFichasExtra(contact, xCant, Date.now());
     await onUpdateContact(contact.id, {
       rsp: actualizado.rsp,
       adhirio: actualizado.adhirio,

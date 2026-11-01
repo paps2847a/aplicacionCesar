@@ -149,14 +149,15 @@ export function InteractiveMapPanel({
     if (profile?.cafesPorBarrio && typeof profile.cafesPorBarrio === 'object') {
       Object.entries(profile.cafesPorBarrio).forEach(([barrio, rawCafeEntry]) => {
         if (!rawCafeEntry) return;
+        const rawCafeVal = rawCafeEntry as any;
         const entryNombre =
-          typeof rawCafeEntry === 'string'
-            ? rawCafeEntry.split('(')[0]?.trim() || rawCafeEntry
-            : String((rawCafeEntry as any).nombre || '').trim();
+          typeof rawCafeVal === 'string'
+            ? rawCafeVal.split('(')[0]?.trim() || rawCafeVal
+            : String(rawCafeVal?.nombre || '').trim();
         const entryDireccion =
-          typeof rawCafeEntry === 'string'
-            ? rawCafeEntry.split('(')[1]?.replace(')', '').trim() || barrio
-            : String((rawCafeEntry as any).direccion || (rawCafeEntry as any).esquina || barrio).trim();
+          typeof rawCafeVal === 'string'
+            ? rawCafeVal.split('(')[1]?.replace(')', '').trim() || barrio
+            : String(rawCafeVal?.direccion || rawCafeVal?.esquina || barrio).trim();
 
         if (!entryNombre) return;
 
@@ -349,14 +350,15 @@ export function InteractiveMapPanel({
   const isCafePreferredInBarrio = (cafe: CafeHubCurado): boolean => {
     const rawPref = profile?.cafesPorBarrio?.[cafe.barrio];
     if (!rawPref) return false;
+    const rawPrefVal = rawPref as any;
     const prefNombre =
-      typeof rawPref === 'string'
-        ? rawPref.toLowerCase()
-        : String((rawPref as any).nombre || '').toLowerCase();
+      typeof rawPrefVal === 'string'
+        ? rawPrefVal.toLowerCase()
+        : String(rawPrefVal?.nombre || '').toLowerCase();
     const prefDir =
-      typeof rawPref === 'string'
-        ? rawPref.toLowerCase()
-        : String((rawPref as any).direccion || (rawPref as any).esquina || '').toLowerCase();
+      typeof rawPrefVal === 'string'
+        ? rawPrefVal.toLowerCase()
+        : String(rawPrefVal?.direccion || rawPrefVal?.esquina || '').toLowerCase();
     const cafeNombreLow = (cafe.nombre || '').toLowerCase().trim();
     const cafeCalleLow = (cafe.direccion || '').split(',')[0].toLowerCase().trim();
     if (!prefNombre || !cafeNombreLow) return false;
