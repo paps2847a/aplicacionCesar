@@ -56,20 +56,14 @@ import {
   sincronizarBarrioConDireccionComentario,
 } from '../src/utils/logic';
 
+import { getDataDirectory } from './platformPaths';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 const PORT = Number(process.env.PORT) || 3000;
-const DATA_DIR = fs.existsSync(path.join(ROOT_DIR, 'data'))
-  ? path.join(ROOT_DIR, 'data')
-  : path.resolve(process.cwd(), 'data');
-
-if (!fs.existsSync(DATA_DIR)) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch {}
-}
+const DATA_DIR = getDataDirectory();
 
 const SHARED_STATE_PATH = path.join(DATA_DIR, 'popurri_shared_state.json');
 const TMP_SHARED_STATE_PATH = path.join(os.tmpdir(), 'popurri_shared_state.json');

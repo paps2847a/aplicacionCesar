@@ -27,30 +27,14 @@ import type {
   RawContactRow,
 } from '../../src/types';
 
-function resolveSystemBrowserExecutable(): string | undefined {
-  if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
-    return process.env.PUPPETEER_EXECUTABLE_PATH;
-  }
-  const localAppData = process.env.LOCALAPPDATA || '';
-  const candidates = [
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    localAppData ? path.join(localAppData, 'Google\\Chrome\\Application\\chrome.exe') : '',
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-  ].filter(Boolean);
+import { getDataDirectory, getSystemBrowserExecutable } from '../platformPaths';
 
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {
-      // ignore
-    }
-  }
-  return undefined;
+function resolveSystemBrowserExecutable(): string | undefined {
+  return getSystemBrowserExecutable();
+}
+
+function getWhatsAppSessionDir(): string {
+  return path.resolve(getDataDirectory(), 'wa_session');
 }
 
 function resolverEstadoPorEnvioBackend(
@@ -646,7 +630,7 @@ class WhatsAppService {
       this.qrCodeDataUrl = null;
       this.addLog('info', 'Iniciando navegador Chromium para WhatsApp Web...');
 
-      const sessionDir = path.resolve(__dirname, '../../data/wa_session');
+      const sessionDir = getWhatsAppSessionDir();
       if (!fs.existsSync(sessionDir)) {
         fs.mkdirSync(sessionDir, { recursive: true });
       }
@@ -940,7 +924,7 @@ class WhatsAppService {
 
       if (isLockError) {
         this.addLog('warn', 'Detectado bloqueo de navegador previo. Liberando Chromium y limpiando locks de sesión...');
-        const sessionDir = path.resolve(__dirname, '../../data/wa_session');
+        const sessionDir = getWhatsAppSessionDir();
         this.terminateZombieBrowsers(sessionDir);
         this.cleanStaleSessionLocks(sessionDir);
       }
@@ -971,7 +955,7 @@ class WhatsAppService {
       this.client = null;
     }
 
-    const sessionDir = path.resolve(__dirname, '../../data/wa_session');
+    const sessionDir = getWhatsAppSessionDir();
     this.terminateZombieBrowsers(sessionDir);
     this.cleanStaleSessionLocks(sessionDir);
 
@@ -986,7 +970,7 @@ class WhatsAppService {
   public async resetSession(): Promise<{ ok: boolean; message: string }> {
     this.addLog('info', 'Reiniciando por completo la sesión y locks de WhatsApp Web...');
     await this.disconnect();
-    const sessionDir = path.resolve(__dirname, '../../data/wa_session');
+    const sessionDir = getWhatsAppSessionDir();
     this.terminateZombieBrowsers(sessionDir);
     this.cleanStaleSessionLocks(sessionDir);
     this.status = 'DISCONNECTED';

@@ -10,18 +10,9 @@ import type {
   SharedAppStateSnapshot,
 } from '../src/types';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { getDataDirectory } from './platformPaths';
 
-const DATA_DIR = fs.existsSync(path.resolve(__dirname, '../data'))
-  ? path.resolve(__dirname, '../data')
-  : path.resolve(process.cwd(), 'data');
-
-if (!fs.existsSync(DATA_DIR)) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch {}
-}
+const DATA_DIR = getDataDirectory();
 
 const DB_PATH = path.join(DATA_DIR, 'popurri.db');
 const LEGACY_JSON_PATH = path.join(DATA_DIR, 'popurri_shared_state.json');

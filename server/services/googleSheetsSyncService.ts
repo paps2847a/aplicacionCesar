@@ -10,21 +10,15 @@ import {
 } from '../../src/domain/contacts/contactStatus';
 import type { EstadoFlujo } from '../../src/types';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, '..', '..');
-const DATA_DIR = path.join(ROOT_DIR, 'data');
+import { getDataDirectory, getLanguageServerCandidates } from '../platformPaths';
+
+const DATA_DIR = getDataDirectory();
 const AGY_ENV_CACHE_PATH = path.join(DATA_DIR, 'agy_gsheets_env.json');
 
 export const DEFAULT_SPREADSHEET_ID = '1IjsWFTYXnFZPo76GVbEKngG5ksU5ZLpwxddV1cj6F8k';
 export const DEFAULT_CONTROL_SHEET_NAME = 'Control';
 
-const LANGUAGE_SERVER_CANDIDATES = [
-  'C:\\Users\\cesar\\AppData\\Local\\Programs\\antigravity\\resources\\bin\\language_server.exe',
-  process.env.ANTIGRAVITY_AGENTAPI_EXE
-    ? path.join(path.dirname(process.env.ANTIGRAVITY_AGENTAPI_EXE), 'language_server.exe')
-    : '',
-].filter(Boolean);
+const LANGUAGE_SERVER_CANDIDATES = getLanguageServerCandidates();
 
 interface SheetRowEntry {
   rowNum: number; // 1-based row index in Google Sheets (e.g. row 2 for #1)
