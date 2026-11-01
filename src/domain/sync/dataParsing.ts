@@ -1,7 +1,17 @@
 import { normalizarBarrioCABA, sincronizarBarrioConDireccionComentario } from '../geo/cabaLocations';
 import { Contact, EstadoFlujo, RawContactRow } from '../../types';
 import { esTelefonoValido } from '../contacts/phoneUtils';
-import { UMBRAL_ID_SIN_PRIMER_CONTACTO, asegurarIdsUnicosContactos, esComentarioDescartadoONoCaba, extraerNumeroIdContacto, obtenerEtiquetaEstadoFlujo, parsearTextoAEstadoFlujo, tieneNuevaInformacionEnColumnaG } from '../contacts/contactStatus';
+import {
+  ESTADOS_FLUJO_CATALOGO,
+  UMBRAL_ID_SIN_PRIMER_CONTACTO,
+  analizarEstadoPorColumnasEFG,
+  asegurarIdsUnicosContactos,
+  esComentarioDescartadoONoCaba,
+  extraerNumeroIdContacto,
+  obtenerEtiquetaEstadoFlujo,
+  parsearTextoAEstadoFlujo,
+  tieneNuevaInformacionEnColumnaG,
+} from '../contacts/contactStatus';
 import { esCeldaSinNombre } from '../contacts/nameCorrection';
 import {
   esBarrioDeCABA,
@@ -245,44 +255,68 @@ export function parsearTSVoCSVContactos(
     const comentario = String(cols[idxComentario] || '').trim();
     const estadoCeldaRaw =
       cols.length > idxEstado ? String(cols[idxEstado] || '').trim() : '';
-    const estadoFlujoExplicito = parsearTextoAEstadoFlujo(estadoCeldaRaw);
 
-    const numId = extraerNumeroIdContacto(id);
-    const esDesde167EnAdelante = numId >= UMBRAL_ID_SIN_PRIMER_CONTACTO;
-    const rspEsSi = /^(s[ií]|respond[ií]o|ok)$/i.test(rspRaw);
-    const adhEsSi = /^(s[ií]|firm[oó]|firmad[oa]|adherid[oa])$/i.test(adhRaw);
-    const adhEsDescartadoExplicito =
-      /^(baja|descartad[oa]|no\s*caba|fuera\s*de\s*caba)$/i.test(adhRaw) ||
-      esComentarioDescartadoONoCaba(comentario, estadoFlujoExplicito);
-    const tieneInfoColG = tieneNuevaInformacionEnColumnaG(comentario);
-
-    // Determinar si ya fue contactado por primera vez o si requiere 1er contacto (#167 en adelante o RSP="Nuevo")
-    // Nota: en el Google Sheet la columna F ("Adhirió") suele tener "No" o "Pendiente" por defecto para todos los que aún no adhirieron,
-    // por lo que "No" en Columna F significa "Pendiente de adherir" y NO que ya haya sido contactado.
-    const yaContactadoExplicitoEnSheet =
-      rspEsSi ||
-      adhEsSi ||
-      adhEsDescartadoExplicito ||
-      tieneInfoColG ||
-      (estadoFlujoExplicito !== undefined &&
-        estadoFlujoExplicito !== 'SIN_CONTACTAR_1ER_MSJ' &&
-        estadoFlujoExplicito !== 'FALTA_NOMBRE_Y_APELLIDO') ||
-      /1er\s*(mensaje|msj)\s*enviado|visita|sin respuesta|no contesta|vive en|no tiene domicilio/i.test(
-        comentario
+    // Verificar si la celda de Estado en Columna H ya tiene cualquiera de las 14 etiquetas oficiales del catálogo
+    const estadoFlujoParseado = parsearTextoAEstadoFlujo(estadoCeldaRaw);
+    const esEtiquetaOficialExplicita =
+      Boolean(estadoCeldaRaw) &&
+      estadoFlujoParseado !== undefined &&
+      ESTADOS_FLUJO_CATALOGO.some(
+        (e) => e.label.toLowerCase() === estadoCeldaRaw.toLowerCase()
       );
 
-    const necesitaPrimerContacto =
-      /^nuevo$/i.test(rspRaw) ||
-      estadoFlujoExplicito === 'SIN_CONTACTAR_1ER_MSJ' ||
-      estadoFlujoExplicito === 'FALTA_NOMBRE_Y_APELLIDO' ||
-      (esDesde167EnAdelante && !yaContactadoExplicitoEnSheet);
+    const estadoAnalizadoPorEFG = analizarEstadoPorColumnasEFG({
+      id,
+      nombre,
+      rsp: rspRaw,
+      adhirio: adhRaw,
+      comentario,
+      estadoColH: estadoCeldaRaw,
+    });
 
-    const sinNom = esCeldaSinNombre(nombre);
-    const estadoFlujoFinal: EstadoFlujo | undefined = necesitaPrimerContacto
-      ? sinNom
-        ? 'FALTA_NOMBRE_Y_APELLIDO'
-        : 'SIN_CONTACTAR_1ER_MSJ'
-      : estadoFlujoExplicito;
+    const rspEsSi = /^(s[ií]|respond[ií]o|ok)$/i.test(rspRaw);
+    const adhEsSi = /^(s[ií]|firm[oó]|firmad[oa]|adherid[oa])$/i.test(adhRaw);
+
+    const estadoFlujoFinal: EstadoFlujo =
+      esEtiquetaOficialExplicita && estadoFlujoParseado !== undefined
+        ? estadoFlujoParseado === 'SIN_CONTACTAR_1ER_MSJ' && esCeldaSinNombre(nombre)
+          ? 'FALTA_NOMBRE_Y_APELLIDO'
+          : estadoFlujoParseado
+        : estadoAnalizadoPorEFG;
+
+    const necesitaPrimerContacto =
+      estadoFlujoFinal === 'SIN_CONTACTAR_1ER_MSJ' ||
+      estadoFlujoFinal === 'FALTA_NOMBRE_Y_APELLIDO';
+
+    const adhirioFinal: RawContactRow['adhirio'] =
+      estadoFlujoFinal === 'YA_ADHIRIO_FIRMA_OK' ||
+      estadoFlujoFinal === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' ||
+      estadoFlujoFinal === 'PENDIENTE_RETIRO_FICHAS' ||
+      (!esEtiquetaOficialExplicita && adhEsSi)
+        ? 'Sí'
+        : estadoFlujoFinal === 'SIN_DNI_CABA_PEDIR_REFERIDOS' ||
+            estadoFlujoFinal === 'DESCARTADO_O_BAJA'
+          ? 'No'
+          : 'Pendiente';
+
+    const rspFinal: RawContactRow['rsp'] = necesitaPrimerContacto
+      ? 'Nuevo'
+      : estadoFlujoFinal === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+          estadoFlujoFinal === 'SEGUNDO_SEGUIMIENTO_SIN_RSP'
+        ? 'No'
+        : estadoFlujoFinal === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+            estadoFlujoFinal === 'PIDIO_MAS_INFO_ENVIADA' ||
+            estadoFlujoFinal === 'PASO_DATOS_FALTA_CONFIRMAR' ||
+            estadoFlujoFinal === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+            estadoFlujoFinal === 'ENCUENTRO_CONFIRMADO' ||
+            estadoFlujoFinal === 'RECORDATORIO_DIA_ENVIADO' ||
+            estadoFlujoFinal === 'PENDIENTE_RETIRO_FICHAS' ||
+            estadoFlujoFinal === 'YA_ADHIRIO_FIRMA_OK' ||
+            estadoFlujoFinal === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO'
+          ? 'Sí'
+          : rspEsSi
+            ? 'Sí'
+            : 'No';
 
     // Marca temporal base para contactos ya contactados en la planilla (>48h si no tienen marca reciente en la app)
     const fechaBaseHistorica = '2025-05-14';
@@ -293,13 +327,11 @@ export function parsearTSVoCSVContactos(
       barrio,
       email: email && esEmailValido(email) ? email : undefined,
       telRaw,
-      rsp: rspEsSi ? 'Sí' : necesitaPrimerContacto ? 'Nuevo' : 'No',
-      adhirio: adhEsSi ? 'Sí' : adhEsDescartadoExplicito ? 'No' : 'Pendiente',
+      rsp: rspFinal,
+      adhirio: adhirioFinal,
       comentario,
       estadoFlujo: estadoFlujoFinal,
-      estadoFlujoEtiqueta: estadoFlujoFinal
-        ? obtenerEtiquetaEstadoFlujo(estadoFlujoFinal)
-        : undefined,
+      estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estadoFlujoFinal),
       enSheets: marcarEnSheets,
       primerContactoEnviado: !necesitaPrimerContacto,
       fechaAgregado: necesitaPrimerContacto
@@ -404,53 +436,6 @@ export function exportarContactosATSVParaExcel(contacts: Contact[]): string {
     return cols.map(clean).join('\t');
   });
   return [header.join('\t'), ...rows].join('\n');
-}
-
-/**
- * Exporta el padrón en formato CSV con delimitador punto y coma (`;`),
- * ideal para Microsoft Excel con configuración regional en español (Argentina / España / Latinoamérica).
- * Abre directamente separando todas las columnas al hacer doble clic.
- */
-export function exportarContactosACSVExcelPuntoYComa(contacts: Contact[]): string {
-  const incluyeEmail = contacts.some((c) => Boolean(c.email));
-  const header = incluyeEmail
-    ? ['#', 'Nombre', 'Barrio', 'Mail', 'Tel', 'RSP', 'Adhirió', 'Comentario', 'Estado', '1er Contacto']
-    : ['#', 'Nombre', 'Barrio', 'Tel', 'RSP', 'Adhirió', 'Comentario', 'Estado', '1er Contacto'];
-  const esc = (v: string) => {
-    const s = String(v ?? '').replace(/"/g, '""');
-    return s.includes(';') || s.includes('"') || s.includes('\n') || s.includes('\r') ? `"${s}"` : s;
-  };
-  const rows = contacts.map((c) => {
-    const etiqueta1erContacto = c.primerContactoEnviado
-      ? `Enviado${c.fechaPrimerContacto ? ` (${c.fechaPrimerContacto})` : ''}`
-      : 'Pendiente 1er Contacto';
-    const base = incluyeEmail
-      ? [
-          c.id,
-          c.nombre,
-          c.barrio,
-          c.email || '',
-          c.telRaw,
-          c.rsp === 'Sí' ? 'Sí' : 'No',
-          c.adhirio,
-          c.comentario,
-          c.estadoFlujoEtiqueta,
-          etiqueta1erContacto,
-        ]
-      : [
-          c.id,
-          c.nombre,
-          c.barrio,
-          c.telRaw,
-          c.rsp === 'Sí' ? 'Sí' : 'No',
-          c.adhirio,
-          c.comentario,
-          c.estadoFlujoEtiqueta,
-          etiqueta1erContacto,
-        ];
-    return base.map(esc).join(';');
-  });
-  return '\uFEFF' + [header.join(';'), ...rows].join('\r\n');
 }
 
 /**

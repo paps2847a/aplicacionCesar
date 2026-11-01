@@ -56,15 +56,39 @@ export function generarMensajeContextual(
     ? `\n\n_(De paso te hago una consulta cortita: al pasar los teléfonos del formulario a mi planilla me quedó en blanco la casilla de tu nombre; ¿me recordarías tu *nombre y apellido* así te agendo bien en mi celular?)_`
     : '';
 
-  // Determinar qué plantilla aplicar cuando está en 'auto'
+  // Determinar qué plantilla aplicar cuando está en 'auto' según el estado del contacto
   let tipo: TipoPlantillaWA = plantillaOverride;
   if (tipo === 'auto') {
-    if (contact.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO') {
+    if (
+      contact.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+      contact.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ'
+    ) {
       tipo = 'primer_contacto';
-    } else if (contact.estadoFlujo === 'ENCUENTRO_CONFIRMADO') {
-      tipo = 'en_camino';
+    } else if (contact.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP') {
+      tipo = 'baja_amable_sin_respuesta';
+    } else if (contact.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP') {
+      tipo = 'seguimiento_sin_respuesta';
+    } else if (contact.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA') {
+      tipo = 'seguimiento_cambio_chip';
     } else if (contact.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR') {
       tipo = 'confirmacion_visita';
+    } else if (contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE') {
+      tipo = 'convocatoria_cafe_hub';
+    } else if (contact.estadoFlujo === 'ENCUENTRO_CONFIRMADO') {
+      tipo = 'en_camino';
+    } else if (contact.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO') {
+      tipo = 'llegando';
+    } else if (contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS') {
+      tipo = 'retiro_fichas';
+    } else if (
+      contact.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+      contact.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO'
+    ) {
+      tipo = 'agradecimiento_post_firma';
+    } else if (contact.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS') {
+      tipo = 'no_caba_referidos';
+    } else if (contact.estadoFlujo === 'DESCARTADO_O_BAJA') {
+      tipo = 'baja_respetuosa';
     } else {
       switch (contact.situacion) {
         case 'NUEVO_SIN_PRIMER_MENSAJE':
@@ -181,7 +205,7 @@ export function generarMensajeContextual(
           tipoUsado: 'seguimiento_cambio_chip',
           asunto: 'Seguimiento Estratégico: Obtener Punto de Encuentro o Referencia Territorial (Completo)',
           objetivo: 'Corroborar DNI en CABA y obtener una esquina, referencia o dirección + franja horaria para geolocalizar en el mapa.',
-          texto: `${esSinNombre ? 'Genial, muchas gracias por responder.' : `Buenísimo, ${nombre}.`}\n\nAntes de armar el recorrido de esta semana por ${contact.barrio || 'tu barrio'}, te hago dos consultas cortitas:\n1. ¿La última dirección que figura impresa en el dorso de tu DNI físico es de CABA? (La Justicia Electoral exige que el domicilio del documento sea de Capital).\n2. Para ubicarte en el recorrido y ${opcionCafeSinDir}: ¿me pasarías una *esquina de referencia, cuadra aproximada o dirección* por ${contact.barrio || 'el barrio'}, y en qué *día y franja horaria* te queda más cómodo?\n\nCon esa referencia ya nos organizamos. Además, si en casa hay alguien más con DNI en CABA que quiera adherir, llevo fichas extra.${posdataSutilNombre}`,
+          texto: `${saludoConNombre}, ¿cómo estás? Buenísimo.\n\nAntes de armar el recorrido de esta semana por ${contact.barrio || 'tu barrio'}, te hago dos consultas cortitas:\n1. ¿La última dirección que figura impresa en el dorso de tu DNI físico es de CABA? (La Justicia Electoral exige que el domicilio del documento sea de Capital).\n2. Para ubicarte en el recorrido y ${opcionCafeSinDir}: ¿me pasarías una *esquina de referencia, cuadra aproximada o dirección* por ${contact.barrio || 'el barrio'}, y en qué *día y franja horaria* te queda más cómodo?\n\nCon esa referencia ya nos organizamos. Además, si en casa hay alguien más con DNI en CABA que quiera adherir, llevo fichas extra.${posdataSutilNombre}`,
         };
       }
 
@@ -202,7 +226,7 @@ export function generarMensajeContextual(
         tipoUsado: 'seguimiento_cambio_chip',
         asunto: 'Seguimiento "Cambió el chip" (Confirmar Horario en su Dirección o Café)',
         objetivo: 'Cerrar día y franja horaria sobre el punto de referencia ya detectado.',
-        texto: `${esSinNombre ? 'Buenísimo.' : `Perfecto, ${nombre}.`} Ya te tengo ubicado/a por *${dir}* en ${contact.barrio}.\n\nPara organizar la recorrida de esta semana: ¿en qué *día y franja horaria* te queda más cómodo que pase 2 minutos por *${dir}*${alternativaCafeConDir}? Acordate sólo de tener a mano el DNI físico con domicilio en CABA.${posdataSutilNombre}`,
+        texto: `${saludoConNombre}, ¿cómo estás? Ya te tengo ubicado/a por *${dir}* en ${contact.barrio}.\n\nPara organizar la recorrida de esta semana: ¿en qué *día y franja horaria* te queda más cómodo que pase 2 minutos por *${dir}*${alternativaCafeConDir}? Acordate sólo de tener a mano el DNI físico con domicilio en CABA.${posdataSutilNombre}`,
       };
     }
 
@@ -235,7 +259,7 @@ export function generarMensajeContextual(
           tipoUsado: 'confirmacion_visita',
           asunto: 'Confirmación Encuentro de los Miércoles en Chile 1408',
           objetivo: 'Confirmar cruce el miércoles en sede central (Chile 1408) y recordar DNI físico.',
-          texto: `${saludoConNombre}, ¿cómo estás? Vi que te sumás a la reunión del miércoles en *Chile 1408* (18:30 hs). Yo voy a estar ahí también, así que cuando llegues escribime por acá, nos buscamos y firmamos la ficha en dos minutos (acordate sólo de traer el DNI físico). Nos vemos el miércoles.${posdataSutilNombre}`,
+          texto: `${saludoConNombre}, ¿cómo estás? Vi que te sumás a la reunión del miércoles en *Chile 1408* (de 18:30 a 20:00 hs). Yo voy a estar ahí también, así que cuando llegues escribime por acá, nos buscamos y firmamos la ficha en dos minutos (acordate sólo de traer el DNI físico). Nos vemos el miércoles.${posdataSutilNombre}`,
         };
       }
 
@@ -252,7 +276,7 @@ export function generarMensajeContextual(
         tipoUsado: 'confirmacion_visita',
         asunto: 'Confirmación de Visita (Completa)',
         objetivo: 'Confirmación detallada con recordatorio de DNI y familiares.',
-        texto: `${esSinNombre ? 'Perfecto, muchas gracias.' : `Perfecto, ${nombre}.`} Ya dejamos agendado entonces para el ${fechaCitada} en *${dir}*.\n\nEse día te escribo un ratito antes cuando esté saliendo para allá, unos 10-15 minutos antes de llegar, así te doy tiempo.\n\nPara ese momento sólo te pido tener tu último DNI físico a mano, así copiamos los datos tal cual están impresos (toma apenas dos minutos). Si ahí con vos hay alguien más que tenga domicilio de CABA en el DNI y quiera sumar su firma, también lo hacemos en el momento.\n\nCualquier cosa que te surja de acá a ese día, avisame sin problema.${posdataSutilNombre}`,
+        texto: `${saludoConNombre}, ¿cómo estás? Perfecto, ya dejamos agendado entonces para el ${fechaCitada} en *${dir}*.\n\nEse día te escribo un ratito antes cuando esté saliendo para allá, unos 10-15 minutos antes de llegar, así te doy tiempo.\n\nPara ese momento sólo te pido tener tu último DNI físico a mano, así copiamos los datos tal cual están impresos (toma apenas dos minutos). Si ahí con vos hay alguien más que tenga domicilio de CABA en el DNI y quiera sumar su firma, también lo hacemos en el momento.\n\nCualquier cosa que te surja de acá a ese día, avisame sin problema.${posdataSutilNombre}`,
       };
     }
 
@@ -304,7 +328,7 @@ export function generarMensajeContextual(
         tipoUsado: 'llegando',
         asunto: 'Estoy Llegando (2 min)',
         objetivo: 'Avisar que ya estás en la esquina/puerta.',
-        texto: `${esSinNombre ? 'Hola, ya' : `${nombre}, ya`} estoy llegando, a 2 minutos de *${dir}*. Cuando puedas bajá tranquilo/a que te espero acá.`,
+        texto: `${saludoConNombre}. Ya estoy llegando, a 2 minutos de *${dir}*. Cuando puedas bajá tranquilo/a que te espero acá.`,
       };
     }
 
@@ -313,7 +337,7 @@ export function generarMensajeContextual(
         tipoUsado: 'demorado',
         asunto: 'Aviso de Demora (+10 min)',
         objetivo: 'Cuidar el tiempo de la persona si el transporte o parada previa se atrasó.',
-        texto: `${esSinNombre ? 'Hola, te' : `${nombre}, te`} aviso que vengo con unos 10 minutos de demora por el transporte, pero ya estoy yendo directo para *${dir}*. Disculpame la demora, nos vemos en un ratito.`,
+        texto: `${saludoConNombre}. Te aviso que vengo con unos 10 minutos de demora por el transporte, pero ya estoy yendo directo para *${dir}*. Disculpame la demora, nos vemos en un ratito.`,
       };
     }
 
@@ -414,7 +438,7 @@ export function generarMensajeContextual(
         tipoUsado: 'baja_amable_sin_respuesta' as const,
         asunto: 'Último Mensaje Amable: Baja de la Base para No Molestar',
         objetivo: 'Cerrar el seguimiento con total respeto avisando que damos de baja el número para no incomodar.',
-        texto: `${saludoConNombre}, ¿cómo estás? Como te escribí un par de veces por la firma de adhesión de *${profile.espacioPolitico}* y no quiero ser pesado ni molestarte, te doy de baja de mi listado de recorridas así no te siguen llegando mensajes.\n\nSi en algún momento más adelante tenés un ratito y querés sumar tu firma en CABA, escribime por acá con total confianza. Muchas gracias igual y que tengas muy buena semana.`,
+        texto: `${saludoConNombre}, ¿cómo estás? Soy ${profile.nombrePromotor}, de *${profile.espacioPolitico}*. Como te escribí un par de veces por la firma de adhesión y no quiero ser pesado ni molestarte, te doy de baja de mi listado de recorridas así no te siguen llegando mensajes.\n\nSi en algún momento más adelante tenés un ratito y querés sumar tu firma en CABA, escribime por acá con total confianza. Muchas gracias igual y que tengas muy buena semana.`,
       };
       return postProcesarMensajeAntiPelonesYSaludo(resBajaAmable, contact, tipo, extra);
     }

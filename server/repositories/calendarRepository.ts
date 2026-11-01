@@ -47,8 +47,8 @@ export function replaceCalendarEvents(events: CalendarEventItem[], source: strin
   const db = getDatabase();
   db.exec('BEGIN TRANSACTION;');
   try {
-    if (source === 'ical_sync' || source === 'sync' || source === 'state_sync') {
-      db.prepare("DELETE FROM calendar_events WHERE source IN ('ical_sync', 'sync', 'state_sync', 'migrado') OR source IS NULL").run();
+    if (source === 'all' || source === 'put' || source === 'state_sync') {
+      db.prepare('DELETE FROM calendar_events').run();
     } else {
       db.prepare('DELETE FROM calendar_events WHERE source = ? OR source IS NULL').run(source);
     }
@@ -61,19 +61,6 @@ export function replaceCalendarEvents(events: CalendarEventItem[], source: strin
 
     for (const ev of events) {
       if (!ev.id) continue;
-      const sNorm = String(ev.summary || '').toLowerCase();
-      const idNorm = String(ev.id || '').toLowerCase();
-      if (
-        sNorm.includes('dentista') ||
-        sNorm.includes('reunión virtual') ||
-        sNorm.includes('reunion virtual') ||
-        sNorm.includes('almuerzo con frima') ||
-        idNorm.includes('dentista') ||
-        idNorm.includes('reunion-virtual') ||
-        idNorm.includes('almuerzo-frima')
-      ) {
-        continue;
-      }
       stmt.run(
         ev.id,
         ev.summary || 'Compromiso',
@@ -86,7 +73,7 @@ export function replaceCalendarEvents(events: CalendarEventItem[], source: strin
         ev.endIso || '',
         ev.lat || null,
         ev.lng || null,
-        source
+        ev.source || source
       );
     }
     db.exec('COMMIT;');
@@ -94,6 +81,12 @@ export function replaceCalendarEvents(events: CalendarEventItem[], source: strin
     db.exec('ROLLBACK;');
     throw err;
   }
+}
+
+export function deleteCalendarEvent(id: string): boolean {
+  const db = getDatabase();
+  const res = db.prepare('DELETE FROM calendar_events WHERE id = ?').run(String(id).trim());
+  return res.changes > 0;
 }
 
 export function upsertCalendarEvent(ev: CalendarEventItem, source: string = 'manual'): void {
@@ -119,9 +112,4 @@ export function upsertCalendarEvent(ev: CalendarEventItem, source: string = 'man
     ev.lng || null,
     source
   );
-}
-
-export function deleteCalendarEvent(id: string): void {
-  const db = getDatabase();
-  db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id);
 }

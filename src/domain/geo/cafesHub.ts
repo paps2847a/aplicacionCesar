@@ -8,7 +8,7 @@ import {
 } from '../../types';
 import {
   CATALOGO_CAFES_HUB_CABA,
-  CafeHubCurado,
+  type CafeHubCurado,
 } from '../../data/cafesHubCatalog';
 import {
   COORDENADAS_BARRIOS_CABA,
@@ -73,13 +73,15 @@ export function describirCafeConDistanciaDesdeContacto(
     }
   }
 
-  // Buscar coincidencia en el catálogo oficial de cafés CABA para obtener dirección y coordenadas exactas
-  const candidatosMismoBarrio = CATALOGO_CAFES_HUB_CABA.filter(
-    (cf) => cf.esCaba && cf.barrio.toLowerCase() === barrioNorm.toLowerCase()
+  // Buscar el café del catálogo oficial de CABA más cercano en distancia geográfica real al punto del vecino
+  const candidatosCaba = CATALOGO_CAFES_HUB_CABA.filter((cf) => cf.esCaba);
+  const candidatosMismoBarrio = candidatosCaba.filter(
+    (cf) => cf.barrio.toLowerCase() === barrioNorm.toLowerCase()
   );
+  const poolBusqueda = candidatosMismoBarrio.length > 0 ? candidatosMismoBarrio : candidatosCaba;
   const mejorDelBarrio =
-    candidatosMismoBarrio.length > 0
-      ? [...candidatosMismoBarrio].sort(
+    poolBusqueda.length > 0
+      ? [...poolBusqueda].sort(
           (a, b) =>
             estimarMinutosCaminandoCABA(geoContacto.lat, geoContacto.lng, a.lat, a.lng)
               .distanciaMetros -
@@ -104,9 +106,9 @@ export function describirCafeConDistanciaDesdeContacto(
     rawDir = mejorDelBarrio.direccion.split(',')[0].trim();
     cafeLat = mejorDelBarrio.lat;
     cafeLng = mejorDelBarrio.lng;
-  } else if (profile.cafesPorBarrio[barrioNorm]) {
+  } else if (profile?.cafesPorBarrio?.[barrioNorm]) {
     rawNombre = profile.cafesPorBarrio[barrioNorm].nombre;
-    rawDir = profile.cafesPorBarrio[barrioNorm].esquina.split(',')[0].trim();
+    rawDir = (profile.cafesPorBarrio[barrioNorm].esquina || '').split(',')[0].trim();
   }
 
   const cafeNombre =
@@ -114,7 +116,7 @@ export function describirCafeConDistanciaDesdeContacto(
     `Café de ${barrioNorm}`;
   const cafeDireccion =
     rawDir.split(',')[0].trim() ||
-    profile.cafesPorBarrio[barrioNorm]?.esquina?.split(',')[0]?.trim() ||
+    profile?.cafesPorBarrio?.[barrioNorm]?.esquina?.split(',')[0]?.trim() ||
     barrioNorm;
 
   const coordsBarrio =
@@ -239,20 +241,13 @@ export function seleccionarCafesHubPorCercaniaYFranja(
           : Math.max(2, Math.round(estimarMinutosCaminandoCABA(centroLat, centroLng, cf.lat, cf.lng).minutosCaminando));
       const cuadrasPromedio = Math.max(1, Math.round(distPromedioMetros / 100));
 
+      // Ordenar estrictamente por la menor distancia geográfica real a las ubicaciones de los vecinos del circuito
+      // (sin que la selección de favoritos en Mapa condicione la propuesta óptima del Planificador)
       const mismoBarrio =
         cf.barrio.toLowerCase() === barrioReferencia.toLowerCase() ||
         grupo.some((m) => m.barrio.toLowerCase() === cf.barrio.toLowerCase());
-      const cafeConfigBarrio = profile.cafesPorBarrio[cf.barrio];
-      const coincideFranjaBarrio =
-        cafeConfigBarrio &&
-        cafeConfigBarrio.horariosSugeridos
-          .toLowerCase()
-          .includes(franjaDominante.toLowerCase().slice(0, 4));
 
-      const score =
-        distPromedioMetros -
-        (mismoBarrio ? 2500 : 0) -
-        (coincideFranjaBarrio ? 220 : 0);
+      const score = distPromedioMetros - (mismoBarrio ? 1200 : 0);
 
       return {
         cafe: {

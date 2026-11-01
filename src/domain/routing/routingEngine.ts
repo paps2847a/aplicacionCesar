@@ -1,5 +1,10 @@
 import { analizarFranjaHoraria } from '../calendar/availability';
-import { extraerCalleOCruce } from '../geo/cabaLocations';
+import {
+  esDireccionReconocidaEnCABA,
+  extraerCalleOCruce,
+  geocodificarContactoLocal,
+  inferirBarrioDesdeDireccionOComentario,
+} from '../geo/cabaLocations';
 import { OpcionesCafeMensaje } from '../geo/cafesHub';
 import { FranjaHoraria, MicroCluster, RawContactRow, TipoPlantillaWA } from '../../types';
 import { filtrarEventosCalendarVigentes } from '../calendar/calendarEvents';
@@ -91,7 +96,7 @@ export function esContactoConfirmadoEnLista1a1(contact: Contact): boolean {
 export function calcularHojaDeRuta(
   paradas: Contact[],
   horaSalidaStr: string = '09:40',
-  bufferMinutos: number = 20,
+  bufferMinutos: number = 10,
   profile: VoiceProfile = DEFAULT_VOICE_PROFILE,
   eventosCalendar: CalendarEventItem[] = [],
   fechaRutaDDMM?: string,
@@ -1004,7 +1009,7 @@ export function generarCorteEstrategicoLocal(
     recomendacionesBarrio.find((r) => r.barrio !== topBarrio)?.barrio ||
     'Palermo';
 
-  // Eventos de Google Calendar para los próximos días (semana completa de 7 días continuos)
+  // Eventos de Google Calendar para los próximos días
   const diasOperativos = [
     {
       diaBA: hoyBA,
@@ -1328,7 +1333,7 @@ export function generarCorteEstrategicoLocal(
 
     // 2. Calcular la Hoja de Ruta Casa x Casa REAL para las direcciones de este circuito,
     //    pasando explícitamente el `mejorCafe` del bloque (sólo si agrupa >= 2 personas) y los `contactosMismoDia`
-    const bufferPorParada = contactosGrupo.length >= 5 ? 15 : 20;
+    const bufferPorParada = 10;
     const contactosMismoDiaRef = elegiblesAgendaConLugar.filter(
       (c) =>
         resolverFechaObjetivoContacto(c, ahoraMs) === fechaClave ||
@@ -1376,13 +1381,13 @@ export function generarCorteEstrategicoLocal(
     );
 
     let duracionTotalMinutos = esSede
-      ? 120
+      ? 90
       : modalidadPreferida === 'PUERTA_A_PUERTA'
       ? calcularDuracionActivaRuta(paradasRutaSugerida)
       : duracionCafeHubMin;
 
     const calcularFinReal = (iniStr: string, paradas: ParadaRuta[], durMin: number): string => {
-      if (esSede) return '20:30';
+      if (esSede) return '20:00';
       const fin = modalidadPreferida === 'PUERTA_A_PUERTA' && paradas.length > 0
         ? paradas[paradas.length - 1].horaFinVisita
         : sumarMinutosAHora(iniStr, durMin);
@@ -1476,7 +1481,7 @@ export function generarCorteEstrategicoLocal(
 
     // Franja horaria limpia para que sea 100% legible y apta para mensajes sin textos internos
     const franjaHorariaLimpia = esSede
-      ? '18:30 a 20:30 hs'
+      ? '18:30 a 20:00 hs'
       : `${horaInicioReal} a ${horaFinReal} hs`;
 
     const resumenOperativoRuta =
@@ -1527,7 +1532,7 @@ export function generarCorteEstrategicoLocal(
       : `${nombreMejorCafe} — ${mejorCafe?.barrio || barrioPrincipal}`;
 
     const puntoCentricoResumen = esSede
-      ? `Reunión de los miércoles en ${profile.sedeCentral} · 18:30 a 20:30 hs`
+      ? `Reunión de los miércoles en ${profile.sedeCentral} · 18:30 a 20:00 hs`
       : mejorCafe
       ? `Circuito ${numeroCircuito} (${barrioPrincipal}) · Punto céntrico: ${mejorCafe.nombre} (${mejorCafe.direccion.split(',')[0]}) · ~${mediaMinutosMejorCafe} min a pie`
       : `Circuito ${numeroCircuito} (${barrioPrincipal}) · ${franjaCompartidaResumen}`;
@@ -1554,6 +1559,48 @@ export function generarCorteEstrategicoLocal(
       urlGoogleMaps: cf.urlGoogleMaps,
     }));
 
+    // Evaluar y recomendar cuál modalidad (Puerta a Puerta vs Convocar al Café) es más eficiente para este grupo
+    const minutosTrasladoInternoPap = paradasRutaSugerida
+      .slice(1)
+      .reduce((acc, p) => acc + p.minutosViaje, 0);
+    const pidenPuntoCount = contactosOrdenadosCronologicamente.filter(
+      (c) =>
+        c.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+        c.situacion === 'PREFIERE_PUNTO' ||
+        /punto|caf[eé]|plaza/i.test(c.comentario || '')
+    ).length;
+    const horasFijasDistintasCount = paradasRutaSugerida.filter((p) =>
+      Boolean(p.horaPactadaExplicita)
+    ).length;
+
+    const recomiendaCafe =
+      !esSede &&
+      contactosOrdenadosCronologicamente.length >= 2 &&
+      Boolean(mejorCafe) &&
+      horasFijasDistintasCount <= 1 &&
+      mediaMinutosMejorCafe <= 14 &&
+      (contactosOrdenadosCronologicamente.length >= 3 ||
+        pidenPuntoCount >= 1 ||
+        minutosTrasladoInternoPap >= 20);
+
+    const modalidadRecomendada: ModalidadEncuentroAgenda = esSede
+      ? 'EVENTO_SEDE'
+      : recomiendaCafe
+      ? 'CAFE_HUB'
+      : 'PUERTA_A_PUERTA';
+
+    const motivoRecomendacionModalidad = esSede
+      ? `Reunión grupal en sede central (${profile.sedeCentral}).`
+      : contactosOrdenadosCronologicamente.length === 1
+      ? `Se aconseja Puerta a Puerta: al ser 1 vecino con punto definido (${contactosOrdenadosCronologicamente[0]?.calleOCruce || barrioPrincipal}) en la franja ${franjaHorariaLimpia}, pasar directo por su ubicación es más rápido y efectivo.`
+      : recomiendaCafe
+      ? `Se aconseja Convocar al Café Óptimo (${nombreMejorCafe}, a ~${mediaMinutosMejorCafe} min a pie promedio): los ${contactosOrdenadosCronologicamente.length} vecinos comparten ventana horaria compatible (${franjaHorariaLimpia}) y reunirlos en un único punto ahorra ~${Math.max(12, minutosTrasladoInternoPap)} min de traslados entre calles.`
+      : `Se aconseja Puerta a Puerta (${paradasRutaSugerida.length} paradas encadenadas, ~${minutosTrasladoInternoPap} min de caminata interna entre direcciones): ${
+          horasFijasDistintasCount >= 2
+            ? 'los vecinos indicaron horarios puntuales escalonados'
+            : 'las ubicaciones están próximas en secuencia lineal'
+        }, por lo que pasar por cada punto de ${horaInicioReal} a ${horaFinReal} hs maximiza la firma sin hacerlos trasladarse.`;
+
     return {
       id,
       clusterIdVinculado,
@@ -1567,6 +1614,8 @@ export function generarCorteEstrategicoLocal(
       duracionTotalMinutos,
       duracionEstimadaMin: duracionTotalMinutos,
       modalidad: modalidadPreferida,
+      modalidadRecomendada,
+      motivoRecomendacionModalidad,
       barrio: etiquetaBarrios,
       puntoEncuentroODireccion,
       puntoCentricoResumen,
@@ -1951,32 +2000,13 @@ export function generarCorteEstrategicoLocal(
   const agendaSugeridaDias: BloqueAgendaRecomendado[] = [];
   const conteoCircuitosPorDia: Record<string, number> = {};
 
-  // Las reuniones en Chile 1408 son los miércoles (18:30 a 20:30 hs, según Google Calendar "Hagamos Popurrí")
-  let diaMiercolesSede =
+  // Las reuniones en Chile 1408 son los miércoles (18:30 a 20:00 hs, según Google Calendar "Hagamos Popurrí")
+  const diaMiercolesSede =
     diasOperativos.find(
       (d) =>
         d.diaBA.dayOfWeek === 3 ||
         ['miércoles', 'miercoles'].includes(d.diaBA.nombreDia.toLowerCase())
-    );
-
-  if (!diaMiercolesSede) {
-    for (let offset = 0; offset < 7; offset++) {
-      const dBA = sumarDiasAFechaBA(ahoraMs, offset);
-      if (dBA.dayOfWeek === 3 || ['miércoles', 'miercoles'].includes(dBA.nombreDia.toLowerCase())) {
-        diaMiercolesSede = {
-          diaBA: dBA,
-          prefijo: offset === 0 ? 'HOY' : offset === 1 ? 'MAÑANA' : dBA.nombreDia.toUpperCase(),
-          esHoy: offset === 0,
-          eventos: filtrarEventosCalendarParaDia(eventosCalendar, dBA),
-        };
-        break;
-      }
-    }
-  }
-
-  if (!diaMiercolesSede) {
-    diaMiercolesSede = diasOperativos[0];
-  }
+    ) || diasOperativos[0];
 
   if (contactosSedeChile.length > 0) {
     if (!intervalosOcupadosPorDia[diaMiercolesSede.diaBA.ddmm]) {
@@ -1984,7 +2014,7 @@ export function generarCorteEstrategicoLocal(
     }
     intervalosOcupadosPorDia[diaMiercolesSede.diaBA.ddmm].push({
       ini: 18 * 60 + 30,
-      fin: 20 * 60 + 30,
+      fin: 20 * 60,
     });
   }
 
@@ -2050,10 +2080,9 @@ export function generarCorteEstrategicoLocal(
   });
 
   if (contactosSedeChile.length > 0) {
-    const etiqMiercoles =
-      diaMiercolesSede.prefijo === 'HOY' || diaMiercolesSede.prefijo === 'MAÑANA'
-        ? `${diaMiercolesSede.prefijo} (${diaMiercolesSede.diaBA.nombreDia} ${diaMiercolesSede.diaBA.ddmm})`
-        : `${diaMiercolesSede.diaBA.nombreDia.toUpperCase()} ${diaMiercolesSede.diaBA.ddmm}`;
+    const etiqMiercoles = diaMiercolesSede.esHoy
+      ? `HOY (${diaMiercolesSede.diaBA.nombreDia} ${diaMiercolesSede.diaBA.ddmm}) · Reunión en Chile 1408`
+      : `ENCUENTRO SEMANAL SEDE (${diaMiercolesSede.diaBA.nombreDia} ${diaMiercolesSede.diaBA.ddmm})`;
     agendaSugeridaDias.push(
       construirBloqueAgendaSincronizado({
         id: 'agenda-sede-chile-1408',
@@ -2066,7 +2095,7 @@ export function generarCorteEstrategicoLocal(
         modalidadPreferida: 'EVENTO_SEDE',
         contactosGrupo: contactosSedeChile,
         eventosDelDia: diaMiercolesSede.eventos,
-        notaCalendarBase: `Coincide con la reunión de los miércoles en la Sede de Chile 1408 (18:30 a 20:30 hs, evento "Hagamos Popurrí" en Calendar).`,
+        notaCalendarBase: `Coincide con la reunión de los miércoles en la Sede de Chile 1408 (18:30 a 20:00 hs, evento "Hagamos Popurrí" en Calendar).`,
       })
     );
   }
@@ -2604,7 +2633,13 @@ export function generarMensajePropuestaBloqueAgenda(
 
   // Si tenía una HORA PUNTUAL RÍGIDA en Columna G que verdaderamente chocó con Google Calendar
   if (paradaVecino?.conflictoCalendar && paradaVecino.mensajeReprogramacionCalendar) {
-    return paradaVecino.mensajeReprogramacionCalendar;
+    if (tieneCafeGrupal) {
+      return paradaVecino.mensajeReprogramacionCalendar;
+    }
+    return paradaVecino.mensajeReprogramacionCalendar
+      .replace(/Quería proponerte dos opciones:\s*\n1\.\s*/i, 'Quería proponerte ')
+      .replace(/\n2\.\s*O bien encontrarnos unos minutos en el café[^\n]*/i, '')
+      .replace(/¿Cuál de las dos te queda mejor\?/i, '¿Te queda bien ese horario?');
   }
 
   if (modalidadEfectiva === 'EVENTO_SEDE' || modalidadEfectiva === 'ENCUENTRO_SEDE') {
@@ -2911,9 +2946,139 @@ export function aplicarRespuestaPropuestaAgenda(
   }
 }
 
+export interface ValidacionDireccionHorarioResult {
+  direccionReconocidaEnCABA: boolean;
+  barrioInferido: string | null;
+  barrioDifiereDelActual: boolean;
+  advertenciaDireccion?: string;
+  advertenciasHorario: string[];
+  sugerenciaAlternativa?: string;
+}
+
 /**
- * Parsea un archivo o feed iCal (.ics) de Google Calendar y extrae con máxima precisión
- * todos los eventos dentro de la ventana operativa (desde 1 día atrás hasta 14 días adelante),
- * incluyendo soporte de eventos recurrentes semanales/diarios (RRULE) y conversión exacta a hora de Buenos Aires.
+ * Valida en vivo cuando se ingresa o modifica una dirección o un horario en un contacto:
+ * 1) Verifica si la dirección pertenece a CABA e infiere su barrio real.
+ * 2) Verifica si el día y horario ingresados se superponen con algún evento de Google Calendar
+ *    o con la visita de otro vecino agendado ese mismo día, contemplando los tiempos reales de traslado.
  */
+export function validarDireccionYHorarioContacto(
+  contact: { id: string; nombre: string; barrio: string; lat?: number; lng?: number },
+  calleOCruceInput: string,
+  comentarioInput: string,
+  todosLosContactos: Contact[] = [],
+  calendarEvents: CalendarEventItem[] = [],
+  profile: VoiceProfile = DEFAULT_VOICE_PROFILE,
+  ahoraMs: number = Date.now()
+): ValidacionDireccionHorarioResult {
+  const dirEfectiva = (calleOCruceInput || '').trim() || extraerCalleOCruce(comentarioInput || '');
+  const direccionReconocidaEnCABA = dirEfectiva ? esDireccionReconocidaEnCABA(dirEfectiva) : true;
+  const barrioInferido = dirEfectiva
+    ? inferirBarrioDesdeDireccionOComentario(dirEfectiva, `${dirEfectiva} ${comentarioInput || ''}`)
+    : null;
+  const barrioActual = (contact.barrio || 'Palermo').trim();
+  const barrioDifiereDelActual = Boolean(
+    barrioInferido && barrioInferido.toLowerCase() !== barrioActual.toLowerCase()
+  );
+
+  let advertenciaDireccion: string | undefined;
+  if (dirEfectiva && !direccionReconocidaEnCABA) {
+    advertenciaDireccion = `⚠️ La dirección "${dirEfectiva}" no se reconoce como calle/altura o esquina válida de CABA (o pertenece a Provincia/GBA). Verificala o usá "Sin DNI CABA" si vive fuera de Capital.`;
+  } else if (barrioDifiereDelActual && barrioInferido) {
+    advertenciaDireccion = `📍 Según la dirección "${dirEfectiva}", el barrio real en CABA es ${barrioInferido} (actualmente figura ${barrioActual}). Se actualizará automáticamente al guardar.`;
+  }
+
+  const advertenciasHorario: string[] = [];
+  let sugerenciaAlternativa: string | undefined;
+
+  const textoCombinado = `${dirEfectiva ? `(${dirEfectiva}) ` : ''}${comentarioInput || ''}`.trim();
+  const disp = analizarDisponibilidadColumnaG(textoCombinado);
+  const fechas = extraerFechasMencionadas(textoCombinado);
+  const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
+  const fechaEval = fechas[0] || (disp.horaPuntualPactada ? hoyBA.ddmm : undefined);
+
+  const barrioGeo = barrioInferido || barrioActual || 'Palermo';
+  const geo = dirEfectiva
+    ? geocodificarContactoLocal(dirEfectiva, barrioGeo, contact.id)
+    : { lat: contact.lat || -34.588, lng: contact.lng || -58.425, exacta: false };
+
+  const minIni = disp.horaPuntualPactada
+    ? horaAMinutosDelDia(disp.horaPuntualPactada)
+    : disp.minInicioVentana;
+  const minFin = disp.horaPuntualPactada
+    ? horaAMinutosDelDia(disp.horaPuntualPactada) + 10
+    : disp.minFinVentana;
+
+  if (fechaEval && minIni !== undefined && minFin !== undefined && !disp.esVentanaAmplia) {
+    // 1. Chequear contra eventos de Google Calendar de esa fecha
+    const eventosVigentes = filtrarEventosCalendarVigentes(calendarEvents, ahoraMs);
+    for (const ev of eventosVigentes) {
+      if (ev.fecha && ev.fecha !== fechaEval) continue;
+      const evIni = horaAMinutosDelDia(ev.startTime);
+      const evFin = horaAMinutosDelDia(ev.endTime);
+      const esVirt = esEventoVirtualCalendar(ev);
+      const geoEv = geocodificarEventoCalendar(ev, profile);
+      const tr = esVirt
+        ? { minutos: 0, modo: 'WALKING' as const }
+        : calcularMinutosTrasladoCABA(geo.lat, geo.lng, geoEv.lat, geoEv.lng);
+      const margen = esVirt ? 5 : tr.minutos;
+
+      if (minIni < evFin + margen && minFin + margen > evIni) {
+        const horaLibreSugerida = sumarMinutosAHora(ev.endTime, margen + 5);
+        advertenciasHorario.push(
+          `⚠️ Superposición con tu evento de Google Calendar "${ev.summary}" (${ev.startTime}-${ev.endTime} hs el ${fechaEval}${
+            esVirt ? '' : `, contemplando ~${tr.minutos} min de traslado`
+          }).`
+        );
+        sugerenciaAlternativa = `Sugerencia: coordinar a partir de las ${horaLibreSugerida} hs o proponer el Café HUB del circuito.`;
+      }
+    }
+
+    // 2. Chequear contra otros vecinos agendados el mismo día
+    for (const otro of todosLosContactos) {
+      if (otro.id === contact.id || otro.adhirio === 'Sí' || otro.situacion === 'DESCARTADO_NO_CABA') {
+        continue;
+      }
+      const fechaOtro = resolverFechaObjetivoContacto(otro, ahoraMs) || otro.fechasMencionadas[0];
+      if (fechaOtro !== fechaEval) continue;
+      const dispOtro = analizarDisponibilidadColumnaG(otro.comentario);
+      if (dispOtro.esVentanaAmplia) continue;
+      const otroIni = dispOtro.horaPuntualPactada
+        ? horaAMinutosDelDia(dispOtro.horaPuntualPactada)
+        : dispOtro.minInicioVentana;
+      if (otroIni === undefined) continue;
+      const otroFin = dispOtro.horaPuntualPactada
+        ? otroIni + 10
+        : dispOtro.minFinVentana ?? otroIni + 10;
+
+      const trVecino = calcularMinutosTrasladoCABA(geo.lat, geo.lng, otro.lat, otro.lng);
+      if (minIni < otroFin + trVecino.minutos && minFin + trVecino.minutos > otroIni) {
+        const horaPostOtro = sumarMinutosAHora(
+          sumarMinutosAHora('00:00', otroFin),
+          trVecino.minutos + 5
+        );
+        advertenciasHorario.push(
+          `⚠️ Choque o tiempo insuficiente de traslado (~${trVecino.minutos} min) con la visita de #${otro.id} ${otro.nombreCompletoCorregido} (${sumarMinutosAHora('00:00', otroIni)} hs en ${otro.calleOCruce || otro.barrio}).`
+        );
+        if (!sugerenciaAlternativa) {
+          const cafeCercano = buscarCafeHubMasCercano(geo.lat, geo.lng);
+          sugerenciaAlternativa = `Alternativa óptima: pasar por ${
+            dirEfectiva || barrioGeo
+          } a las ${horaPostOtro} hs${
+            cafeCercano ? ` o convocar a ambos en ${cafeCercano.nombre} (${cafeCercano.direccion.split(',')[0]})` : ''
+          }.`;
+        }
+      }
+    }
+  }
+
+  return {
+    direccionReconocidaEnCABA,
+    barrioInferido,
+    barrioDifiereDelActual,
+    advertenciaDireccion,
+    advertenciasHorario,
+    sugerenciaAlternativa,
+  };
+}
+
 

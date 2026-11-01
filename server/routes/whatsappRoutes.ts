@@ -55,15 +55,15 @@ whatsappRouter.post('/send-one', async (req: Request, res: Response) => {
   }
 });
 
-// 5. Iniciar cola automatizada de envíos
+// 5. Iniciar cola automatizada de envíos (con soporte de bucle diario cada 24h)
 whatsappRouter.post('/queue/start', async (req: Request, res: Response) => {
   try {
-    const { items, config, appsScriptUrl } = req.body;
+    const { items, config, appsScriptUrl, autoLoop24h = true } = req.body;
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ ok: false, error: 'Se requiere un array "items" no vacío.' });
     }
 
-    const result = await whatsappService.startQueue(items, config, appsScriptUrl);
+    const result = await whatsappService.startQueue(items, config, appsScriptUrl, Boolean(autoLoop24h));
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message || String(err) });
@@ -88,24 +88,21 @@ whatsappRouter.post('/queue/stop', (req: Request, res: Response) => {
   res.json(result);
 });
 
-// 9. Detectar navegador en el sistema
-whatsappRouter.get('/detect-chrome', async (_req: Request, res: Response) => {
+// 9. Forzar liberación de locks de Chromium / reinicio de sesión
+whatsappRouter.post('/reset-session', async (req: Request, res: Response) => {
   try {
-    const { findBrowserExecutable } = await import('../services/whatsappService');
-    const browser = await findBrowserExecutable();
-    res.json({ ok: true, browser });
+    const result = await whatsappService.resetSession();
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message || String(err) });
   }
 });
 
-// 10. Guardar ruta personalizada de Chrome
-whatsappRouter.post('/set-chrome-path', async (req: Request, res: Response) => {
+// 10. Sincronizar chats recientes de WhatsApp Web con las fichas de SQLite
+whatsappRouter.post('/sync-chats', async (req: Request, res: Response) => {
   try {
-    const { setSetting } = await import('../repositories/settingsRepository');
-    const { path: chromePath } = req.body;
-    setSetting('customChromePath', (chromePath || '').trim());
-    res.json({ ok: true });
+    const result = await whatsappService.syncRecentChatsWithDatabase();
+    res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message || String(err) });
   }

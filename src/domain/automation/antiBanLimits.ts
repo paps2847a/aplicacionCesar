@@ -13,7 +13,10 @@ import { DEFAULT_VOICE_PROFILE } from '../../data/estatusPopurriData';
 import { esCeldaSinNombre, extraerPrimerNombre } from '../contacts/nameCorrection';
 import { normalizarTelefonoWA } from '../contacts/phoneUtils';
 import { obtenerPartesFechaHoraBA } from '../calendar/availability';
-import { corregirPelonesDiaSemanaEnTexto } from '../messaging/greetingsAndTone';
+import {
+  aplicarReglaSaludoMismoDia,
+  corregirPelonesDiaSemanaEnTexto,
+} from '../messaging/greetingsAndTone';
 import { obtenerEtiquetaEstadoFlujo, tieneNuevaInformacionEnColumnaG } from '../contacts/contactStatus';
 import { generarMensajeContextual } from '../messaging/messageTemplates';
 import { sincronizarBarrioConDireccionComentario } from '../geo/cabaLocations';
@@ -279,13 +282,14 @@ export function limpiarErroresFalsosRestriccionWA(
 ): { actualizados: RawContactRow[]; limpiadosCount: number } {
   let limpiadosCount = 0;
   const regexErrorFalso =
-    /\[(?:Intento auto fallido|Reintentar envío WA)[^\]]*\]/gi;
+    /\[(?:Intento auto fallido|Reintentar envío WA)[^\]]*\]|(?:\s*[—·|-]\s*)?(?:El número no existe en WhatsApp|No existe en WhatsApp)\s*\(Detectado auto[^)]*\)/gi;
   const actualizados = rows.map((r) => {
     const com = r.comentario || '';
     const etq = r.estadoFlujoEtiqueta || '';
     if (
       /\[(?:Intento auto fallido|Reintentar envío WA)[^\]]*\]/i.test(com) ||
-      /Reintentar envío/i.test(etq)
+      /Reintentar envío/i.test(etq) ||
+      /(?:El número no existe en WhatsApp|No existe en WhatsApp)\s*\(Detectado auto/i.test(com)
     ) {
       limpiadosCount++;
       const limpio = com.replace(regexErrorFalso, '').trim();
@@ -294,6 +298,7 @@ export function limpiarErroresFalsosRestriccionWA(
       return {
         ...r,
         rsp: 'Nuevo' as const,
+        adhirio: 'Pendiente' as const,
         primerContactoEnviado: false,
         comentario: limpio,
         estadoFlujo: estado,
@@ -381,6 +386,8 @@ export function generarColaEnvioAutomaticoPrimerContacto(
   const soloNumerosArgentina = configPartial?.soloNumerosArgentina ?? true;
   const usarVariabilidadIAGemini = configPartial?.usarVariabilidadIAGemini ?? true;
   const barrioFiltro = configPartial?.barrioFiltro || 'Todos';
+  const estadoFiltro = configPartial?.estadoFiltro || 'TODOS';
+  const plantillaPersonalizada = (configPartial?.plantillaPersonalizada || '').trim();
   const modoCola: ModoColaAutomatizacionWA = configPartial?.modoCola || 'PRIMER_CONTACTO';
 
   const elegiblesBase = contacts.filter((c) => {
@@ -388,6 +395,21 @@ export function generarColaEnvioAutomaticoPrimerContacto(
     if (!telNorm || telNorm.length < 8) return false;
     if (barrioFiltro !== 'Todos' && c.barrio !== barrioFiltro) return false;
     if (soloNumerosArgentina && !telNorm.startsWith('54')) return false;
+
+    if (estadoFiltro && estadoFiltro !== 'TODOS') {
+      if (estadoFiltro === 'ALERTA_VENCIDOS') {
+        return Boolean(c.alertaVencido?.activa);
+      }
+      if (estadoFiltro === 'SIN_RSP_48H') {
+        return Boolean(c.esSinRsp48h);
+      }
+      return c.estadoFlujo === estadoFiltro;
+    }
+
+    if (modoCola === 'DISENADOR_PERSONALIZADO') {
+      if (c.estadoFlujo === 'DESCARTADO_O_BAJA' || c.adhirio === 'No') return false;
+      return true;
+    }
 
     if (modoCola === 'RECORDATORIO_MANIANA_HOY') {
       if (c.adhirio === 'Sí' || c.adhirio === 'No') return false;
@@ -403,6 +425,7 @@ export function generarColaEnvioAutomaticoPrimerContacto(
       if (c.situacion === 'DESCARTADO_NO_CABA' || c.estadoFlujo === 'DESCARTADO_O_BAJA') return false;
       return (
         c.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+        c.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
         c.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
         c.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
         Boolean(c.seguimiento48h?.aplica)
@@ -411,6 +434,7 @@ export function generarColaEnvioAutomaticoPrimerContacto(
 
     if (modoCola === 'AGRADECIMIENTO_POST_FIRMA') {
       if (c.adhirio !== 'Sí') return false;
+      if (c.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') return false;
       return !/agradec|gracias enviada/i.test(c.comentario || '');
     }
 
@@ -467,24 +491,44 @@ export function generarColaEnvioAutomaticoPrimerContacto(
     let saludoUsadoCola = '';
     let varianteIndiceCola = (idx % 8) + 1;
 
-    if (modoCola === 'RECORDATORIO_MANIANA_HOY') {
-      const gen = generarMensajeContextual(c, profile, 'recordatorio_maniana_encuentro');
+    if (modoCola === 'DISENADOR_PERSONALIZADO' && plantillaPersonalizada) {
+      const vocativo = c.primerNombre || 'vecino/a';
+      const promotor = `${profile.nombrePromotor} ${profile.apellidoPromotor}`.trim();
+      const basePlantilla = limpiarUrlsDePrimerMensaje(
+        plantillaPersonalizada
+          .replace(/\{nombre\}/gi, vocativo)
+          .replace(/\{vocativo\}/gi, vocativo)
+          .replace(/\{barrio\}/gi, c.barrio || 'CABA')
+          .replace(/\{direccion\}/gi, c.calleOCruce || c.barrio || 'CABA')
+          .replace(/\{promotor\}/gi, promotor)
+      );
+      textoMensajeCola = aplicarReglaSaludoMismoDia(basePlantilla, c, 'AUTO_MISMO_DIA');
+      saludoUsadoCola = 'Plantilla Personalizada (Diseñador)';
+    } else if (modoCola === 'RECORDATORIO_MANIANA_HOY') {
+      const gen = generarMensajeContextual(c, profile, 'recordatorio_maniana_encuentro', {
+        modoSaludo: 'AUTO_MISMO_DIA',
+      });
       textoMensajeCola = gen.texto;
       saludoUsadoCola = 'Recordatorio Mañana (Conversación activa)';
     } else if (modoCola === 'SEGUIMIENTO_24H_48H_BAJA') {
       const plantillaSeg: TipoPlantillaWA =
-        (c.intentos || 0) >= 2 && c.rsp === 'No'
+        c.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
+        ((c.intentos || 0) >= 2 && c.rsp === 'No')
           ? 'baja_amable_sin_respuesta'
           : c.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP'
           ? 'seguimiento_sin_respuesta'
           : c.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' && /\[Propuesta/i.test(c.comentario || '')
           ? 'seguimiento_24h_falta_confirmar'
           : 'seguimiento_24h_falta_dato';
-      const gen = generarMensajeContextual(c, profile, plantillaSeg);
+      const gen = generarMensajeContextual(c, profile, plantillaSeg, {
+        modoSaludo: 'AUTO_MISMO_DIA',
+      });
       textoMensajeCola = gen.texto;
       saludoUsadoCola = gen.asunto;
     } else if (modoCola === 'AGRADECIMIENTO_POST_FIRMA') {
-      const gen = generarMensajeContextual(c, profile, 'agradecimiento_post_firma');
+      const gen = generarMensajeContextual(c, profile, 'agradecimiento_post_firma', {
+        modoSaludo: 'AUTO_MISMO_DIA',
+      });
       textoMensajeCola = gen.texto;
       saludoUsadoCola = 'Agradecimiento Post-Adhesión';
     } else {
@@ -555,9 +599,12 @@ export function generarColaEnvioAutomaticoPrimerContacto(
       soloNumerosArgentina,
       usarVariabilidadIAGemini,
       barrioFiltro,
+      estadoFiltro,
+      plantillaPersonalizada: plantillaPersonalizada || undefined,
       modoCola,
     },
     totalElegiblesEnBase: elegibles.length,
+    totalElegiblesEnPadron: elegibles.length,
     items,
     estadoCampana: 'LISTA_PARA_EJECUTAR',
   };
@@ -571,8 +618,7 @@ export function aplicarResultadoEnvioAutoAContacto(
   raw: RawContactRow,
   resultado: ResultadoEnvioAuto,
   detalle?: string,
-  fechaHoraISO?: string,
-  modoCola?: ModoColaAutomatizacionWA
+  fechaHoraISO?: string
 ): RawContactRow {
   const ahora = fechaHoraISO ? new Date(fechaHoraISO) : new Date();
   const hoyBA = obtenerPartesFechaHoraBA(ahora.getTime());
@@ -589,62 +635,41 @@ export function aplicarResultadoEnvioAutoAContacto(
       : resultado;
 
   if (resultadoEfectivo === 'ENVIADO_OK') {
-    let nextEstado: EstadoFlujo = '1ER_MSJ_ENVIADO_SIN_RSP';
-    let nextAdhirio: 'Sí' | 'No' | 'Pendiente' = raw.adhirio === 'Sí' ? 'Sí' : 'Pendiente';
-    let nextRsp: 'Sí' | 'No' | 'Nuevo' =
-      raw.rsp === 'Sí' && tieneNuevaInformacionEnColumnaG(comentarioSinFallosPrevios) ? 'Sí' : 'No';
-    let notaAuto = `[1er msj auto enviado ${selloFecha}]`;
-
-    if (modoCola === 'RECORDATORIO_MANIANA_HOY' || /recordatorio|en camino/i.test(detalle || '')) {
-      nextEstado = 'RECORDATORIO_DIA_ENVIADO';
-      nextRsp = 'Sí';
-      notaAuto = `[Recordatorio auto enviado ${selloFecha}]`;
-    } else if (modoCola === 'AGRADECIMIENTO_POST_FIRMA' || /agradecimiento/i.test(detalle || '')) {
-      nextEstado = 'YA_ADHIRIO_FIRMA_OK';
-      nextAdhirio = 'Sí';
-      nextRsp = 'Sí';
-      notaAuto = `[Agradecimiento post-firma enviado ${selloFecha}]`;
-    } else if (/café hub/i.test(detalle || '')) {
-      nextEstado = 'PREFIERE_CAFE_HUB_O_SEDE';
-      notaAuto = `[Convocatoria Café Hub enviada ${selloFecha}]`;
-    } else if (modoCola === 'SEGUIMIENTO_24H_48H_BAJA' || /cambio de chip/i.test(detalle || '')) {
-      nextEstado = 'RESPONDIO_FALTA_DNI_O_ZONA';
-      nextRsp = 'Sí';
-      notaAuto = `[Validación DNI/Zona enviada ${selloFecha}]`;
-    } else if (raw.estadoFlujo === 'ENCUENTRO_CONFIRMADO' || raw.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO') {
-      nextEstado = raw.estadoFlujo;
-      nextRsp = 'Sí';
-      notaAuto = `[Mensaje auto enviado ${selloFecha}]`;
-    } else if (raw.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') {
-      nextEstado = 'YA_ADHIRIO_FIRMA_OK';
-      nextAdhirio = 'Sí';
-      nextRsp = 'Sí';
-      notaAuto = `[Mensaje auto enviado ${selloFecha}]`;
-    }
-
-    const nuevoComentario = comentarioSinFallosPrevios.includes(notaAuto)
-      ? comentarioSinFallosPrevios
-      : comentarioSinFallosPrevios
-      ? `${comentarioSinFallosPrevios} ${notaAuto}`
-      : notaAuto;
+    const estadosAvanzados: EstadoFlujo[] = [
+      'ENCUENTRO_CONFIRMADO',
+      'RECORDATORIO_DIA_ENVIADO',
+      'PASO_DATOS_FALTA_CONFIRMAR',
+      'PREFIERE_CAFE_HUB_O_SEDE',
+      'RESPONDIO_FALTA_DNI_O_ZONA',
+      'PIDIO_MAS_INFO_ENVIADA',
+      'PENDIENTE_RETIRO_FICHAS',
+      'YA_ADHIRIO_FIRMA_OK',
+    ];
+    const estadoSiguiente: EstadoFlujo =
+      raw.estadoFlujo === 'ENCUENTRO_CONFIRMADO'
+        ? 'RECORDATORIO_DIA_ENVIADO'
+        : raw.estadoFlujo && estadosAvanzados.includes(raw.estadoFlujo)
+        ? raw.estadoFlujo
+        : '1ER_MSJ_ENVIADO_SIN_RSP';
 
     return sincronizarBarrioConDireccionComentario({
       ...raw,
-      rsp: nextRsp,
-      adhirio: nextAdhirio,
+      rsp: raw.rsp === 'Sí' ? 'Sí' : 'No',
+      adhirio: raw.adhirio === 'Sí' ? 'Sí' : 'Pendiente',
       primerContactoEnviado: true,
-      fechaPrimerContacto: raw.fechaPrimerContacto || ahora.toISOString().slice(0, 10),
-      ultimoContacto: ahora.toISOString().slice(0, 10),
+      fechaPrimerContacto: raw.fechaPrimerContacto || hoyBA.isoDate,
+      ultimoContacto: hoyBA.isoDate,
+      ultimoMensajeCorteEnviadoAt: ahora.toISOString(),
       intentos: Math.max(1, (raw.intentos || 0) + 1),
-      estadoFlujo: nextEstado,
-      estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(nextEstado),
-      comentario: nuevoComentario,
+      estadoFlujo: estadoSiguiente,
+      estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estadoSiguiente),
+      comentario: comentarioSinFallosPrevios,
       actualizadoEnAppAt: ahora.toISOString(),
     });
   }
 
   if (resultadoEfectivo === 'NUMERO_INEXISTENTE') {
-    const notaInexistente = `No existe en WhatsApp (Detectado auto ${selloFecha})`;
+    const notaInexistente = `El número no existe en WhatsApp · No existe en WhatsApp (Detectado auto ${selloFecha})`;
     const nuevoComentario = comentarioSinFallosPrevios.toLowerCase().includes('no existe en whatsapp')
       ? comentarioSinFallosPrevios
       : comentarioSinFallosPrevios
@@ -665,18 +690,24 @@ export function aplicarResultadoEnvioAutoAContacto(
   }
 
   if (resultadoEfectivo === 'ERROR_ENVIO' || resultadoEfectivo === 'SESION_RESTRINGIDA_ABORTAR') {
+    // Regla estricta: si el mensaje falló por error de envío o de plataforma, NO se altera el estatus del candidato
+    // para que quede elegible para reintento manteniendo su estado real en la ficha.
     const sinNom = esCeldaSinNombre(raw.nombre);
     const estadoInicial: EstadoFlujo = sinNom
       ? 'FALTA_NOMBRE_Y_APELLIDO'
       : 'SIN_CONTACTAR_1ER_MSJ';
+    const estadoPreservado: EstadoFlujo =
+      raw.estadoFlujo && raw.estadoFlujo !== 'DESCARTADO_O_BAJA'
+        ? raw.estadoFlujo
+        : estadoInicial;
 
     return sincronizarBarrioConDireccionComentario({
       ...raw,
-      rsp: 'Nuevo',
-      adhirio: 'Pendiente',
-      primerContactoEnviado: false,
-      estadoFlujo: estadoInicial,
-      estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estadoInicial),
+      rsp: raw.rsp && raw.rsp !== 'No' ? raw.rsp : 'Nuevo',
+      adhirio: raw.adhirio && raw.adhirio !== 'No' ? raw.adhirio : 'Pendiente',
+      primerContactoEnviado: Boolean(raw.primerContactoEnviado),
+      estadoFlujo: estadoPreservado,
+      estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estadoPreservado),
       comentario: comentarioSinFallosPrevios,
     });
   }
@@ -708,11 +739,11 @@ export function exportarReporteAuditoriaAutoWA(campaign: AutoFirstMessageCampaig
   const rows = campaign.items.map((item) => {
     const etiquetaEstado =
       item.resultado === 'ENVIADO_OK'
-        ? '2. 1er contacto enviado (Sin respuesta)'
+        ? '2. 1er Mensaje enviado · Sin respuesta'
         : item.resultado === 'NUMERO_INEXISTENTE'
-        ? '10. Descartado / Baja / N° inexistente'
+        ? '11. Baja / Número Inválido / Descartado'
         : item.resultado === 'ERROR_ENVIO'
-        ? '1. Sin contactar (Reintentar envío)'
+        ? '1. Nuevo · Sin 1er mensaje (Pendiente de reintento)'
         : 'En cola';
     return [
       item.orden,

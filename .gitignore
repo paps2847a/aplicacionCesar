@@ -10,9 +10,14 @@ data/wa_session/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/*.sqlite*
+data/agy_gsheets_env.json
+data/popurri_shared_state.json
 *.tmp
-popurri-app*
+Feedbacks/
+Past versions/
+.wwebjs_cache/
+*.mp4
+*.zip
 *.exe
-test-bundle.js
-
-\[POPURRÍ] Casa x Casa Mod.docx
+popurri-app*

@@ -282,12 +282,14 @@ export function parsearICalEventosCalendar(
   const events: CalendarEventItem[] = [];
   let inEvent = false;
   let currentProps: Record<string, { key: string; value: string }> = {};
+  let currentExdates: string[] = [];
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (line === 'BEGIN:VEVENT') {
       inEvent = true;
       currentProps = {};
+      currentExdates = [];
       continue;
     }
     if (line === 'END:VEVENT') {
@@ -314,26 +316,70 @@ export function parsearICalEventosCalendar(
       const uid = currentProps.UID?.value || `ics-${events.length + 1}`;
       const rrule = currentProps.RRULE?.value || '';
 
+      const exdateIsoSet = new Set<string>();
+      for (const rawEx of currentExdates) {
+        const parts = rawEx.split(',');
+        for (const p of parts) {
+          const parsedEx = parseIcsDateToMs('EXDATE', p.trim());
+          if (parsedEx) {
+            const exBA = obtenerPartesFechaHoraBA(parsedEx.ms);
+            exdateIsoSet.add(exBA.isoDate);
+          }
+        }
+      }
+
       const candidateStarts: number[] = [];
-      if (parsedStart.ms >= minWindowMs && parsedStart.ms <= maxWindowMs) {
-        candidateStarts.push(parsedStart.ms);
-      } else if (rrule && parsedStart.ms < maxWindowMs) {
-        // Proyectar eventos recurrentes semanales o diarios dentro de la ventana actual
+      if (!rrule) {
+        if (parsedStart.ms + durationMs >= ahoraMs && parsedStart.ms <= maxWindowMs) {
+          candidateStarts.push(parsedStart.ms);
+        }
+      } else if (parsedStart.ms <= maxWindowMs) {
+        // Proyectar eventos recurrentes respetando estrictamente COUNT, UNTIL, INTERVAL y antigüedad máxima
         const untilMatch = rrule.match(/UNTIL=(\d{8}(?:T\d{6}Z?)?)/i);
         const untilParsed = untilMatch ? parseIcsDateToMs('UNTIL', untilMatch[1]) : null;
+        const countMatch = rrule.match(/COUNT=(\d+)/i);
+        const countLimit = countMatch ? Math.max(1, Number(countMatch[1])) : null;
+        const intervalMatch = rrule.match(/INTERVAL=(\d+)/i);
+        const interval = intervalMatch ? Math.max(1, Number(intervalMatch[1])) : 1;
+
         const maxAllowedMs = untilParsed ? Math.min(maxWindowMs, untilParsed.ms) : maxWindowMs;
 
-        if (/FREQ=WEEKLY/i.test(rrule)) {
-          let cursor = parsedStart.ms;
-          while (cursor <= maxAllowedMs) {
-            if (cursor >= minWindowMs) candidateStarts.push(cursor);
-            cursor += 7 * 86400 * 1000;
-          }
-        } else if (/FREQ=DAILY/i.test(rrule)) {
-          let cursor = parsedStart.ms;
-          while (cursor <= maxAllowedMs) {
-            if (cursor >= minWindowMs) candidateStarts.push(cursor);
-            cursor += 86400 * 1000;
+        // Si un evento semanal/diario viejo no tiene UNTIL ni COUNT y empezó hace más de 180 días,
+        // no proyectar rutinas históricas de años anteriores (ej. 2017/2019) como si fueran de hoy.
+        const esSerieAntiguaSinFin =
+          !untilParsed && !countLimit && parsedStart.ms < ahoraMs - 180 * 86400 * 1000;
+
+        if (!esSerieAntiguaSinFin && maxAllowedMs >= minWindowMs) {
+          if (/FREQ=WEEKLY/i.test(rrule)) {
+            let cursor = parsedStart.ms;
+            let occurrences = 0;
+            const stepMs = interval * 7 * 86400 * 1000;
+            while (cursor <= maxAllowedMs) {
+              occurrences++;
+              if (countLimit !== null && occurrences > countLimit) break;
+              if (cursor + durationMs >= ahoraMs && cursor >= minWindowMs) {
+                const cursorBA = obtenerPartesFechaHoraBA(cursor);
+                if (!exdateIsoSet.has(cursorBA.isoDate)) {
+                  candidateStarts.push(cursor);
+                }
+              }
+              cursor += stepMs;
+            }
+          } else if (/FREQ=DAILY/i.test(rrule)) {
+            let cursor = parsedStart.ms;
+            let occurrences = 0;
+            const stepMs = interval * 86400 * 1000;
+            while (cursor <= maxAllowedMs) {
+              occurrences++;
+              if (countLimit !== null && occurrences > countLimit) break;
+              if (cursor + durationMs >= ahoraMs && cursor >= minWindowMs) {
+                const cursorBA = obtenerPartesFechaHoraBA(cursor);
+                if (!exdateIsoSet.has(cursorBA.isoDate)) {
+                  candidateStarts.push(cursor);
+                }
+              }
+              cursor += stepMs;
+            }
           }
         }
       }
@@ -365,15 +411,21 @@ export function parsearICalEventosCalendar(
         const fullKey = line.slice(0, colonIdx);
         const baseKey = fullKey.split(';')[0].toUpperCase();
         const val = line.slice(colonIdx + 1);
-        currentProps[baseKey] = { key: fullKey, value: val };
+        if (baseKey === 'EXDATE') {
+          currentExdates.push(val);
+        } else {
+          currentProps[baseKey] = { key: fullKey, value: val };
+        }
       }
     }
   }
 
-  return deduplicarEventosCalendar(events).sort((a, b) =>
+  return filtrarEventosCalendarVigentes(deduplicarEventosCalendar(events), ahoraMs).sort((a, b) =>
     (a.startIso || '').localeCompare(b.startIso || '')
   );
 }
+
+export const parsearICalEventos = parsearICalEventosCalendar;
 
 /**
  * Parsea texto libre copiado de Google Calendar (vista Agenda/Semana) y extrae eventos con fecha, hora y lugar.

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Users,
   MapPin,
@@ -6,26 +6,29 @@ import {
   Smartphone,
   Settings,
   RefreshCw,
-  Search,
-  Sparkles,
-  CheckCircle2,
-  AlertCircle,
-  FileSpreadsheet,
+  ClipboardCheck,
+  AlertTriangle,
+  Camera,
+  ArrowUp,
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
+import { PopurriBrandLogo } from './PopurriBrandLogo';
 
-export type ModernTabType = 'pipeline' | 'planificacion' | 'whatsapp' | 'configuracion' | 'mapa' | 'plan_hoy';
+export type ModernTabType = 'pipeline' | 'mapa' | 'plan_hoy' | 'whatsapp' | 'configuracion';
 
 interface ModernNavbarProps {
   activeTab: ModernTabType;
   onTabChange: (tab: ModernTabType) => void;
   totalContacts: number;
   signedCount: number;
+  overdueCount?: number;
   whatsAppStatus: string;
   isSyncingSheets: boolean;
   onSyncSheets: () => void;
-  onOpenAutoWAModal: () => void;
-  onOpenDailyClosureModal?: () => void;
+  onOpenAutoWAModal?: () => void;
+  onOpenCierreModal?: () => void;
+  onOpenDailyCloseModal?: () => void;
+  onOpenScannerModal?: () => void;
 }
 
 export const ModernNavbar: React.FC<ModernNavbarProps> = ({
@@ -33,98 +36,172 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
   onTabChange,
   totalContacts,
   signedCount,
+  overdueCount = 0,
   whatsAppStatus,
   isSyncingSheets,
   onSyncSheets,
-  onOpenAutoWAModal,
-  onOpenDailyClosureModal,
+  onOpenCierreModal,
+  onOpenDailyCloseModal,
+  onOpenScannerModal,
 }) => {
+  const handleCierre = onOpenCierreModal || onOpenDailyCloseModal;
+  const [isScrolledCompact, setIsScrolledCompact] = useState(false);
+  const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
+
+  useEffect(() => {
+    const getScrollY = () => {
+      const rootEl = document.getElementById('root');
+      return Math.max(
+        window.scrollY || 0,
+        window.pageYOffset || 0,
+        document.documentElement?.scrollTop || 0,
+        document.body?.scrollTop || 0,
+        rootEl?.scrollTop || 0
+      );
+    };
+    const handleScroll = () => {
+      const y = getScrollY();
+      setIsScrolledCompact(y > 75);
+      setShowScrollTopBtn(y > 200);
+    };
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+    document.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll, { capture: true } as EventListenerOptions);
+      document.removeEventListener('scroll', handleScroll, { capture: true } as EventListenerOptions);
+    };
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    document.documentElement?.scrollTo?.({ top: 0, behavior: 'smooth' });
+    document.body?.scrollTo?.({ top: 0, behavior: 'smooth' });
+    document.getElementById('root')?.scrollTo?.({ top: 0, behavior: 'smooth' });
+  };
+
   const tabs = [
     {
       id: 'pipeline' as ModernTabType,
       label: 'Candidatos',
+      shortLabel: 'Candidatos',
       icon: Users,
       badge: totalContacts,
     },
     {
-      id: 'planificacion' as ModernTabType,
-      label: 'Planificación & Campañas',
+      id: 'plan_hoy' as ModernTabType,
+      label: 'Planificador & Hoy',
+      shortLabel: 'Plan Hoy',
       icon: Calendar,
+      alertBadge: overdueCount > 0 ? overdueCount : undefined,
+    },
+    {
+      id: 'mapa' as ModernTabType,
+      label: 'Mapa & Cafés',
+      shortLabel: 'Mapa',
+      icon: MapPin,
     },
     {
       id: 'whatsapp' as ModernTabType,
       label: 'WhatsApp Web',
+      shortLabel: 'WhatsApp',
       icon: Smartphone,
       isWA: true,
     },
     {
       id: 'configuracion' as ModernTabType,
       label: 'Configuración',
+      shortLabel: 'Ajustes',
       icon: Settings,
     },
   ];
 
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
-      <div className="mx-auto flex h-16 sm:h-18 max-w-[1600px] w-full items-center justify-between px-4 sm:px-8 gap-4">
-        {/* Brand & Campaign Tag */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 text-white shadow-sm shadow-emerald-500/20">
-            <Sparkles className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-base font-black tracking-tight text-slate-900">
-                Popurrí
+    <>
+    <header
+      className={`relative z-30 w-full max-w-full border-b-2 border-[#323232] bg-[#F5F4F0]/95 backdrop-blur-md transition-opacity duration-150 ${
+        isScrolledCompact ? 'opacity-0 pointer-events-none invisible' : 'opacity-100'
+      }`}
+    >
+      <div className="mx-auto flex h-15 sm:h-18 max-w-[1600px] w-full min-w-0 items-center justify-between px-3 sm:px-6 gap-2 sm:gap-3">
+        {/* Identidad Gráfica Oficial POPURRÍ (Vector Sombra 3D Azul Petróleo Oscuro #25323A + Fondo Celeste #2988FF) */}
+        <div
+          onClick={() => onTabChange('pipeline')}
+          className="flex items-center gap-2.5 sm:gap-3 min-w-0 cursor-pointer group"
+        >
+          <PopurriBrandLogo className="h-6 sm:h-8 w-auto" />
+
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-display text-[11px] sm:text-xs font-bold uppercase tracking-wider text-[#323232] truncate">
+                Rutas CABA
               </span>
-              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-800 border border-emerald-200/60">
-                CABA
+              <span className="hidden xs:inline-block rounded-md bg-[#29B8FF] px-1.5 py-0.5 font-display text-[10px] font-bold text-[#323232] border border-[#323232]">
+                Regeneración
               </span>
             </div>
-            <p className="text-[11px] font-medium text-slate-500 whitespace-nowrap">
-              Gestión Territorial · <span className="font-bold text-emerald-700">{signedCount}</span> firmas oficiales
+            <p className="text-[10px] sm:text-[11px] font-semibold text-[#5A5955] truncate">
+              <span className="font-bold text-[#323232] bg-[#FFF06B] px-1 rounded border border-[#323232]/30">
+                {signedCount}
+              </span>{' '}
+              firmas · <span className="font-bold text-[#323232]">{totalContacts}</span> padrón
             </p>
           </div>
         </div>
 
-        {/* Central Segmented Tab Control */}
-        <nav className="hidden md:flex items-center gap-1 rounded-2xl bg-slate-100/90 p-1.5 border border-slate-200/60 shadow-inner shrink-0">
+        {/* Central Segmented Tab Control (Desktop lg+) */}
+        <nav className="hidden lg:flex items-center gap-1 rounded-xl bg-[#ECEAE2] p-1 border-2 border-[#323232] shadow-[2px_2px_0px_#323232] shrink-0">
           {tabs.map((tab) => {
             const Icon = tab.icon;
-            const isActive =
-              activeTab === tab.id ||
-              (tab.id === 'planificacion' && (activeTab === 'mapa' || activeTab === 'plan_hoy'));
+            const isActive = activeTab === tab.id;
 
             return (
               <button
                 key={tab.id}
                 onClick={() => onTabChange(tab.id)}
-                className={`relative flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold whitespace-nowrap transition-colors ${
-                  isActive ? 'text-slate-900' : 'text-slate-600 hover:text-slate-900'
+                className={`relative flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors font-display ${
+                  isActive
+                    ? 'text-[#323232]'
+                    : 'text-[#5A5955] hover:text-[#323232]'
                 }`}
               >
                 {isActive && (
                   <motion.div
                     layoutId="activeTabPill"
-                    className="absolute inset-0 rounded-xl bg-white shadow-sm border border-slate-200/60"
-                    transition={{ type: 'spring', bounce: 0.15, duration: 0.4 }}
+                    className="absolute inset-0 rounded-lg bg-[#FFF06B] border-2 border-[#323232] shadow-[2px_2px_0px_#323232]"
+                    transition={{ type: 'spring', bounce: 0.15, duration: 0.35 }}
                   />
                 )}
-                <span className="relative z-10 flex items-center gap-2">
-                  <Icon className="h-4 w-4 shrink-0" />
+                <span className="relative z-10 flex items-center gap-1.5">
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
                   <span>{tab.label}</span>
                   {tab.badge !== undefined && (
-                    <span className="rounded-full bg-slate-200/80 px-1.5 py-0.2 text-[10px] font-black text-slate-700">
+                    <span
+                      className={`rounded-md px-1.5 py-0.2 text-[10px] font-bold border ${
+                        isActive
+                          ? 'bg-[#323232] text-[#FFF06B] border-[#323232]'
+                          : 'bg-white text-[#323232] border-[#323232]/40'
+                      }`}
+                    >
                       {tab.badge}
+                    </span>
+                  )}
+                  {tab.alertBadge !== undefined && (
+                    <span
+                      title={`${tab.alertBadge} citas vencidas o por reprogramar`}
+                      className="inline-flex items-center gap-0.5 rounded-md bg-[#FF2C00] px-1.5 py-0.2 text-[10px] font-bold text-white border border-[#323232]"
+                    >
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      {tab.alertBadge}
                     </span>
                   )}
                   {tab.isWA && (
                     <span
-                      className={`h-2 w-2 rounded-full shrink-0 ${
+                      className={`h-2.5 w-2.5 rounded-full shrink-0 border border-[#323232] ${
                         whatsAppStatus === 'READY'
                           ? 'bg-emerald-500 animate-pulse'
                           : whatsAppStatus === 'QR_READY'
-                          ? 'bg-amber-500'
+                          ? 'bg-[#FFF06B]'
                           : 'bg-slate-300'
                       }`}
                     />
@@ -135,60 +212,200 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
           })}
         </nav>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          {onOpenDailyClosureModal && (
+        {/* Action Buttons (Compact & Mobile-Safe) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {onOpenScannerModal && (
             <button
-              onClick={onOpenDailyClosureModal}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-2xs whitespace-nowrap"
-              title="Cierre Diario de Jornada & Google Forms"
+              onClick={onOpenScannerModal}
+              className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold text-[#323232] hover:bg-[#ffe838] transition shadow-[2px_2px_0px_#323232] whitespace-nowrap font-display"
+              title="Escanear ficha física con IA y abrir Formulario de Carga de Adhesiones"
             >
-              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+              <Camera className="h-3.5 w-3.5 text-[#323232] shrink-0" />
+              <span className="hidden sm:inline">Escanear Ficha</span>
+              <span className="sm:hidden">Ficha</span>
+            </button>
+          )}
+          {handleCierre && (
+            <button
+              onClick={handleCierre}
+              className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#DFF4FF] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold text-[#323232] hover:bg-[#29B8FF] transition shadow-[2px_2px_0px_#323232] whitespace-nowrap font-display"
+              title="Ver resumen diario de actividad para Google Forms"
+            >
+              <ClipboardCheck className="h-3.5 w-3.5 text-[#323232] shrink-0" />
               <span className="hidden sm:inline">Cierre Forms</span>
+              <span className="sm:hidden">Cierre</span>
             </button>
           )}
 
           <button
             onClick={onSyncSheets}
             disabled={isSyncingSheets}
-            className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition shadow-2xs disabled:opacity-50 whitespace-nowrap"
-            title="Sincronizar con Google Sheets"
+            className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-white px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232] disabled:opacity-60 whitespace-nowrap font-display"
+            title="Sincronizar padrón en vivo desde Google Sheets (Pestaña Control)"
           >
-            <RefreshCw className={`h-3.5 w-3.5 text-slate-500 ${isSyncingSheets ? 'animate-spin' : ''}`} />
-            <span>Sheets</span>
-          </button>
-
-          <button
-            onClick={onOpenAutoWAModal}
-            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-black text-white hover:bg-emerald-500 transition shadow-sm shadow-emerald-600/20 whitespace-nowrap"
-          >
-            <Smartphone className="h-4 w-4" />
-            <span>Campaña WA</span>
+            <RefreshCw
+              className={`h-3.5 w-3.5 text-[#323232] shrink-0 ${
+                isSyncingSheets ? 'animate-spin text-[#29B8FF]' : ''
+              }`}
+            />
+            <span>{isSyncingSheets ? 'Sync...' : 'Sheets'}</span>
           </button>
         </div>
       </div>
 
-      {/* Mobile Tab Bar */}
-      <div className="flex md:hidden border-t border-slate-200/60 bg-white px-2 py-1 justify-around">
+      {/* Mobile / Tablet Tab Bar (100% visible 5-column layout without horizontal overflow) */}
+      <div className="grid grid-cols-5 lg:hidden border-t-2 border-[#323232] bg-[#ECEAE2] px-1.5 py-1 gap-1 w-full max-w-full">
         {tabs.map((tab) => {
           const Icon = tab.icon;
-          const isActive =
-            activeTab === tab.id ||
-            (tab.id === 'planificacion' && (activeTab === 'mapa' || activeTab === 'plan_hoy'));
+          const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`flex flex-col items-center py-1 px-3 text-[10px] font-bold ${
-                isActive ? 'text-emerald-700' : 'text-slate-500'
+              className={`relative flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 rounded-lg py-1.5 px-1 text-[10px] sm:text-[11px] font-bold font-display min-w-0 transition ${
+                isActive
+                  ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] shadow-[1px_1px_0px_#323232]'
+                  : 'text-[#5A5955] hover:text-[#323232]'
               }`}
             >
-              <Icon className="h-4 w-4 mb-0.5" />
-              {tab.label.split(' ')[0]}
+              <div className="relative flex items-center justify-center">
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                {tab.alertBadge !== undefined && (
+                  <span className="ml-1 rounded bg-[#FF2C00] px-1 text-[8px] font-bold text-white leading-tight">
+                    {tab.alertBadge}
+                  </span>
+                )}
+                {tab.isWA && (
+                  <span
+                    className={`ml-1 h-2 w-2 rounded-full border border-[#323232] ${
+                      whatsAppStatus === 'READY'
+                        ? 'bg-emerald-500'
+                        : whatsAppStatus === 'QR_READY'
+                        ? 'bg-[#FFF06B]'
+                        : 'bg-slate-300'
+                    }`}
+                  />
+                )}
+              </div>
+              <span className="truncate max-w-full">{tab.shortLabel}</span>
             </button>
           );
         })}
       </div>
     </header>
+
+    {/* Barra Superior Compacta al Hacer Scroll (Fuera del header con backdrop-blur para que position: fixed funcione siempre) */}
+    <AnimatePresence>
+      {isScrolledCompact && (
+        <motion.div
+          initial={{ y: -56, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: -56, opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          className="fixed top-0 left-0 right-0 z-50 border-b-2 border-[#323232] bg-[#F5F4F0]/95 backdrop-blur-md shadow-[0_3px_0px_#323232]"
+        >
+          <div className="mx-auto flex h-12 max-w-[1600px] w-full items-center justify-between px-2.5 sm:px-5 gap-2">
+            <div
+              onClick={() => {
+                onTabChange('pipeline');
+                scrollToTop();
+              }}
+              className="flex items-center gap-2 cursor-pointer shrink-0"
+              title="Ir a Candidatos y subir al inicio"
+            >
+              <PopurriBrandLogo className="h-5 sm:h-6 w-auto" />
+              <span className="hidden md:inline-block rounded bg-[#FFF06B] px-1.5 py-0.5 text-[10px] font-bold text-[#323232] border border-[#323232]/40">
+                {signedCount} firmas
+              </span>
+            </div>
+
+            {/* Selector compacto de los 5 paneles */}
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+              {tabs.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={`compact-${tab.id}`}
+                    type="button"
+                    onClick={() => onTabChange(tab.id)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold font-display whitespace-nowrap transition ${
+                      isActive
+                        ? 'bg-[#FFF06B] text-[#323232] border-2 border-[#323232] shadow-[1px_1px_0px_#323232]'
+                        : 'bg-[#ECEAE2]/80 text-[#5A5955] hover:text-[#323232] border border-transparent'
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="hidden sm:inline">{tab.label}</span>
+                    <span className="sm:hidden">{tab.shortLabel}</span>
+                    {tab.alertBadge !== undefined && (
+                      <span className="rounded bg-[#FF2C00] px-1 text-[9px] font-bold text-white">
+                        {tab.alertBadge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Acciones rápidas en la barra compacta */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {handleCierre && (
+                <button
+                  type="button"
+                  onClick={handleCierre}
+                  className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#DFF4FF] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#29B8FF]"
+                  title="Abrir Cierre Forms"
+                >
+                  <ClipboardCheck className="h-3 w-3" />
+                  <span className="hidden md:inline">Cierre</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onSyncSheets}
+                disabled={isSyncingSheets}
+                className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-white px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#ECEAE2]"
+                title="Sincronizar con Google Sheets"
+              >
+                <RefreshCw
+                  className={`h-3 w-3 ${isSyncingSheets ? 'animate-spin text-[#29B8FF]' : ''}`}
+                />
+                <span className="hidden sm:inline">Sheets</span>
+              </button>
+              <button
+                type="button"
+                onClick={scrollToTop}
+                className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#29B8FF] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#1aa8f0]"
+                title="Subir al inicio de la página"
+              >
+                <ArrowUp className="h-3 w-3" />
+                <span className="hidden md:inline">Arriba</span>
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+
+    {/* Botón Flotante en Esquina Inferior Derecha para Volver al Inicio Automáticamente */}
+    <AnimatePresence>
+      {showScrollTopBtn && (
+        <motion.button
+          type="button"
+          initial={{ opacity: 0, scale: 0.8, y: 12 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.8, y: 12 }}
+          transition={{ duration: 0.18 }}
+          onClick={scrollToTop}
+          title="Volver al inicio"
+          aria-label="Volver al inicio"
+          className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-2xl border-2 border-[#323232] bg-[#FFF06B] text-[#323232] shadow-[3px_3px_0px_#323232] hover:bg-[#29B8FF] active:translate-y-0.5 transition-colors cursor-pointer"
+        >
+          <ArrowUp className="h-5 w-5 stroke-[2.75]" />
+        </motion.button>
+      )}
+    </AnimatePresence>
+    </>
   );
 };

@@ -23,6 +23,9 @@ interface ContactRowDb {
   referidos_caba_ya_enviado: number;
   ultimo_mensaje_corte_enviado_at: string | null;
   alerta_vencido_oculta_fecha: string | null;
+  calle_o_cruce: string | null;
+  vocativo_override: string | null;
+  fecha_adhesion: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -31,6 +34,8 @@ function mapDbToContact(row: ContactRowDb): RawContactRow {
   return {
     id: row.id,
     nombre: row.nombre || '',
+    vocativoOverride: row.vocativo_override || undefined,
+    calleOCruce: row.calle_o_cruce || undefined,
     barrio: row.barrio || '',
     telRaw: row.tel_raw || '',
     tel: row.tel_norm || (row.tel_raw ? String(row.tel_raw).replace(/\D+/g, '') : undefined),
@@ -44,6 +49,7 @@ function mapDbToContact(row: ContactRowDb): RawContactRow {
     intentos: row.intentos || 0,
     primerContactoEnviado: Boolean(row.primer_contacto_enviado),
     fechaPrimerContacto: row.fecha_primer_contacto || undefined,
+    fechaAdhesion: row.fecha_adhesion || undefined,
     estadoFlujo: (row.estado_flujo as any) || undefined,
     estadoFlujoEtiqueta: row.estado_flujo_etiqueta || undefined,
     actualizadoEnAppAt: row.actualizado_en_app_at || undefined,
@@ -123,13 +129,15 @@ export function upsertContact(c: RawContactRow): RawContactRow {
       en_sheets, fecha_agregado, ultimo_contacto, intentos, primer_contacto_enviado,
       fecha_primer_contacto, estado_flujo, estado_flujo_etiqueta,
       actualizado_en_app_at, referidos_caba_ya_enviado,
-      ultimo_mensaje_corte_enviado_at, alerta_vencido_oculta_fecha, updated_at
+      ultimo_mensaje_corte_enviado_at, alerta_vencido_oculta_fecha,
+      calle_o_cruce, vocativo_override, fecha_adhesion, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?,
-      ?, ?, datetime('now')
+      ?, ?,
+      ?, ?, ?, datetime('now')
     )
     ON CONFLICT(id) DO UPDATE SET
       nombre = excluded.nombre,
@@ -152,6 +160,9 @@ export function upsertContact(c: RawContactRow): RawContactRow {
       referidos_caba_ya_enviado = excluded.referidos_caba_ya_enviado,
       ultimo_mensaje_corte_enviado_at = COALESCE(excluded.ultimo_mensaje_corte_enviado_at, contacts.ultimo_mensaje_corte_enviado_at),
       alerta_vencido_oculta_fecha = COALESCE(excluded.alerta_vencido_oculta_fecha, contacts.alerta_vencido_oculta_fecha),
+      calle_o_cruce = COALESCE(excluded.calle_o_cruce, contacts.calle_o_cruce),
+      vocativo_override = COALESCE(excluded.vocativo_override, contacts.vocativo_override),
+      fecha_adhesion = COALESCE(excluded.fecha_adhesion, contacts.fecha_adhesion),
       updated_at = datetime('now')
   `);
 
@@ -173,10 +184,13 @@ export function upsertContact(c: RawContactRow): RawContactRow {
     c.fechaPrimerContacto || null,
     c.estadoFlujo || null,
     c.estadoFlujoEtiqueta || null,
-    c.actualizadoEnAppAt || new Date().toISOString(),
+    c.actualizadoEnAppAt || null,
     c.referidosCabaYaEnviado ? 1 : 0,
     c.ultimoMensajeCorteEnviadoAt || null,
-    c.alertaVencidoOcultaFecha || null
+    c.alertaVencidoOcultaFecha || null,
+    c.calleOCruce ?? '',
+    c.vocativoOverride ?? '',
+    c.fechaAdhesion || null
   );
 
   return getContactById(id)!;

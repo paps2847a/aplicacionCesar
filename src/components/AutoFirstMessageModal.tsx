@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bot,
@@ -29,6 +29,7 @@ import {
   AutoFirstMessageConfig,
   AutoFirstMessageQueueItem,
   Contact,
+  EstadoFlujo,
   ModoColaAutomatizacionWA,
   NivelWarmupWA,
   ResultadoEnvioAuto,
@@ -69,6 +70,7 @@ interface AutoFirstMessageModalProps {
   ) => void;
   onCleanFalseErrors?: () => void;
   initialModoCola?: ModoColaAutomatizacionWA;
+  inlineMode?: boolean;
 }
 
 export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
@@ -83,6 +85,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
   onApplyBatchResults,
   onCleanFalseErrors,
   initialModoCola = 'PRIMER_CONTACTO',
+  inlineMode = false,
 }) => {
   const [activeTab, setActiveTab] = useState<
     'config_cola' | 'vista_cola' | 'whatsapp_web_directo' | 'monitor_resultados'
@@ -110,6 +113,9 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
       usarVariabilidadIAGemini: true,
       barrioFiltro: 'Todos',
       modoCola: initialModoCola,
+      estadoFiltro: 'TODOS',
+      plantillaPersonalizada:
+        '¡Hola {nombre}! Soy {promotor} de Popurrí en {barrio}. Te escribo cortito para coordinar la firma de la ficha de adhesión en estos días. ¿Por qué calle o esquina de {barrio} te queda cómodo y en qué horario solés estar?',
     };
   });
 
@@ -132,8 +138,10 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
   const [pollingActive, setPollingActive] = useState(true);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [expandedItemOrder, setExpandedItemOrder] = useState<number | null>(1);
+  const appliedReportSignaturesRef = useRef<Set<string>>(new Set());
 
-  // Mantener la cola sincronizada cuando se actualiza la lista de contactos o se abre el modal
+  // Mantener la cola sincronizada cuando se actualiza la lista de contactos o se abre el modal,
+  // preservando siempre los ítems ya procesados o compensados para evitar saltos en el contador de tanda.
   useEffect(() => {
     setCampaign((prev) => {
       const recienCalculada = generarColaEnvioAutomaticoPrimerContacto(
@@ -142,28 +150,19 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
         voiceProfile
       );
       if (prev.items.length === 0) return recienCalculada;
-      const mapaResultadosPrevios = new Map(
-        prev.items
-          .filter((it) => it.resultado && it.resultado !== 'PENDIENTE')
-          .map((it) => [String(it.contactId), it])
-      );
-      if (mapaResultadosPrevios.size === 0) {
-        return recienCalculada;
+      const tieneProgresoOCompensados =
+        prev.items.length > recienCalculada.items.length ||
+        prev.items.some((it) => it.resultado && it.resultado !== 'PENDIENTE');
+      if (tieneProgresoOCompensados) {
+        if (prev.totalElegiblesEnBase === recienCalculada.totalElegiblesEnBase) {
+          return prev;
+        }
+        return {
+          ...prev,
+          totalElegiblesEnBase: recienCalculada.totalElegiblesEnBase,
+        };
       }
-      return {
-        ...recienCalculada,
-        items: recienCalculada.items.map((it) => {
-          const prevIt = mapaResultadosPrevios.get(String(it.contactId));
-          return prevIt
-            ? {
-                ...it,
-                resultado: prevIt.resultado,
-                detalleResultado: prevIt.detalleResultado,
-                fechaHoraResultadoISO: prevIt.fechaHoraResultadoISO,
-              }
-            : it;
-        }),
-      };
+      return recienCalculada;
     });
   }, [contacts, isOpen]);
 
@@ -238,39 +237,89 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
     const primeroTxt = nuevaCamp.items[0]
       ? ` · Inicia con #${nuevaCamp.items[0].contactId} ${nuevaCamp.items[0].nombre}`
       : '';
-    const totalEleg = nuevaCamp.totalElegiblesEnBase ?? nuevaCamp.totalElegiblesEnPadron ?? nuevaCamp.items.length;
     setStatusNotice(
-      `🎲 Nuevo cupo anti-bloqueo sorteado: ${nuevoCupo} primeros mensajes (de ${totalEleg} elegibles sin 1er contacto)${primeroTxt}.`
+      `🎲 Nuevo cupo anti-bloqueo sorteado: ${nuevoCupo} mensajes (de ${nuevaCamp.totalElegiblesEnBase} elegibles en la etapa actual)${primeroTxt}.`
     );
   };
 
-  // Polling ligero contra /api/auto-wa/status para recibir reportes en vivo desde el script Python
+  // Polling unificado contra /api/whatsapp/status (whatsapp-web.js nativo) y /api/auto-wa/status (script Python)
   useEffect(() => {
     if (!isOpen || !pollingActive) return;
-    const timer = setInterval(async () => {
+    const pollBothStatuses = async () => {
       try {
-        const res = await fetch('/api/auto-wa/status');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (Array.isArray(data.reports) && data.reports.length > 0) {
-          const nuevosImpactos: {
-            contactId: string;
-            telefonoNorm: string;
-            resultado: ResultadoEnvioAuto;
-            detalleResultado: string;
-            fechaHoraResultadoISO?: string;
-          }[] = [];
+        const [waRes, pyRes] = await Promise.allSettled([
+          fetch('/api/whatsapp/status'),
+          fetch('/api/auto-wa/status'),
+        ]);
 
-          setCampaign((prev) => {
-            let huboCambio = false;
-            const nextItems = prev.items.map((item) => {
-              const rep = data.reports.find(
-                (r: { contactId?: string; telefonoNorm?: string }) =>
-                  (r.contactId && String(r.contactId) === String(item.contactId)) ||
-                  (r.telefonoNorm && String(r.telefonoNorm) === String(item.telefonoNorm))
-              );
-              if (rep && rep.resultado !== item.resultado) {
-                huboCambio = true;
+        const combinedReports: {
+          contactId?: string;
+          telefonoNorm?: string;
+          resultado: ResultadoEnvioAuto;
+          detalleResultado?: string;
+          fechaHoraResultadoISO?: string;
+          sincronizadoSheets?: boolean;
+        }[] = [];
+        let compensatedFromWa: AutoFirstMessageQueueItem[] = [];
+
+        if (waRes.status === 'fulfilled' && waRes.value.ok) {
+          const waData = await waRes.value.json();
+          if (Array.isArray(waData?.itemResults)) {
+            combinedReports.push(...waData.itemResults);
+          }
+          if (Array.isArray(waData?.compensatedItems)) {
+            compensatedFromWa = waData.compensatedItems;
+          }
+        }
+
+        if (pyRes.status === 'fulfilled' && pyRes.value.ok) {
+          const pyData = await pyRes.value.json();
+          if (Array.isArray(pyData?.reports)) {
+            combinedReports.push(...pyData.reports);
+          }
+        }
+
+        if (combinedReports.length === 0 && compensatedFromWa.length === 0) return;
+
+        const nuevosImpactos: {
+          contactId: string;
+          telefonoNorm: string;
+          resultado: ResultadoEnvioAuto;
+          detalleResultado: string;
+          fechaHoraResultadoISO?: string;
+        }[] = [];
+
+        setCampaign((prev) => {
+          let huboCambio = false;
+          const existingIds = new Set(prev.items.map((it) => String(it.contactId)));
+          let mergedItems = [...prev.items];
+
+          // Incorporar automáticamente los contactos de compensación de cupo agregados por la cola
+          for (const comp of compensatedFromWa) {
+            if (comp && comp.contactId && !existingIds.has(String(comp.contactId))) {
+              existingIds.add(String(comp.contactId));
+              mergedItems.push({
+                ...comp,
+                orden: mergedItems.length + 1,
+              });
+              huboCambio = true;
+            }
+          }
+
+          const nextItems = mergedItems.map((item) => {
+            const itemLast8 = String(item.telefonoNorm || item.telRaw || '')
+              .replace(/\D/g, '')
+              .slice(-8);
+            const rep = combinedReports.find((r) => {
+              if (r.contactId && String(r.contactId) === String(item.contactId)) return true;
+              const repLast8 = String(r.telefonoNorm || '').replace(/\D/g, '').slice(-8);
+              return itemLast8.length === 8 && repLast8 === itemLast8;
+            });
+            if (rep && rep.resultado && rep.resultado !== item.resultado) {
+              huboCambio = true;
+              const sig = `${item.contactId}:${rep.resultado}:${rep.fechaHoraResultadoISO || ''}`;
+              if (!appliedReportSignaturesRef.current.has(sig)) {
+                appliedReportSignaturesRef.current.add(sig);
                 nuevosImpactos.push({
                   contactId: item.contactId,
                   telefonoNorm: item.telefonoNorm,
@@ -278,27 +327,31 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                   detalleResultado: rep.detalleResultado || '',
                   fechaHoraResultadoISO: rep.fechaHoraResultadoISO,
                 });
-                return {
-                  ...item,
-                  resultado: rep.resultado as ResultadoEnvioAuto,
-                  detalleResultado: rep.detalleResultado || item.detalleResultado,
-                  fechaHoraResultadoISO: rep.fechaHoraResultadoISO,
-                  sincronizadoSheets: Boolean(rep.sincronizadoSheets),
-                };
               }
-              return item;
-            });
-            return huboCambio ? { ...prev, items: nextItems } : prev;
+              return {
+                ...item,
+                resultado: rep.resultado,
+                detalleResultado: rep.detalleResultado || item.detalleResultado,
+                fechaHoraResultadoISO: rep.fechaHoraResultadoISO,
+                sincronizadoSheets: Boolean(rep.sincronizadoSheets),
+              };
+            }
+            return item;
           });
 
-          if (nuevosImpactos.length > 0) {
-            onApplyBatchResults(nuevosImpactos);
-          }
+          return huboCambio ? { ...prev, items: nextItems } : prev;
+        });
+
+        if (nuevosImpactos.length > 0) {
+          onApplyBatchResults(nuevosImpactos);
         }
       } catch {
         // Silencioso en polling
       }
-    }, 4000);
+    };
+
+    void pollBothStatuses();
+    const timer = setInterval(pollBothStatuses, 2500);
     return () => clearInterval(timer);
   }, [isOpen, pollingActive, onApplyBatchResults]);
 
@@ -578,41 +631,55 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-2 sm:p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-2xl">
-        {/* Header Sereno y Luminoso */}
-        <div className="flex items-center justify-between border-b border-slate-200/80 bg-white px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-700 text-white shadow-sm shadow-emerald-500/20 shrink-0">
+    <div
+      className={
+        inlineMode
+          ? 'mx-auto w-full max-w-6xl min-w-0 overflow-x-hidden px-3 sm:px-6 py-4 sm:py-6'
+          : 'fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-2 sm:p-4 backdrop-blur-sm overflow-y-auto'
+      }
+    >
+      <div
+        className={
+          inlineMode
+            ? 'relative flex w-full min-w-0 flex-col overflow-hidden rounded-2xl border-2 border-[#323232] bg-white shadow-[4px_4px_0px_#323232]'
+            : 'relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-2xl'
+        }
+      >
+        {/* Header Unificado WhatsApp Web & Campañas Anti-Bloqueo */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-[#323232] bg-white px-4 sm:px-6 py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border-2 border-[#323232] bg-[#FFF06B] text-[#323232] shadow-[2px_2px_0px_#323232] shrink-0">
               <Smartphone className="h-5 w-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black tracking-tight text-slate-900">
-                  Campaña de Automatización WhatsApp
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-black tracking-tight text-[#323232] font-display">
+                  WhatsApp Web &amp; Campañas Automáticas Anti-Bloqueo
                 </h2>
-                <span className="rounded-full bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">
+                <span className="rounded-lg bg-emerald-100 border border-[#323232] px-2.5 py-0.5 text-[11px] font-bold text-emerald-950">
                   Tope seguro &lt; 45 msjs/día
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium">
-                Voz de César · Variabilidad Spintax e IA · Pausas humanas de café · 0 bloqueos
+              <p className="text-xs text-[#5A5955] font-medium">
+                Centro unificado: Configuración de Campaña (Etapas 1 a 5) · Cola de Envío · Consola QR WhatsApp Web en Vivo · Auditoría
               </p>
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="rounded-xl border border-slate-200 bg-white p-2 text-slate-400 hover:text-slate-800 hover:bg-slate-50 transition shadow-2xs"
-            title="Cerrar modal"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {!inlineMode && (
+            <button
+              onClick={onClose}
+              className="rounded-xl border-2 border-[#323232] bg-white p-2 text-[#323232] hover:bg-[#FF2C00] hover:text-white transition"
+              title="Cerrar modal"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
         {/* Selector de Etapa de la Campaña */}
-        <div className="border-b border-slate-200/80 bg-slate-50/70 px-6 py-2.5 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] font-black uppercase tracking-wider text-slate-400 mr-1">
+        <div className="border-b border-slate-200/80 bg-[#F5F4F0] px-3 sm:px-6 py-2.5 flex flex-wrap lg:flex-nowrap items-center gap-1.5 overflow-x-auto">
+          <span className="text-[11px] font-black uppercase tracking-wider text-[#5A5955] mr-1 shrink-0">
             Etapa:
           </span>
           {(
@@ -633,6 +700,10 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                 id: 'AGRADECIMIENTO_POST_FIRMA',
                 label: '4. Agradecimientos Post-Firma',
               },
+              {
+                id: 'DISENADOR_PERSONALIZADO',
+                label: '5. 🎨 Campaña Libre',
+              },
             ] as { id: ModoColaAutomatizacionWA; label: string }[]
           ).map((m) => {
             const isSelected = (config.modoCola || 'PRIMER_CONTACTO') === m.id;
@@ -641,7 +712,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                 key={m.id}
                 type="button"
                 onClick={() => handleRegenerarCola({ modoCola: m.id })}
-                className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                className={`rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs font-bold whitespace-nowrap shrink-0 transition-all ${
                   isSelected
                     ? 'bg-slate-900 text-white shadow-xs font-black'
                     : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200/70 hover:bg-slate-50'
@@ -654,50 +725,50 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
         </div>
 
         {/* Sub-navegación de Pestañas Serena */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-6 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-3 sm:px-6 py-2">
           <div className="flex flex-wrap gap-1.5">
             <button
               onClick={() => setActiveTab('config_cola')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
                 activeTab === 'config_cola'
-                  ? 'bg-slate-100 text-slate-900 font-black shadow-2xs'
-                  : 'text-slate-500 hover:text-slate-800'
+                  ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Clock className="h-3.5 w-3.5 text-slate-400" />
+              <Clock className="h-3.5 w-3.5" />
               <span>1. Ajustes Anti-Bloqueo</span>
             </button>
 
             <button
               onClick={() => setActiveTab('vista_cola')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
                 activeTab === 'vista_cola'
-                  ? 'bg-slate-100 text-slate-900 font-black shadow-2xs'
-                  : 'text-slate-500 hover:text-slate-800'
+                  ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Users className="h-3.5 w-3.5 text-slate-400" />
+              <Users className="h-3.5 w-3.5" />
               <span>2. Cola de Contactos ({campaign.items.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('whatsapp_web_directo')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
                 activeTab === 'whatsapp_web_directo'
-                  ? 'bg-emerald-50 text-emerald-900 border border-emerald-200 font-black shadow-2xs'
-                  : 'text-slate-500 hover:text-emerald-700'
+                  ? 'bg-emerald-100 text-emerald-950 border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
+                  : 'text-slate-600 hover:text-emerald-800'
               }`}
             >
-              <Smartphone className="h-3.5 w-3.5 text-emerald-600" />
-              <span>3. ⚡ WhatsApp Web Directo</span>
+              <Smartphone className="h-3.5 w-3.5 text-emerald-700" />
+              <span>3. ⚡ Consola QR &amp; WhatsApp Web Directo</span>
             </button>
 
             <button
               onClick={() => setActiveTab('monitor_resultados')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
                 activeTab === 'monitor_resultados'
-                  ? 'bg-slate-100 text-slate-900 font-black shadow-2xs'
-                  : 'text-slate-500 hover:text-slate-800'
+                  ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
@@ -708,17 +779,17 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={() => setActiveTab('whatsapp_web_directo')}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-black text-white shadow-xs hover:bg-emerald-500 transition"
+              className="inline-flex items-center gap-2 rounded-xl border-2 border-[#323232] bg-emerald-500 px-3.5 py-1.5 text-xs font-black text-white shadow-[2px_2px_0px_#323232] hover:bg-emerald-600 transition"
             >
               <Smartphone className="h-3.5 w-3.5" />
-              <span>Ejecutar WhatsApp Web</span>
+              <span>Abrir Consola QR / Enviar</span>
             </button>
           </div>
         </div>
 
         {/* Banner de Aviso Dinámico */}
         {statusNotice && (
-          <div className="flex items-center justify-between bg-emerald-50 border-b border-emerald-200/80 px-6 py-2 text-xs font-medium text-emerald-900">
+          <div className="flex items-center justify-between bg-emerald-50 border-b border-emerald-200/80 px-4 sm:px-6 py-2 text-xs font-medium text-emerald-900">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
               <span>{statusNotice}</span>
@@ -733,7 +804,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
         )}
 
         {/* Contenido Principal Desplazable */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
+        <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 space-y-6 bg-[#F5F4F0]/60">
           {/* TAB 1: AJUSTES DE CAMPAÑA Y ANTI-BLOQUEO */}
           {activeTab === 'config_cola' && (
             <div className="space-y-5">
@@ -753,8 +824,90 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                   </div>
                 </div>
                 <div className="text-[11px] font-bold text-emerald-800 shrink-0">
-                  Elegibles en base: {campaign.totalElegiblesEnBase ?? campaign.totalElegiblesEnPadron ?? campaign.items.length} · En tanda hoy: {campaign.items.length} (&lt; 45)
+                  Elegibles en base: {campaign.totalElegiblesEnBase} · En tanda hoy: {campaign.items.length} (&lt; 45)
                 </div>
+              </div>
+
+              {/* Diseñador de Campaña Libre & Filtro por Estado */}
+              <div className="rounded-2xl border-2 border-[#323232] bg-[#FFF06B]/25 p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-black uppercase tracking-wider text-[#323232]">
+                      🎯 Filtro por Estado Específico &amp; Diseñador de Campaña
+                    </h4>
+                    <p className="text-[11px] text-[#323232]/75">
+                      Podés filtrar la cola automática para un estado puntual o redactar tu propia plantilla con variables dinámicas.
+                    </p>
+                  </div>
+                  <div className="min-w-[250px]">
+                    <select
+                      value={config.estadoFiltro || 'TODOS'}
+                      onChange={(e) =>
+                        handleRegenerarCola({
+                          estadoFiltro: e.target.value as EstadoFlujo | 'TODOS',
+                        })
+                      }
+                      className="w-full rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold text-[#323232]"
+                    >
+                      <option value="TODOS">Según Etapa seleccionada arriba (Automático)</option>
+                      <option value="SIN_CONTACTAR_1ER_MSJ">1. Nuevo · Sin 1er mensaje</option>
+                      <option value="FALTA_NOMBRE_Y_APELLIDO">1b. Nuevo · Falta Nombre</option>
+                      <option value="1ER_MSJ_ENVIADO_SIN_RSP">2. 1er Msj Enviado · Esperando respuesta</option>
+                      <option value="RESPONDIO_FALTA_DNI_O_ZONA">3. Respondió · Falta calle/esquina o día</option>
+                      <option value="PIDIO_MAS_INFO_ENVIADA">3b. Pidió más info (5 ejes enviados)</option>
+                      <option value="PREFIERE_CAFE_HUB_O_SEDE">3c. Prefiere Punto / Café / Sede</option>
+                      <option value="PASO_DATOS_FALTA_CONFIRMAR">4. Pasó dirección/horario · Falta confirmar</option>
+                      <option value="ENCUENTRO_CONFIRMADO">5. Encuentro Confirmado (En Ruta)</option>
+                      <option value="RECORDATORIO_DIA_ENVIADO">6. Recordatorio / En Camino Enviado</option>
+                      <option value="PENDIENTE_RETIRO_FICHAS">7. Llevó Fichas Extra · Pendiente Retiro</option>
+                      <option value="POSTERGO_SALUD_O_VIAJE">8. En Pausa (Viaje / Salud / Más adelante)</option>
+                      <option value="YA_ADHIRIO_FIRMA_OK">9. ✅ Ya Firmó · Adhesión Completada</option>
+                      <option value="SIN_DNI_CABA_PEDIR_REFERIDOS">10. Sin DNI en CABA · Pedir Referidos</option>
+                      <option value="DESCARTADO_O_BAJA">11. Baja / Número Inválido / Descartado</option>
+                      <option value="CITA_VENCIDA_REPROGRAMAR">⚠️ Cita Vencida / Reprogramar</option>
+                    </select>
+                  </div>
+                </div>
+
+                {(config.modoCola === 'DISENADOR_PERSONALIZADO' ||
+                  (config.estadoFiltro && config.estadoFiltro !== 'TODOS')) && (
+                  <div className="space-y-2 pt-2 border-t border-[#323232]/15">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-[11px] font-black text-[#323232]">
+                        Plantilla personalizada de campaña (usá variables para personalizar 1 a 1):
+                      </label>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {['{nombre}', '{barrio}', '{direccion}', '{promotor}'].map((token) => (
+                          <button
+                            key={token}
+                            type="button"
+                            onClick={() =>
+                              handleRegenerarCola({
+                                modoCola: 'DISENADOR_PERSONALIZADO',
+                                plantillaPersonalizada: `${config.plantillaPersonalizada || ''} ${token}`.trim(),
+                              })
+                            }
+                            className="px-2 py-0.5 rounded bg-white border border-[#323232] text-[10px] font-mono font-bold text-[#323232] hover:bg-[#FFF06B]"
+                          >
+                            + {token}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={config.plantillaPersonalizada || ''}
+                      onChange={(e) =>
+                        handleRegenerarCola({
+                          modoCola: 'DISENADOR_PERSONALIZADO',
+                          plantillaPersonalizada: e.target.value,
+                        })
+                      }
+                      placeholder="Escribí tu plantilla usando {nombre}, {barrio}, {direccion}, {promotor}..."
+                      className="w-full rounded-xl border-2 border-[#323232] bg-white p-2.5 text-xs text-[#323232] font-medium"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Controles de Configuración en 3 Tarjetas Blancas */}
@@ -1208,14 +1361,84 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleDescargarAuditoriaCSV}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-black text-white hover:bg-emerald-500 transition shadow-2xs"
-                >
-                  <FileSpreadsheet className="h-3.5 w-3.5" />
-                  Descargar CSV Auditoría
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {stats.errores > 0 && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const fallidos = campaign.items.filter((it) => it.resultado === 'ERROR_ENVIO');
+                        if (fallidos.length === 0) return;
+                        setCampaign((prev) => ({
+                          ...prev,
+                          items: prev.items.map((it) =>
+                            it.resultado === 'ERROR_ENVIO'
+                              ? { ...it, resultado: 'PENDIENTE', detalleResultado: 'Reintentando envío...' }
+                              : it
+                          ),
+                        }));
+                        try {
+                          await fetch('/api/whatsapp/queue/start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              items: fallidos,
+                              config,
+                              appsScriptUrl,
+                              autoLoop24h: false,
+                            }),
+                          });
+                          setStatusNotice(
+                            `🔄 Reintentando envío de ${fallidos.length} mensaje(s) fallido(s) en WhatsApp Web Directo...`
+                          );
+                          setActiveTab('whatsapp_web_directo');
+                        } catch {
+                          setStatusNotice('⚠️ No se pudo iniciar el reintento. Verificá que WhatsApp Web esté conectado.');
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 py-1.5 text-xs font-black text-white hover:bg-amber-500 transition shadow-2xs"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Reintentar Fallidos ({stats.errores})
+                    </button>
+                  )}
+
+                  {(stats.inexistentes > 0 || stats.errores > 0) && onCleanFalseErrors && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCleanFalseErrors();
+                        setCampaign((prev) => ({
+                          ...prev,
+                          items: prev.items.map((it) =>
+                            it.resultado === 'NUMERO_INEXISTENTE' || it.resultado === 'ERROR_ENVIO'
+                              ? {
+                                  ...it,
+                                  resultado: 'PENDIENTE',
+                                  detalleResultado: 'Restaurado a Pendiente para nueva verificación',
+                                }
+                              : it
+                          ),
+                        }));
+                        setStatusNotice(
+                          '🧹 Contactos restaurados a "1. Nuevo · Sin 1er mensaje" y listos en cola para verificar.'
+                        );
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-black text-slate-700 hover:bg-slate-50 transition shadow-2xs"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5 text-slate-600" />
+                      Revertir Inexistentes / Fallos a Pendiente
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleDescargarAuditoriaCSV}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-black text-white hover:bg-emerald-500 transition shadow-2xs"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    Descargar CSV Auditoría
+                  </button>
+                </div>
               </div>
 
               {/* Lista de Registros Auditados */}
@@ -1225,11 +1448,18 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                     key={`audit-${item.contactId}-${item.orden}`}
                     className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-2xl border border-slate-200/80 bg-white p-3.5 text-xs shadow-2xs"
                   >
-                    <div className="flex items-center gap-2.5">
-                      <span className="font-mono font-bold text-slate-400">#{item.orden}</span>
-                      <span className="font-black text-slate-900">#{item.contactId} · {item.nombre}</span>
-                      <span className="text-slate-400">({item.barrio})</span>
-                      <span className="font-mono text-slate-600">{item.telRaw}</span>
+                    <div className="space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <span className="font-mono font-bold text-slate-400">#{item.orden}</span>
+                        <span className="font-black text-slate-900">#{item.contactId} · {item.nombre}</span>
+                        <span className="text-slate-400">({item.barrio})</span>
+                        <span className="font-mono text-slate-600">{item.telRaw}</span>
+                      </div>
+                      {item.detalleResultado && (
+                        <p className="text-[11px] text-slate-500 pl-6">
+                          {item.detalleResultado}
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -1276,29 +1506,31 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200/80 bg-white px-6 py-3.5">
-          <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-[#323232] bg-white px-4 sm:px-6 py-3.5">
+          <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>
               Protección anti-bloqueo activa (&lt; 45 msjs/día) · {stats.enviadosOk} enviados con éxito
             </span>
           </div>
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
-            >
-              Cerrar
-            </button>
+            {!inlineMode && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+              >
+                Cerrar
+              </button>
+            )}
             {activeTab !== 'whatsapp_web_directo' && (
               <button
                 type="button"
                 onClick={() => setActiveTab('whatsapp_web_directo')}
-                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white hover:bg-emerald-500 transition shadow-sm shadow-emerald-600/20"
+                className="inline-flex items-center gap-2 rounded-xl border-2 border-[#323232] bg-emerald-500 px-4 py-2 text-xs font-black text-white hover:bg-emerald-600 transition shadow-[2px_2px_0px_#323232]"
               >
                 <Smartphone className="h-4 w-4" />
-                <span>Ejecutar WhatsApp Web</span>
+                <span>Ejecutar en WhatsApp Web Directo</span>
               </button>
             )}
           </div>

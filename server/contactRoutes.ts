@@ -18,6 +18,7 @@ import {
   getCalendarEvents,
   replaceCalendarEvents,
   upsertCalendarEvent,
+  deleteCalendarEvent,
 } from './repositories/calendarRepository';
 import {
   getSetting,
@@ -101,6 +102,19 @@ apiRouter.patch('/contacts/:id', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.put('/contacts/:id', (req: Request, res: Response) => {
+  try {
+    const updates = req.body as Partial<RawContactRow>;
+    const updated = updateContactFields(req.params.id, updates);
+    if (!updated) {
+      return res.status(404).json({ ok: false, error: 'Contacto no encontrado' });
+    }
+    res.json({ ok: true, contact: updated });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Eliminar un contacto
 apiRouter.delete('/contacts/:id', (req: Request, res: Response) => {
   try {
@@ -141,11 +155,21 @@ apiRouter.get('/control-envios', (req: Request, res: Response) => {
 
 apiRouter.post('/control-envios', (req: Request, res: Response) => {
   try {
-    if (Array.isArray(req.body)) {
-      bulkRecordEnvios(req.body);
-      return res.json({ ok: true, count: req.body.length });
+    const body = req.body;
+    if (Array.isArray(body)) {
+      const valid = body.filter((r: any) => r && r.idRegistro && r.contactId);
+      if (valid.length === 0) {
+        return res.status(400).json({ ok: false, error: 'Lista de registros vacía o inválida' });
+      }
+      bulkRecordEnvios(valid);
+      return res.json({ ok: true, count: valid.length });
     }
-    const registro = req.body as ControlEnvioRegistro;
+    if (body && Array.isArray(body.envios)) {
+      const valid = body.envios.filter((r: any) => r && r.idRegistro && r.contactId);
+      bulkRecordEnvios(valid);
+      return res.json({ ok: true, count: valid.length });
+    }
+    const registro = body as ControlEnvioRegistro;
     if (!registro || !registro.idRegistro || !registro.contactId) {
       return res.status(400).json({ ok: false, error: 'Registro de envío incompleto' });
     }
@@ -191,6 +215,19 @@ apiRouter.post('/calendar-events/replace', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.put('/calendar-events', (req: Request, res: Response) => {
+  try {
+    const { events } = req.body as { events: CalendarEventItem[] };
+    if (!Array.isArray(events)) {
+      return res.status(400).json({ ok: false, error: 'Se esperaba un array de eventos' });
+    }
+    replaceCalendarEvents(events, 'put');
+    res.json({ ok: true, count: events.length });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 apiRouter.post('/calendar-events', (req: Request, res: Response) => {
   try {
     const event = req.body as CalendarEventItem;
@@ -199,6 +236,15 @@ apiRouter.post('/calendar-events', (req: Request, res: Response) => {
     }
     upsertCalendarEvent(event);
     res.json({ ok: true, id: event.id });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+apiRouter.delete('/calendar-events/:id', (req: Request, res: Response) => {
+  try {
+    const deleted = deleteCalendarEvent(req.params.id);
+    res.json({ ok: true, deleted });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }

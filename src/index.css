@@ -1,33 +1,101 @@
 @import "tailwindcss";
 
+:root {
+  --popurri-bg: #F5F4F0;
+  --popurri-surface-alt: #ECEAE2;
+  --popurri-ink: #323232;
+  --popurri-ink-muted: #5A5955;
+  --popurri-yellow: #FFF06B;
+  --popurri-cyan: #29B8FF;
+  --popurri-cyan-soft: #DFF4FF;
+  --popurri-red: #FF2C00;
+  --popurri-coral: #F5817F;
+}
+
 @layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
     scroll-behavior: smooth;
-    background-color: #F7F6F0;
+    background-color: #F5F4F0;
+    font-family: 'Raleway', -apple-system, BlinkMacSystemFont, sans-serif;
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: clip;
   }
 
-  body {
-    overflow-x: hidden;
+  body, #root {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: clip;
     -webkit-tap-highlight-color: transparent;
-    background-color: #F7F6F0;
-    color: #262626;
+    background-color: #F5F4F0;
+    color: #323232;
+    font-family: 'Raleway', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Space Grotesk', sans-serif;
   }
 }
 
 /* Utilidades de Identidad Gráfica POPURRÍ */
 .popurri-highlight-blue {
-  background-color: #22ABFF;
+  background-color: #29B8FF;
   color: #ffffff;
   padding: 0.1rem 0.45rem;
   font-weight: 800;
+  font-family: 'Space Grotesk', sans-serif;
 }
 
 .popurri-highlight-yellow {
-  background-color: #FBF165;
-  color: #262626;
+  background-color: #FFF06B;
+  color: #323232;
   padding: 0.1rem 0.45rem;
   font-weight: 800;
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.popurri-card {
+  background-color: #FFFFFF;
+  border: 2px solid #323232;
+  box-shadow: 4px 4px 0px #323232;
+}
+
+.popurri-btn-yellow {
+  background-color: #FFF06B;
+  color: #323232;
+  border: 2px solid #323232;
+  box-shadow: 3px 3px 0px #323232;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+}
+.popurri-btn-yellow:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px #323232;
+}
+
+.popurri-btn-cyan {
+  background-color: #29B8FF;
+  color: #323232;
+  border: 2px solid #323232;
+  box-shadow: 3px 3px 0px #323232;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+}
+
+/* Wordmark 3 capas oficial POPURRÍ */
+.popurri-wordmark {
+  position: relative;
+  display: inline-block;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  user-select: none;
 }
 
 /* Utilidades responsivas para barras de navegación y tablas en mobile/desktop */
@@ -37,4 +105,87 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Pines expandibles del mapa interactivo de CABA */
+.popurri-exp-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  border: 2px solid #323232;
+  padding: 3px 6px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+  box-shadow: 2px 2px 0px #323232;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, padding 0.15s ease;
+  transform: translate(-50%, -50%);
+  user-select: none;
+}
+
+.popurri-exp-pin .popurri-exp-emoji,
+.popurri-exp-pin .popurri-pin-emoji {
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.popurri-exp-pin .popurri-exp-label,
+.popurri-exp-pin .popurri-pin-details {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+}
+
+.popurri-exp-pin:hover,
+.popurri-exp-pin.is-expanded {
+  padding: 4px 10px;
+  height: auto;
+  min-height: 30px;
+  box-shadow: 3px 3px 0px #323232;
+  z-index: 9999 !important;
+}
+
+.popurri-exp-pin:hover .popurri-exp-label,
+.popurri-exp-pin.is-expanded .popurri-exp-label,
+.popurri-exp-pin:hover .popurri-pin-details,
+.popurri-exp-pin.is-expanded .popurri-pin-details {
+  display: inline-flex;
+}
+
+.popurri-exp-pin .popurri-exp-arrow,
+.popurri-exp-pin .popurri-pin-arrow {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #323232;
+  color: #FFF06B;
+  font-size: 11px;
+  font-weight: 900;
+  margin-left: 5px;
+  flex-shrink: 0;
+}
+
+.popurri-exp-pin:hover .popurri-exp-arrow,
+.popurri-exp-pin.is-expanded .popurri-exp-arrow,
+.popurri-exp-pin:hover .popurri-pin-arrow,
+.popurri-exp-pin.is-expanded .popurri-pin-arrow {
+  display: inline-flex;
+}
+
+.popurri-exp-pin .popurri-exp-arrow:hover,
+.popurri-exp-pin .popurri-pin-arrow:hover {
+  background: #2988FF;
+  color: #ffffff;
 }

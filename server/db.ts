@@ -13,9 +13,7 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = fs.existsSync(path.resolve(__dirname, '../data'))
-  ? path.resolve(__dirname, '../data')
-  : path.resolve(process.cwd(), 'data');
+const DATA_DIR = path.resolve(__dirname, '../data');
 const DB_PATH = path.join(DATA_DIR, 'popurri.db');
 const LEGACY_JSON_PATH = path.join(DATA_DIR, 'popurri_shared_state.json');
 const TMP_LEGACY_JSON_PATH = path.join(os.tmpdir(), 'popurri_shared_state.json');
@@ -75,6 +73,9 @@ function initSchema(db: DatabaseSync): void {
       referidos_caba_ya_enviado INTEGER DEFAULT 0,
       ultimo_mensaje_corte_enviado_at TEXT,
       alerta_vencido_oculta_fecha TEXT,
+      calle_o_cruce TEXT DEFAULT '',
+      vocativo_override TEXT DEFAULT '',
+      fecha_adhesion TEXT DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -123,16 +124,19 @@ function initSchema(db: DatabaseSync): void {
       value TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
-
-    DELETE FROM calendar_events 
-    WHERE lower(summary) LIKE '%dentista%' 
-       OR lower(summary) LIKE '%reunión virtual%' 
-       OR lower(summary) LIKE '%reunion virtual%' 
-       OR lower(summary) LIKE '%almuerzo con frima%'
-       OR id LIKE '%dentista%' 
-       OR id LIKE '%reunion-virtual%'
-       OR id LIKE '%almuerzo-frima%';
   `);
+
+  for (const colSql of [
+    "ALTER TABLE contacts ADD COLUMN calle_o_cruce TEXT DEFAULT ''",
+    "ALTER TABLE contacts ADD COLUMN vocativo_override TEXT DEFAULT ''",
+    "ALTER TABLE contacts ADD COLUMN fecha_adhesion TEXT DEFAULT NULL",
+  ]) {
+    try {
+      db.exec(colSql);
+    } catch {
+      // Columna ya existe
+    }
+  }
 }
 
 function migrateFromLegacyJsonIfEmpty(db: DatabaseSync): void {
@@ -257,19 +261,6 @@ function migrateFromLegacyJsonIfEmpty(db: DatabaseSync): void {
 
       for (const ev of data.calendarEvents) {
         if (!ev.id) continue;
-        const sNorm = String(ev.summary || '').toLowerCase();
-        const idNorm = String(ev.id || '').toLowerCase();
-        if (
-          sNorm.includes('dentista') ||
-          sNorm.includes('reunión virtual') ||
-          sNorm.includes('reunion virtual') ||
-          sNorm.includes('almuerzo con frima') ||
-          idNorm.includes('dentista') ||
-          idNorm.includes('reunion-virtual') ||
-          idNorm.includes('almuerzo-frima')
-        ) {
-          continue;
-        }
         stmt.run(
           ev.id,
           ev.summary || 'Compromiso',

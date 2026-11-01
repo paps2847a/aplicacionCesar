@@ -16,7 +16,12 @@ import {
 import { extraerCalleOCruce } from '../geo/cabaLocations';
 import { generarMensajeContextual } from '../messaging/messageTemplates';
 import { DEFAULT_VOICE_PROFILE } from '../../data/estatusPopurriData';
-import { aplicarReglaSaludoMismoDia, yaSeHabloConContactoHoy } from '../messaging/greetingsAndTone';
+import {
+  aplicarReglaSaludoMismoDia,
+  esMovimientoDeHoy,
+  esTimestampDeHoyBA,
+  yaSeHabloConContactoHoy,
+} from '../messaging/greetingsAndTone';
 import { esContactoElegiblePrimerContactoAuto } from '../automation/antiBanLimits';
 
 export function calcularResumenKPIsPadron(contacts: Contact[]): ResumenKPIsPadron {
@@ -171,9 +176,17 @@ export function generarPanelTareasDiarias(
   controlEnvios: ControlEnvioRegistro[] = [],
   profile: VoiceProfile = DEFAULT_VOICE_PROFILE,
   ahoraMs: number = Date.now(),
-  modoSaludo: ModoSaludoMismoDia = 'AUTO_MISMO_DIA'
+  modoSaludo: ModoSaludoMismoDia = 'AUTO_MISMO_DIA',
+  excluidosCierreHoyIds?: Set<string> | string[]
 ): PanelTareasDiariasResultado {
   const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
+  const excluidosHoySet = new Set<string>(
+    Array.isArray(excluidosCierreHoyIds)
+      ? excluidosCierreHoyIds.map(String)
+      : excluidosCierreHoyIds
+      ? Array.from(excluidosCierreHoyIds).map(String)
+      : []
+  );
   const conteoPorEtapa: Record<EtapaProcesoTerritorial, number> = {
     ETAPA_1_PRIMER_CONTACTO: 0,
     ETAPA_2_VALIDAR_DNI_CABA: 0,
@@ -212,8 +225,15 @@ export function generarPanelTareasDiarias(
       : undefined;
 
     // ETAPA 7: Ya adhirió -> enviar agradecimiento post-firma si aún no se le agradeció
-    if (c.adhirio === 'Sí' || c.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') {
-      if (!/agradec|gracias enviada|\[agradecimiento/i.test(c.comentario || '')) {
+    if (
+      c.adhirio === 'Sí' ||
+      c.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+      c.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO'
+    ) {
+      if (
+        c.estadoFlujo !== 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' &&
+        !/agradec|gracias enviada|\[agradecimiento/i.test(c.comentario || '')
+      ) {
         conteoPorEtapa.ETAPA_7_AGRADECIMIENTO_POST_FIRMA++;
         const gen = generarMensajeContextual(c, profile, 'agradecimiento_post_firma', {
           modoSaludo,
@@ -317,8 +337,15 @@ export function generarPanelTareasDiarias(
     }
 
     // SEGUIMIENTO 48H SIN RESPUESTA O ÚLTIMO MENSAJE DE BAJA AMABLE
-    if (c.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' || c.rsp === 'No') {
-      const intentos = c.intentos || 1;
+    if (
+      c.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+      c.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
+      c.rsp === 'No'
+    ) {
+      const intentos =
+        c.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP'
+          ? Math.max(2, c.intentos || 2)
+          : c.intentos || 1;
       const supero48h =
         Boolean(c.seguimiento48h?.aplica) ||
         (horasDesdeUltimo !== undefined ? horasDesdeUltimo >= 48 : true);
@@ -538,51 +565,89 @@ export function generarPanelTareasDiarias(
 
   // CALCULAR RESUMEN DIARIO PARA GOOGLE FORMS + APP DE ADHESIONES + APP DE ESTATUS
   const idsContactadosHoy = new Set<string>();
+  const idsEnviadosHoyControl = new Set<string>();
   const mapaHoraPorContacto = new Map<string, string>();
+  const contactsById = new Map<string, Contact>(contacts.map((c) => [String(c.id), c]));
+
+  const tieneVisitaOFirmaDeFechaPasadaSinHoy = (comRaw: string): boolean => {
+    const com = comRaw || '';
+    if (!com || com.includes(hoyBA.ddmm)) return false;
+    const matches = Array.from(
+      com.matchAll(/\b(?:visita|firm[oó]|adhesi[oó]n|adhir[ií]o|retiro)\b[^0-9\n]{0,18}(\d{1,2})\/(\d{1,2})\b/gi)
+    );
+    if (matches.length === 0) return false;
+    return matches.every((m) => {
+      const ddmm = `${String(Number(m[1])).padStart(2, '0')}/${String(Number(m[2])).padStart(2, '0')}`;
+      return ddmm !== hoyBA.ddmm;
+    });
+  };
 
   for (const reg of controlEnvios) {
-    if (reg.fechaHora && reg.fechaHora.includes(hoyBA.ddmm)) {
-      idsContactadosHoy.add(String(reg.contactId));
-      mapaHoraPorContacto.set(String(reg.contactId), reg.fechaHora);
+    const cid = String(reg.contactId);
+    if (excluidosHoySet.has(cid)) continue;
+    if (reg.fechaHora && (reg.fechaHora.includes(hoyBA.ddmm) || reg.fechaHora.startsWith(hoyBA.isoDate))) {
+      const cTarget = contactsById.get(cid);
+      // Si el contacto fue revertido manualmente a "Nuevos sin contactar", no contarlo como hablado hoy
+      if (
+        cTarget &&
+        (cTarget.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+          cTarget.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO')
+      ) {
+        continue;
+      }
+      idsEnviadosHoyControl.add(cid);
+      idsContactadosHoy.add(cid);
+      mapaHoraPorContacto.set(cid, reg.fechaHora);
     }
   }
 
   for (const c of contacts) {
+    if (excluidosHoySet.has(String(c.id))) continue;
     if (
       c.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
-      c.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
-      c.rsp === 'Nuevo'
+      c.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
     ) {
       continue;
     }
-
-    if (yaSeHabloConContactoHoy(c, ahoraMs)) {
+    if (
+      tieneVisitaOFirmaDeFechaPasadaSinHoy(c.comentario || '') &&
+      !idsEnviadosHoyControl.has(String(c.id)) &&
+      !esTimestampDeHoyBA(c.fechaAdhesion, ahoraMs) &&
+      !esTimestampDeHoyBA(c.ultimoMensajeCorteEnviadoAt, ahoraMs)
+    ) {
+      continue;
+    }
+    if (esMovimientoDeHoy(c, ahoraMs)) {
       idsContactadosHoy.add(c.id);
       if (!mapaHoraPorContacto.has(c.id)) {
-        mapaHoraPorContacto.set(c.id, hoyBA.hhmm);
+        const msMod = c.actualizadoEnAppAt ? Date.parse(c.actualizadoEnAppAt) : NaN;
+        const horaDetectada = Number.isFinite(msMod)
+          ? obtenerPartesFechaHoraBA(msMod).hhmm
+          : hoyBA.hhmm;
+        mapaHoraPorContacto.set(c.id, horaDetectada);
       }
     }
   }
 
   const adhesionesTotales = contacts.filter((c) => c.adhirio === 'Sí');
   const adhesionesHoy = adhesionesTotales.filter((c) => {
-    const com = c.comentario || '';
-    const firmoHoy =
-      com.includes(`[Firmó el ${hoyBA.ddmm}`) ||
-      com.includes(`[Firma registrada el ${hoyBA.ddmm}`) ||
-      (c as any).fechaAdhesion === hoyBA.isoDate ||
-      (c as any).fechaAdhirio === hoyBA.isoDate;
-    if (firmoHoy) return true;
-
-    if (
-      c.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' &&
-      c.actualizadoEnAppAt &&
-      c.actualizadoEnAppAt.startsWith(hoyBA.isoDate)
-    ) {
-      if (/ya adhirió previamente|firmó antes|previa|anterior/i.test(com)) return false;
-      if (com.includes(hoyBA.ddmm) || idsContactadosHoy.has(c.id)) return true;
+    if (excluidosHoySet.has(String(c.id))) return false;
+    if (c.fechaAdhesion && esTimestampDeHoyBA(c.fechaAdhesion, ahoraMs)) {
+      return true;
     }
-    return false;
+    const com = c.comentario || '';
+    if (tieneVisitaOFirmaDeFechaPasadaSinHoy(com)) {
+      return false;
+    }
+    const firmoExplicitoHoy =
+      new RegExp(
+        `(?:firm[oó]|adhesi[oó]n|adhir[ií]o|modificado el)[^.\\n]*${hoyBA.ddmm.replace('/', '\\/')}`,
+        'i'
+      ).test(com) ||
+      ((c.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' || c.adhirio === 'Sí') &&
+        esTimestampDeHoyBA(c.actualizadoEnAppAt, ahoraMs));
+
+    return firmoExplicitoHoy;
   });
 
   const estatusPersonasHabladasHoy: EstatusHabladoHoyItem[] = [];
@@ -596,20 +661,32 @@ export function generarPanelTareasDiarias(
     'Baja / No contactar': 0,
   };
 
+  const idsAdhesionesHoy = new Set(adhesionesHoy.map((a) => a.id));
+
   for (const c of contacts) {
+    if (excluidosHoySet.has(String(c.id))) continue;
+    // Excluir estrictamente a quienes están en "Nuevos por Contactar" (como pruebas revertidas a Nuevos)
     if (
       c.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
-      c.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
-      c.rsp === 'Nuevo'
+      c.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
     ) {
       continue;
     }
-
+    if (
+      tieneVisitaOFirmaDeFechaPasadaSinHoy(c.comentario || '') &&
+      !idsEnviadosHoyControl.has(String(c.id)) &&
+      !idsAdhesionesHoy.has(c.id) &&
+      !esTimestampDeHoyBA(c.ultimoMensajeCorteEnviadoAt, ahoraMs)
+    ) {
+      continue;
+    }
     const tocadoHoy =
       idsContactadosHoy.has(c.id) ||
-      Boolean(c.actualizadoEnAppAt && c.actualizadoEnAppAt.startsWith(hoyBA.isoDate));
+      idsAdhesionesHoy.has(c.id) ||
+      esMovimientoDeHoy(c, ahoraMs);
     if (!tocadoHoy) continue;
 
+    idsContactadosHoy.add(c.id);
     const est = clasificarEstatusParaAppExterna(c);
     conteoPorEstatusHoy[est] = (conteoPorEstatusHoy[est] || 0) + 1;
     estatusPersonasHabladasHoy.push({
@@ -644,7 +721,7 @@ export function generarPanelTareasDiarias(
       personasContactadasHoy: idsContactadosHoy.size,
       adhesionesConseguidasHoy: adhesionesHoy.length,
       adhesionesTotalesAcumuladas: adhesionesTotales.length,
-      adhesionesHoyDetalle: (adhesionesHoy.length > 0 ? adhesionesHoy : adhesionesTotales.slice(0, 8)).map(
+      adhesionesHoyDetalle: adhesionesHoy.map(
         (c) => ({
           id: c.id,
           nombre: c.nombreCompletoCorregido || c.nombre,

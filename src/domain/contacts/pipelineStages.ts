@@ -1,4 +1,89 @@
 import type { Contact, EstadoFlujo } from '../../types';
+import { obtenerEtiquetaEstadoFlujo } from './contactStatus';
+export { obtenerEtiquetaEstadoFlujo };
+
+/**
+ * Normaliza cualquier texto eliminando tildes/diacríticos y convirtiendo a minúsculas
+ * para búsqueda universal (ej: "Laura Vaz" encuentra "Laura Vázquez").
+ */
+export function normalizarTextoBusqueda(str: string | undefined | null): string {
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Búsqueda universal insensible a tildes/mayúsculas en todos los campos de un contacto.
+ */
+export function coincideBusquedaUniversal(c: Contact, queryRaw: string): boolean {
+  const q = normalizarTextoBusqueda(queryRaw);
+  if (!q) return true;
+  const qSinHash = q.replace(/^#/, '').trim();
+  const qDigits = q.replace(/\D+/g, '');
+
+  const camposTexto = [
+    c.id,
+    `#${c.id}`,
+    c.nombre,
+    c.nombreCompletoCorregido,
+    c.primerNombre,
+    c.vocativoOverride,
+    c.barrio,
+    c.barrioOriginalSheet,
+    c.calleOCruce,
+    c.comentario,
+    c.tel,
+    c.telRaw,
+    c.telWA,
+    c.email,
+    c.estadoFlujo,
+    c.estadoFlujoEtiqueta,
+    c.situacion,
+    c.rsp,
+    c.adhirio,
+    c.fechaAdhesion,
+    ...(c.fechasMencionadas || []),
+  ];
+
+  const textoCombinado = camposTexto.map((val) => normalizarTextoBusqueda(val)).join(' ');
+  if (textoCombinado.includes(q) || (qSinHash.length > 0 && textoCombinado.includes(qSinHash))) {
+    return true;
+  }
+
+  const telDigits = [c.telWA, c.telRaw, c.tel].map((v) => String(v || '').replace(/\D+/g, '')).join(' ');
+  const idDigits = String(c.id || '').replace(/\D+/g, '');
+  const comDigits = String(c.comentario || '').replace(/\D+/g, '');
+
+  if (qDigits.length >= 2) {
+    if (
+      telDigits.includes(qDigits) ||
+      idDigits === qDigits ||
+      (qDigits.length >= 4 && comDigits.includes(qDigits))
+    ) {
+      return true;
+    }
+  }
+
+  // Búsqueda multi-palabra (ej: "laura palermo", "quintela 28", "felipe caballito")
+  const tokens = qSinHash.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1) {
+    const todosCoinciden = tokens.every((tok) => {
+      const tokClean = tok.replace(/^#/, '');
+      if (!tokClean) return true;
+      if (textoCombinado.includes(tokClean)) return true;
+      const tokDigits = tokClean.replace(/\D+/g, '');
+      if (tokDigits.length >= 2 && (telDigits.includes(tokDigits) || idDigits === tokDigits)) {
+        return true;
+      }
+      return false;
+    });
+    if (todosCoinciden) return true;
+  }
+
+  return false;
+}
 
 export type MacroStageKey =
   | 'nuevos'
@@ -123,31 +208,34 @@ export const MACRO_STAGES_ORDER: MacroStageKey[] = [
  * Clasifica a cualquier candidato/contacto de forma determinística en una de las 5 macro-etapas.
  */
 export function getMacroStageForContact(contact: Contact): MacroStageKey {
-  // 1. Descartados o bajas
+  // 1. Retiro de fichas extras pendientes (8. En espera de Retiro de Fichas (1 sem))
   if (
-    contact.situacion === 'DESCARTADO_NO_CABA' ||
+    contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+    contact.situacion === 'RETIRO_FICHAS'
+  ) {
+    return 'pausa';
+  }
+
+  // 2. Ya adhirió (9. ¡Ya Adhirió! (Ficha Firmada) / 9B. Adhirió + Agradecimiento Enviado)
+  if (
+    contact.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+    contact.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' ||
+    contact.adhirio === 'Sí'
+  ) {
+    return 'adheridos';
+  }
+
+  // 3. Descartados o bajas (10. Sin DNI CABA (Pedir Referidos) / 11. Baja / Número Inválido / Descartado)
+  if (
     contact.estadoFlujo === 'DESCARTADO_O_BAJA' ||
     contact.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS' ||
+    contact.situacion === 'DESCARTADO_NO_CABA' ||
     contact.esCerradoOArchivadoSinDniCaba
   ) {
     return 'descartados';
   }
 
-  // 2. Retiro de fichas pendiente (Logística pendiente de recolección de avales adicionales)
-  if (
-    contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
-    contact.situacion === 'RETIRO_FICHAS' ||
-    /x[123]|fichas\s+extra/i.test(contact.comentario || '')
-  ) {
-    return 'pausa';
-  }
-
-  // 3. Ya adhirió (Proceso concluido exitosamente sin tareas pendientes)
-  if (contact.adhirio === 'Sí' || contact.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') {
-    return 'adheridos';
-  }
-
-  // 4. Pausa temporal por salud o viaje
+  // 4. Pausa especial
   if (
     contact.estadoFlujo === 'POSTERGO_SALUD_O_VIAJE' ||
     contact.situacion === 'SITUACION_SALUD'
@@ -155,10 +243,30 @@ export function getMacroStageForContact(contact: Contact): MacroStageKey {
     return 'pausa';
   }
 
-  // 4. Agendados (Tienen fecha/horario y punto de encuentro)
+  // 5. Nuevos sin 1er mensaje (1. Nuevo · Sin 1er mensaje / 0. Falta Nombre y Apellido)
   if (
-    contact.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+    contact.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+    contact.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+    contact.situacion === 'NUEVO_SIN_PRIMER_MENSAJE'
+  ) {
+    return 'nuevos';
+  }
+
+  // 6. En Conversación & Filtro (2, 2B, 3, 4)
+  if (
+    contact.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+    contact.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
+    contact.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+    contact.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
+    contact.estadoFlujo === 'PIDIO_MAS_INFO_ENVIADA'
+  ) {
+    return 'conversacion';
+  }
+
+  // 7. Agendados / Visita o Café propuesto (5, 6, 7)
+  if (
     contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+    contact.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
     contact.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
     contact.situacion === 'VISITA_AGENDADA' ||
     contact.situacion === 'PREFIERE_PUNTO' ||
@@ -167,20 +275,11 @@ export function getMacroStageForContact(contact: Contact): MacroStageKey {
     return 'agendados';
   }
 
-  // 5. Conversación activa o seguimiento
-  if (
-    contact.primerContactoEnviado ||
-    contact.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
-    contact.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
-    contact.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
-    contact.estadoFlujo === 'PIDIO_MAS_INFO_ENVIADA' ||
-    contact.rsp === 'Sí' ||
-    contact.rsp === 'No'
-  ) {
+  // 8. Conversación activa por fallback
+  if (contact.primerContactoEnviado || contact.rsp === 'Sí' || contact.rsp === 'No') {
     return 'conversacion';
   }
 
-  // 6. Nuevo sin primer mensaje
   return 'nuevos';
 }
 
@@ -273,150 +372,4 @@ export function getRecommendedActionForContact(contact: Contact): {
         iconType: 'check',
       };
   }
-}
-
-/**
- * Matriz de Transiciones Inteligentes según el tipo de mensaje enviado por WhatsApp.
- * Evita retroceder estados de contactos agendados o adheridos y promueve el estado automáticamente.
- */
-export function inferirTransicionInteligenteWA(
-  c: {
-    estadoFlujo?: EstadoFlujo;
-    adhirio?: 'Sí' | 'No' | 'Pendiente';
-    rsp?: 'Sí' | 'No' | 'Nuevo';
-    comentario?: string;
-  },
-  message: string,
-  tipoPlantilla?: string
-): {
-  estadoFlujo: EstadoFlujo;
-  adhirio?: 'Sí' | 'No' | 'Pendiente';
-  rsp?: 'Sí' | 'No' | 'Nuevo';
-  primerContactoEnviado?: boolean;
-  recordatorioEnviado?: boolean;
-  etiquetaLog: string;
-} {
-  const effectiveTemplate = tipoPlantilla || (message && !message.includes(' ') ? message : undefined);
-  const msgLower = (message || '').toLowerCase();
-  const currentEst = c.estadoFlujo;
-
-  // 1. Agradecimiento Post-Firma
-  if (
-    effectiveTemplate === 'agradecimiento_post_firma' ||
-    msgLower.includes('agradecerte') ||
-    msgLower.includes('muchas gracias por haber sumado tu firma') ||
-    msgLower.includes('ficha firmada')
-  ) {
-    return {
-      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
-      adhirio: 'Sí',
-      rsp: 'Sí',
-      primerContactoEnviado: true,
-      etiquetaLog: 'Agradecimiento Post-Firma',
-    };
-  }
-
-  // 2. Sin DNI en CABA (pedir referidos) / Baja
-  if (
-    effectiveTemplate === 'sin_dni_caba' ||
-    effectiveTemplate === 'no_caba_referidos' ||
-    effectiveTemplate === 'baja_amable_sin_respuesta' ||
-    msgLower.includes('referidos') ||
-    msgLower.includes('no vivís en caba') ||
-    msgLower.includes('no te preocupes que no te escribimos más')
-  ) {
-    return {
-      estadoFlujo: 'SIN_DNI_CABA_PEDIR_REFERIDOS',
-      adhirio: 'No',
-      rsp: c.rsp || 'No',
-      primerContactoEnviado: true,
-      etiquetaLog: 'Sin DNI CABA / Referidos',
-    };
-  }
-
-  // 3. Recordatorio / En camino / En puerta / Confirmación de encuentro
-  if (
-    effectiveTemplate === 'confirmacion_visita' ||
-    effectiveTemplate === 'recordatorio_dia' ||
-    effectiveTemplate === 'recordatorio_maniana_encuentro' ||
-    effectiveTemplate === 'en_camino' ||
-    effectiveTemplate === 'en_puerta' ||
-    effectiveTemplate === 'llegando' ||
-    msgLower.includes('en camino') ||
-    msgLower.includes('en la puerta') ||
-    msgLower.includes('recordatorio') ||
-    msgLower.includes('te confirmo') ||
-    msgLower.includes('quedamos entonces') ||
-    msgLower.includes('agendamos entonces')
-  ) {
-    return {
-      estadoFlujo: currentEst === 'ENCUENTRO_CONFIRMADO' ? 'ENCUENTRO_CONFIRMADO' : 'RECORDATORIO_DIA_ENVIADO',
-      adhirio: c.adhirio || 'Pendiente',
-      rsp: 'Sí',
-      primerContactoEnviado: true,
-      recordatorioEnviado: true,
-      etiquetaLog: 'Recordatorio / En camino',
-    };
-  }
-
-  // 4. Disculpas / Reprogramar
-  if (
-    effectiveTemplate === 'disculpas_y_reprogramacion' ||
-    msgLower.includes('disculpas') ||
-    msgLower.includes('reprogramar') ||
-    msgLower.includes('no pude cumplir')
-  ) {
-    return {
-      estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
-      adhirio: c.adhirio || 'Pendiente',
-      rsp: 'Sí',
-      primerContactoEnviado: true,
-      etiquetaLog: 'Disculpa / Reprogramación',
-    };
-  }
-
-  // 5. Convocatoria a Café HUB / Punto
-  if (
-    effectiveTemplate === 'convocatoria_cafe_hub' ||
-    msgLower.includes('café') ||
-    msgLower.includes('punto de encuentro')
-  ) {
-    return {
-      estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE',
-      adhirio: c.adhirio || 'Pendiente',
-      rsp: c.rsp === 'Nuevo' ? 'No' : c.rsp,
-      primerContactoEnviado: true,
-      etiquetaLog: 'Invitación Café Hub',
-    };
-  }
-
-  // 6. Conservación de estados avanzados si no es ninguno de los anteriores
-  if (currentEst === 'ENCUENTRO_CONFIRMADO' || currentEst === 'RECORDATORIO_DIA_ENVIADO') {
-    return {
-      estadoFlujo: currentEst,
-      adhirio: c.adhirio || 'Pendiente',
-      rsp: 'Sí',
-      primerContactoEnviado: true,
-      etiquetaLog: 'Mensaje a Agendado',
-    };
-  }
-
-  if (currentEst === 'YA_ADHIRIO_FIRMA_OK') {
-    return {
-      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
-      adhirio: 'Sí',
-      rsp: 'Sí',
-      primerContactoEnviado: true,
-      etiquetaLog: 'Mensaje a Adherido',
-    };
-  }
-
-  // 7. Primer contacto por defecto
-  return {
-    estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
-    adhirio: c.adhirio || 'Pendiente',
-    rsp: c.rsp === 'Nuevo' ? 'No' : c.rsp,
-    primerContactoEnviado: true,
-    etiquetaLog: '1er mensaje enviado',
-  };
 }

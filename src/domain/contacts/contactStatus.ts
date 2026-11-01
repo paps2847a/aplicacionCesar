@@ -9,7 +9,7 @@ import {
   VoiceProfile,
 } from '../../types';
 import { DEFAULT_VOICE_PROFILE } from '../../data/estatusPopurriData';
-import { analizarYCorregirNombreCompleto } from './nameCorrection';
+import { analizarYCorregirNombreCompleto, esCeldaSinNombre } from './nameCorrection';
 import { esTelefonoValido, normalizarTelefonoWA } from './phoneUtils';
 import {
   extraerCalleOCruce,
@@ -116,95 +116,96 @@ export const ESTADOS_FLUJO_CATALOGO: {
 }[] = [
   {
     value: 'SIN_CONTACTAR_1ER_MSJ',
-    label: '1. Sin contactar (Enviar 1er mensaje)',
-    shortLabel: '1. Enviar 1er msj',
+    label: '1. Nuevo · Sin 1er mensaje',
+    shortLabel: '1. Nuevo · Sin 1er mensaje',
     colorClass: 'bg-amber-100 text-amber-950 border-amber-300',
   },
   {
     value: 'FALTA_NOMBRE_Y_APELLIDO',
-    label: '2. Teléfono sin nombre (Pedir nombre y apellido)',
-    shortLabel: '2. Pedir nombre y apellido',
+    label: '1b. Nuevo · Falta Nombre',
+    shortLabel: '1b. Nuevo · Falta Nombre',
     colorClass: 'bg-rose-100 text-rose-950 border-rose-300',
   },
   {
     value: '1ER_MSJ_ENVIADO_SIN_RSP',
-    label: '3. 1er mensaje enviado (Sin respuesta aún)',
-    shortLabel: '3. 1er msj enviado (Sin rsp)',
+    label: '2. 1er Msj Enviado · Esperando respuesta',
+    shortLabel: '2. 1er Msj Enviado · Esperando respuesta',
     colorClass: 'bg-slate-100 text-slate-800 border-slate-300',
   },
   {
     value: 'RESPONDIO_FALTA_DNI_O_ZONA',
-    label: '4. Respondió Sí — Falta corroborar DNI CABA / zona',
-    shortLabel: '4. Respondió Sí (Falta zona/DNI)',
+    label: '3. Respondió · Falta calle/esquina o día',
+    shortLabel: '3. Respondió · Falta calle/esquina o día',
     colorClass: 'bg-orange-100 text-orange-950 border-orange-300',
   },
   {
     value: 'PIDIO_MAS_INFO_ENVIADA',
-    label: '5. Pidió más info (5 ejes enviados)',
-    shortLabel: '5. Pidió más info',
-    colorClass: 'bg-purple-100 text-purple-950 border-purple-300',
+    label: '3b. Pidió más info (5 ejes enviados)',
+    shortLabel: '3b. Pidió más info (5 ejes enviados)',
+    colorClass: 'bg-sky-50 text-sky-900 border-sky-300',
   },
   {
     value: 'PREFIERE_CAFE_HUB_O_SEDE',
-    label: '6. Prefiere Punto / Café Hub / Sede Chile 1408',
-    shortLabel: '6. Prefiere Punto / Café Hub',
+    label: '3c. Prefiere Punto / Café / Sede',
+    shortLabel: '3c. Prefiere Punto / Café / Sede',
     colorClass: 'bg-amber-50 text-amber-900 border-amber-300',
   },
   {
     value: 'PASO_DATOS_FALTA_CONFIRMAR',
-    label: '7. Pasó día/franja/dirección — Falta confirmar encuentro',
-    shortLabel: '7. Pasó datos (Falta confirmar)',
+    label: '4. Pasó dirección/horario · Falta confirmar',
+    shortLabel: '4. Pasó dirección/horario · Falta confirmar',
     colorClass: 'bg-sky-100 text-sky-950 border-sky-300',
   },
   {
     value: 'ENCUENTRO_CONFIRMADO',
-    label: '8. Encuentro confirmado (En agenda de ruta)',
-    shortLabel: '8. Encuentro confirmado',
+    label: '5. Encuentro Confirmado (En Ruta)',
+    shortLabel: '5. Encuentro Confirmado (En Ruta)',
     colorClass: 'bg-indigo-100 text-indigo-950 border-indigo-300',
   },
   {
     value: 'RECORDATORIO_DIA_ENVIADO',
-    label: '9. Recordatorio del día / En camino enviado',
-    shortLabel: '9. Recordatorio del día enviado',
+    label: '6. Recordatorio / En Camino Enviado',
+    shortLabel: '6. Recordatorio / En Camino Enviado',
     colorClass: 'bg-teal-100 text-teal-950 border-teal-300',
   },
   {
-    value: 'YA_ADHIRIO_FIRMA_OK',
-    label: '10. ✅ Proceso terminado — Ya adhirió (Listo)',
-    shortLabel: '10. ✅ Listo · Ya adhirió',
-    colorClass: 'bg-emerald-100 text-emerald-950 border-emerald-400',
-  },
-  {
     value: 'PENDIENTE_RETIRO_FICHAS',
-    label: '11. Adhirió + Retirar fichas extra (X1/X2/X3)',
-    shortLabel: '11. Retirar fichas X1/X2/X3',
+    label: '7. Llevó Fichas Extra · Pendiente Retiro',
+    shortLabel: '7. Llevó Fichas Extra · Pendiente Retiro',
     colorClass: 'bg-emerald-200 text-emerald-950 border-emerald-400',
   },
   {
     value: 'POSTERGO_SALUD_O_VIAJE',
-    label: '12. En pausa temporal (Salud / Viaje)',
-    shortLabel: '12. Pausa (Salud/Viaje)',
-    colorClass: 'bg-slate-200 text-slate-800 border-slate-300',
+    label: '8. En Pausa (Viaje / Salud / Más adelante)',
+    shortLabel: '8. En Pausa (Viaje / Salud / Más adelante)',
+    colorClass: 'bg-purple-100 text-purple-950 border-purple-300',
+  },
+  {
+    value: 'YA_ADHIRIO_FIRMA_OK',
+    label: '9. ✅ Ya Firmó · Adhesión Completada',
+    shortLabel: '9. ✅ Ya Firmó · Adhesión Completada',
+    colorClass: 'bg-emerald-100 text-emerald-950 border-emerald-400',
   },
   {
     value: 'SIN_DNI_CABA_PEDIR_REFERIDOS',
-    label: '13. Sin DNI en CABA (Consultar referidos CABA — Pendiente envío)',
-    shortLabel: '13. Sin DNI CABA (Consultar ref.)',
+    label: '10. Sin DNI en CABA · Pedir Referidos',
+    shortLabel: '10. Sin DNI en CABA · Pedir Referidos',
     colorClass: 'bg-slate-100 text-slate-700 border-slate-300',
   },
   {
     value: 'DESCARTADO_O_BAJA',
-    label: '14. Archivado / Sin DNI CABA ya respondido / Baja',
-    shortLabel: '14. Archivado / Ya respondido',
+    label: '11. Baja / Número Inválido / Descartado',
+    shortLabel: '11. Baja / Número Inválido / Descartado',
     colorClass: 'bg-red-50 text-red-800 border-red-200',
   },
 ];
 
 export function obtenerEtiquetaEstadoFlujo(estado: EstadoFlujo): string {
-  return (
-    ESTADOS_FLUJO_CATALOGO.find((e) => e.value === estado)?.label ||
-    '3. 1er mensaje enviado (Sin respuesta aún)'
-  );
+  const encontrado = ESTADOS_FLUJO_CATALOGO.find((e) => e.value === estado);
+  if (encontrado) return encontrado.label;
+  if (estado === 'SEGUNDO_SEGUIMIENTO_SIN_RSP') return '2. 1er Msj Enviado · Esperando respuesta';
+  if (estado === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') return '9. ✅ Ya Firmó · Adhesión Completada';
+  return '2. 1er Msj Enviado · Esperando respuesta';
 }
 
 export function parsearTextoAEstadoFlujo(textoRaw: string): EstadoFlujo | undefined {
@@ -219,30 +220,46 @@ export function parsearTextoAEstadoFlujo(textoRaw: string): EstadoFlujo | undefi
   if (exact) return exact.value;
 
   const low = t.toLowerCase();
-  if (low.includes('sin nombre') || low.includes('pedir nombre')) return 'FALTA_NOMBRE_Y_APELLIDO';
-  if (low.includes('sin contactar') || low.includes('enviar 1er')) return 'SIN_CONTACTAR_1ER_MSJ';
-  if (low.includes('recordatorio') || low.includes('en camino')) return 'RECORDATORIO_DIA_ENVIADO';
-  if (low.includes('confirmado')) return 'ENCUENTRO_CONFIRMADO';
-  if (low.includes('pasó') || low.includes('falta confirmar')) return 'PASO_DATOS_FALTA_CONFIRMAR';
-  if (low.includes('punto') || low.includes('café hub') || low.includes('sede'))
+  // Coincidencia prioritaria por prefijo numérico / código exacto de los 14 chips de Google Sheets
+  if (/^0\b|falta nombre|sin nombre|pedir nombre|^1b\b/i.test(low))
+    return 'FALTA_NOMBRE_Y_APELLIDO';
+  if (/^1\.\s*nuevo|sin contactar|sin 1er mensaje|enviar 1er/i.test(low))
+    return 'SIN_CONTACTAR_1ER_MSJ';
+  if (/^2b\b|2°\s*seguimiento|2do\s*seguimiento|segundo seguimiento/i.test(low))
+    return 'SEGUNDO_SEGUIMIENTO_SIN_RSP';
+  if (/^2\.\s*1er|1er mensaje enviado|1er msj enviado|esperando respuesta/i.test(low))
+    return '1ER_MSJ_ENVIADO_SIN_RSP';
+  if (/^3\.\s*respondi|validar dni|falta calle|falta corroborar|cambio de chip/i.test(low))
+    return 'RESPONDIO_FALTA_DNI_O_ZONA';
+  if (/^3b\b|m[aá]s info/i.test(low))
+    return 'PIDIO_MAS_INFO_ENVIADA';
+  if (/^4\.\s*datos pasados|^4\.\s*pas[oó]|datos pasados|proponer visita|falta confirmar/i.test(low))
+    return 'PASO_DATOS_FALTA_CONFIRMAR';
+  if (/^5\.\s*visita\/caf[eé]|^3c\b|visita\/caf[eé] propuesto|esperando ok|prefiere punto/i.test(low))
     return 'PREFIERE_CAFE_HUB_O_SEDE';
-  if (low.includes('más info') || low.includes('mas info')) return 'PIDIO_MAS_INFO_ENVIADA';
-  if (low.includes('fichas') || low.includes('x1') || low.includes('x2') || low.includes('x3'))
+  if (/^6\.\s*encuentro|^5\.\s*encuentro|encuentro agendado|encuentro confirmado|confirmado/i.test(low))
+    return 'ENCUENTRO_CONFIRMADO';
+  if (/^7\.\s*recordatorio|^6\.\s*recordatorio|recordatorio|en camino/i.test(low))
+    return 'RECORDATORIO_DIA_ENVIADO';
+  if (/^8\.\s*en espera de retiro|^7\.\s*llev[oó] fichas|retiro de fichas|fichas|x1|x2|x3/i.test(low))
     return 'PENDIENTE_RETIRO_FICHAS';
+  if (/^9b\b|agradecimiento enviado/i.test(low))
+    return 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO';
   if (
-    low.includes('ya adhirió') ||
-    low.includes('proceso terminado') ||
-    low.includes('firmada') ||
-    low.includes('firmó')
+    /^9\.\s*¡?ya adhir|^9\.\s*✅|ya adhirió|ya firmó|adhesión completada|proceso terminado|ficha firmada|firmada|firmó/i.test(
+      low
+    )
   )
     return 'YA_ADHIRIO_FIRMA_OK';
-  if (low.includes('salud') || low.includes('viaje') || low.includes('pausa'))
-    return 'POSTERGO_SALUD_O_VIAJE';
-  if (low.includes('archivado') || low.includes('ya respondido') || low.includes('baja') || low.includes('inválido'))
+  if (/^10\.\s*sin dni|sin dni|referidos/i.test(low))
+    return 'SIN_DNI_CABA_PEDIR_REFERIDOS';
+  if (/^11\.\s*baja|archivado|ya respondido|baja|descartado|inv[aá]lido/i.test(low))
     return 'DESCARTADO_O_BAJA';
-  if (low.includes('sin dni') || low.includes('referidos')) return 'SIN_DNI_CABA_PEDIR_REFERIDOS';
-  if (low.includes('respondió sí') || low.includes('cambio de chip'))
-    return 'RESPONDIO_FALTA_DNI_O_ZONA';
+  if (/salud|viaje|pausa/i.test(low))
+    return 'POSTERGO_SALUD_O_VIAJE';
+  if (low.includes('punto') || low.includes('café') || low.includes('sede'))
+    return 'PREFIERE_CAFE_HUB_O_SEDE';
+  if (low.includes('respondió')) return 'RESPONDIO_FALTA_DNI_O_ZONA';
   if (low.includes('sin respuesta')) return '1ER_MSJ_ENVIADO_SIN_RSP';
   return undefined;
 }
@@ -257,23 +274,24 @@ export function extraerNumeroIdContacto(idRaw: string): number {
 }
 
 /**
- * Verifica si un contacto YA ADHIRIÓN antes (según Columna F "Adhirió" = "Sí", estado `YA_ADHIRIO_FIRMA_OK`,
- * o nota explícita en Columna G de haber firmado), para garantizar que nunca sea agregado por error
- * a estados activos como "3. Prefiere Punto (Convocar a Café Hub)" ni a listas de envío de mensajes.
+ * Verifica si un contacto YA ADHIRIÓ antes (según estado explícito 8/9/9B, Columna F "Adhirió" = "Sí",
+ * o nota explícita en Columna G de haber firmado). Si el contacto tiene un `estadoFlujo` explícito
+ * distinto de 8/9/9B (por ejemplo `4. Datos pasados · Proponer Visita/Café`), se respeta ese estado explícito.
  */
 export function yaAdhirioAntes(raw: {
   adhirio?: string;
   estadoFlujo?: EstadoFlujo;
   comentario?: string;
 }): boolean {
+  if (raw.estadoFlujo !== undefined) {
+    return (
+      raw.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+      raw.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' ||
+      raw.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
+    );
+  }
   const adh = (raw.adhirio || '').toLowerCase().trim();
   if (/^(s[ií]|firm[oó]|firmad[oa]|adherid[oa])$/i.test(adh)) return true;
-  if (
-    raw.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
-    raw.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
-  ) {
-    return true;
-  }
   const com = (raw.comentario || '').toLowerCase().trim();
   return /\b(ya\s+adhir[ií]o|ya\s+firm[oó]|firm[oó]\s+el\s+\d|adhesi[oó]n\s+firmada|ficha\s+firmada|proceso\s+terminado)\b/i.test(
     com
@@ -281,13 +299,13 @@ export function yaAdhirioAntes(raw: {
 }
 
 export function esComentarioDescartadoONoCaba(comentario: string, estadoFlujo?: EstadoFlujo): boolean {
-  const com = (comentario || '').toLowerCase().trim();
-  if (
-    estadoFlujo === 'DESCARTADO_O_BAJA' ||
-    estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS'
-  ) {
-    return true;
+  if (estadoFlujo !== undefined) {
+    return (
+      estadoFlujo === 'DESCARTADO_O_BAJA' ||
+      estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS'
+    );
   }
+  const com = (comentario || '').toLowerCase().trim();
   return (
     com.includes('no tiene domicilio en caba') ||
     com.includes('fuera de caba') ||
@@ -303,14 +321,10 @@ export function esComentarioDescartadoONoCaba(comentario: string, estadoFlujo?: 
 }
 
 /**
- * Determina si una persona marcada sin DNI en CABA ("No tiene domicilio en CABA", "Vive fuera", etc.)
- * o con baja/teléfono inválido YA FUE RESPONDIDA y por lo tanto debe salir de la lista de pendientes
- * y dejar de ser visible en las colas activas:
- * 1. Si es anterior al #167 y tiene en Columna G "No tiene domicilio en CABA" (o equivalente fuera de CABA)
- *    y en Columna F ("Adhirió") no ha adherido ("No" / "Pendiente"), ya se le respondió históricamente.
- * 2. De aquí en adelante (#167+ o nuevos cambios a `SIN_DNI_CABA_PEDIR_REFERIDOS`), una vez que se envía
- *    el mensaje de consulta de referidos CABA (`referidosCabaYaEnviado === true` o nota `[Referidos CABA consultados — Cerrado]`),
- *    pasa automáticamente a cerrado/archivado y sale de la lista de pendientes.
+ * Determina si una persona marcada con baja/teléfono inválido o sin DNI en CABA ya fue cerrada/archivada:
+ * - Si tiene estado explícito `DESCARTADO_O_BAJA` (`11. Baja / Número Inválido / Descartado`), está archivada.
+ * - Si tiene estado explícito `SIN_DNI_CABA_PEDIR_REFERIDOS` (`10. Sin DNI CABA (Pedir Referidos)`), permanece
+ *   en el estado 10 a menos que se haya registrado `referidosCabaYaEnviado === true`.
  */
 export function esSinDniCabaYaRespondidoOCerrado(raw: {
   id?: string;
@@ -324,15 +338,29 @@ export function esSinDniCabaYaRespondidoOCerrado(raw: {
   const com = (raw.comentario || '').toLowerCase().trim();
   const adh = (raw.adhirio || '').toLowerCase().trim();
 
+  if (raw.estadoFlujo === 'DESCARTADO_O_BAJA') {
+    return true;
+  }
+
+  if (raw.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS') {
+    if (
+      raw.referidosCabaYaEnviado === true ||
+      /referidos\s+caba\s+consultados|ya\s+respondido|\[cerrado/i.test(com)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  if (raw.estadoFlujo !== undefined) {
+    return false;
+  }
+
   if (
     com.includes('no existe en whatsapp') ||
     com.includes('número equivocado') ||
     /\bbaja\b/i.test(com)
   ) {
-    return true;
-  }
-
-  if (raw.estadoFlujo === 'DESCARTADO_O_BAJA') {
     return true;
   }
 
@@ -343,7 +371,6 @@ export function esSinDniCabaYaRespondidoOCerrado(raw: {
     return true;
   }
 
-  // Si el usuario acaba de poner explícitamente `referidosCabaYaEnviado: false` para poder enviarle el mensaje por primera vez
   if (raw.referidosCabaYaEnviado === false) {
     return false;
   }
@@ -358,9 +385,6 @@ export function esSinDniCabaYaRespondidoOCerrado(raw: {
     com.includes('vive fuera');
 
   const numId = extraerNumeroIdContacto(raw.id || '');
-  // Regla del usuario: cuando las personas están marcadas como "6. Sin DNI en CABA" y a su vez
-  // en la Columna G ("Comentario") tienen "No tiene domicilio en CABA" (o fuera de CABA)
-  // y en la Columna F ("Adhirió") es "No" (antes del #167), ya se les respondió y deben salir de pendientes.
   if (
     tieneComentarioNoCaba &&
     adh === 'no' &&
@@ -381,13 +405,14 @@ export function tieneNuevaInformacionEnColumnaG(comentario: string): boolean {
   const com = (comentario || '').trim();
   if (!com) return false;
   const sinNotasSistema = com
+    .replace(/\[(?:1er\s*(?:mensaje|msj|contacto)|Intento auto|Enviado|Reintentar)[^\]]*\]/gi, '')
     .replace(/ingresad[oa] en google sheets[^·;\n]*/gi, '')
-    .replace(/tel[eé]fono cargado en google sheets[^·;\n]*/gi, '')
+    .replace(/tel[eé]fono (?:cargado|registrado) en google sheets[^·;\n]*/gi, '')
     .replace(/pendiente de 1er contacto/gi, '')
-    .replace(/1er\s*(mensaje|msj|contacto)\s*enviado[^·;\n]*/gi, '')
+    .replace(/1er\s*(?:mensaje|msj|contacto)\s*(?:auto\s*)?enviado[^·;\n\]]*/gi, '')
     .replace(/^sin respuesta\.?$/gi, '')
     .replace(/^no contesta\.?$/gi, '')
-    .replace(/[—\-·,;:\s]+/g, '')
+    .replace(/[—\-·,;:\[\]\s]+/g, '')
     .trim();
   return sinNotasSistema.length > 0;
 }
@@ -455,34 +480,58 @@ export function tieneVisitaConcretadaConDatosCompletos(params: {
  */
 export function esContactoSinPrimerContacto(raw: RawContactRow): boolean {
   if (yaAdhirioAntes(raw)) return false;
+
+  if (raw.estadoFlujo !== undefined) {
+    if (
+      raw.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+      raw.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
+    ) {
+      return raw.primerContactoEnviado !== true;
+    }
+    return false;
+  }
+
   if (raw.primerContactoEnviado === true) return false;
-  if (raw.primerContactoEnviado === false) return true;
 
   const rsp = (raw.rsp || '').toLowerCase().trim();
   const com = (raw.comentario || '').toLowerCase().trim();
+  const numId = extraerNumeroIdContacto(raw.id);
+
+  // Si el usuario lo marcó explícitamente como "Nuevo / Sin 1er mensaje" en la App
+  if (raw.primerContactoEnviado === false && rsp === 'nuevo') {
+    return true;
+  }
 
   if (esComentarioDescartadoONoCaba(raw.comentario, raw.estadoFlujo)) return false;
   if (rsp === 'sí' || rsp === 'si') return false;
 
+  const sinNom = esCeldaSinNombre(raw.nombre);
+  const tieneInfoRealColG = tieneNuevaInformacionEnColumnaG(raw.comentario || '');
+  const esIdSinNombreEspecial = /^s\/n/i.test((raw.id || '').trim());
+
   if (
-    raw.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
-    raw.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
-    rsp === 'nuevo' ||
-    raw.enSheets === false
+    (esIdSinNombreEspecial || sinNom) &&
+    !tieneInfoRealColG &&
+    !com.includes('1er mensaje enviado') &&
+    !com.includes('1er msj') &&
+    !com.includes('sin respuesta') &&
+    !com.includes('no contesta')
   ) {
     return true;
   }
 
-  if (
-    raw.estadoFlujo &&
-    raw.estadoFlujo !== '1ER_MSJ_ENVIADO_SIN_RSP'
-  ) {
+  // Regla histórica: contactos #1 al #166 ya fueron contactados salvo que su RSP sea explícitamente 'Nuevo'
+  if (numId > 0 && numId < UMBRAL_ID_SIN_PRIMER_CONTACTO && rsp !== 'nuevo') {
     return false;
   }
 
-  const numId = extraerNumeroIdContacto(raw.id);
+  if (raw.primerContactoEnviado === false) return true;
+
+  if (rsp === 'nuevo' || raw.enSheets === false) {
+    return true;
+  }
+
   if (numId >= UMBRAL_ID_SIN_PRIMER_CONTACTO) {
-    const tieneInfoRealColG = tieneNuevaInformacionEnColumnaG(raw.comentario || '');
     const tieneEvidenciaContactoPrevio =
       tieneInfoRealColG ||
       com.includes('1er mensaje enviado') ||
@@ -502,6 +551,195 @@ export function esContactoSinPrimerContacto(raw: RawContactRow): boolean {
   return false;
 }
 
+/**
+ * Analiza los datos de las Columnas B (Nombre), E (RSP), F (Adhirió) y G (Comentario)
+ * de cada contacto para determinar su EstadoFlujo exacto dentro de las 14 categorías oficiales.
+ */
+export function analizarEstadoPorColumnasEFG(params: {
+  id?: string;
+  nombre?: string;
+  rsp?: string;
+  adhirio?: string;
+  comentario?: string;
+  estadoColH?: string;
+  primerContactoEnviado?: boolean;
+  vocativoOverride?: string;
+}): EstadoFlujo {
+  const nom = String(params.nombre || '').trim();
+  const sinNom = esCeldaSinNombre(nom) && !String(params.vocativoOverride || '').trim();
+  const rspLow = String(params.rsp || '').toLowerCase().trim();
+  const adhLow = String(params.adhirio || '').toLowerCase().trim();
+  const com = String(params.comentario || '').trim();
+  const comLow = com.toLowerCase();
+  const estH = String(params.estadoColH || '').trim();
+  const estHLow = estH.toLowerCase();
+  const numId = extraerNumeroIdContacto(params.id || '');
+
+  // 1. ADHESIÓN COMPLETADA O RETIRO DE FICHAS EXTRA (Columna F = "Sí" o nota de firma en Columna G)
+  const firmoEnComentario =
+    /\b(ya\s+adhir[ií]o|ya\s+firm[oó]|firm[oó]\s+el\s+\d|adhesi[oó]n\s+firmada|ficha\s+firmada|proceso\s+terminado)\b/i.test(
+      comLow
+    );
+  if (adhLow === 'sí' || adhLow === 'si' || firmoEnComentario || estHLow.startsWith('9.')) {
+    if (
+      comLow.includes('buscar fichas') ||
+      /\bfichas\s*x\d/i.test(comLow) ||
+      /\bx[123]\b/i.test(comLow) ||
+      estHLow.startsWith('7. llev')
+    ) {
+      return 'PENDIENTE_RETIRO_FICHAS';
+    }
+    return 'YA_ADHIRIO_FIRMA_OK';
+  }
+
+  if (estHLow.startsWith('7. llev')) {
+    return 'PENDIENTE_RETIRO_FICHAS';
+  }
+
+  // 2. EN PAUSA (Viaje / Salud / Más adelante: "regresa en diciembre", "enferma", "salud")
+  if (
+    comLow.includes('enferm') ||
+    comLow.includes('salud') ||
+    comLow.includes('regresa en') ||
+    comLow.includes('viaje') ||
+    comLow.includes('más adelante') ||
+    estHLow.startsWith('8. en pausa')
+  ) {
+    return 'POSTERGO_SALUD_O_VIAJE';
+  }
+
+  // 3. BAJA / NÚMERO INVÁLIDO / DESCARTADO
+  if (
+    comLow.includes('no existe en whatsapp') ||
+    comLow.includes('inexistente en whatsapp') ||
+    comLow.includes('número equivocado') ||
+    comLow.includes('adhesión digital') ||
+    comLow.includes('vive en eeuu') ||
+    comLow.includes('vive en brasil') ||
+    comLow.includes('vive en españa') ||
+    comLow.includes('vive fuera') ||
+    comLow.includes('tiene domicilio fuera de caba') ||
+    /\bbaja\b/i.test(comLow)
+  ) {
+    return 'DESCARTADO_O_BAJA';
+  }
+
+  // 4. SIN DNI EN CABA · PEDIR REFERIDOS
+  if (
+    comLow.includes('no tiene domicilio en caba') ||
+    comLow.includes('sin dni en caba') ||
+    comLow.includes('fuera de caba') ||
+    comLow.includes('no vive en caba') ||
+    comLow.includes('dni extranjero') ||
+    comLow.includes('extranjero') ||
+    comLow.includes('vive afuera')
+  ) {
+    return 'SIN_DNI_CABA_PEDIR_REFERIDOS';
+  }
+
+  if (adhLow === 'no' && !comLow.includes('coordinar encuentro en caba')) {
+    if (estHLow.includes('sin dni')) return 'SIN_DNI_CABA_PEDIR_REFERIDOS';
+    return 'DESCARTADO_O_BAJA';
+  }
+
+  // 5. RECORDATORIO / EN CAMINO ENVIADO (6)
+  if (
+    comLow.includes('recordatorio enviado') ||
+    comLow.includes('en camino') ||
+    estHLow.startsWith('6. recordatorio') ||
+    estHLow.startsWith('7. recordatorio')
+  ) {
+    return 'RECORDATORIO_DIA_ENVIADO';
+  }
+
+  // 6. ENCUENTRO CONFIRMADO (EN RUTA) (5)
+  if (
+    /\bconfirmad[oa]\b/i.test(comLow) ||
+    estHLow.startsWith('5. encuentro confirmado') ||
+    estHLow.startsWith('6. encuentro agendado')
+  ) {
+    return 'ENCUENTRO_CONFIRMADO';
+  }
+
+  // 7. 3b. PIDIÓ MÁS INFO (5 EJES ENVIADOS)
+  if (
+    comLow.includes('pidió más info') ||
+    comLow.includes('mas info') ||
+    estHLow.startsWith('3b.')
+  ) {
+    return 'PIDIO_MAS_INFO_ENVIADA';
+  }
+
+  // 8. 3c. PREFIERE PUNTO / CAFÉ / SEDE
+  if (
+    comLow.includes('prefiere pasar por un punto') ||
+    comLow.includes('pasar por un punto') ||
+    comLow.includes('chile 1408') ||
+    comLow.includes('reunión de los miércoles') ||
+    estHLow.startsWith('3c.')
+  ) {
+    return 'PREFIERE_CAFE_HUB_O_SEDE';
+  }
+
+  // 9. EVALUAR DATOS DE DIRECCIÓN Y DÍA/HORARIO EN COLUMNA G (para distinguir 4 vs 3)
+  const parenMatch = com.match(/\(([^)]+)\)/);
+  const tieneDireccionOCalle =
+    (Boolean(parenMatch) && !/visita\s+consertada/i.test(parenMatch![1])) ||
+    /visita\s+con[sc]ertada/i.test(comLow) ||
+    Boolean(extraerCalleOCruce(com));
+
+  const tieneDiaOHorario =
+    /\b\d{1,2}\/\d{1,2}\b/.test(comLow) ||
+    /\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/i.test(comLow) ||
+    /\bcualquier\s+d[ií]a\b/i.test(comLow) ||
+    /\b(a\s+las\s+\d|entre\s+las?\s+\d|de\s+\d{1,2}\s+a\s+\d{1,2}|luego\s+de\s+las|despu[eé]s\s+de\s+las|antes\s+de\s+las)\b/i.test(
+      comLow
+    ) ||
+    /visita\s+con[sc]ertada/i.test(comLow);
+
+  if (rspLow === 'sí' || rspLow === 'si' || comLow.includes('coordinar encuentro en caba')) {
+    if (tieneDireccionOCalle && tieneDiaOHorario) {
+      return 'PASO_DATOS_FALTA_CONFIRMAR';
+    }
+    return 'RESPONDIO_FALTA_DNI_O_ZONA';
+  }
+
+  if (tieneDireccionOCalle && tieneDiaOHorario) {
+    return 'PASO_DATOS_FALTA_CONFIRMAR';
+  }
+
+  // 10. ¿YA FUE CONTACTADO (2. 1er Msj Enviado · Esperando respuesta) O ES NUEVO (1 / 1b)?
+  const fueContactadoSegunColH =
+    estHLow.startsWith('2.') ||
+    estHLow.startsWith('2b.') ||
+    estHLow.includes('1er msj enviado') ||
+    estHLow.includes('1er mensaje enviado') ||
+    estHLow.includes('seguimiento enviado');
+
+  const fueContactadoSegunCom =
+    comLow.includes('1er msj') ||
+    comLow.includes('1er mensaje') ||
+    comLow.includes('sin respuesta') ||
+    comLow.includes('no contesta');
+
+  const esHistorico1a166 =
+    numId > 0 && numId < UMBRAL_ID_SIN_PRIMER_CONTACTO && rspLow !== 'nuevo';
+
+  if (
+    params.primerContactoEnviado === true ||
+    fueContactadoSegunColH ||
+    fueContactadoSegunCom ||
+    esHistorico1a166
+  ) {
+    return '1ER_MSJ_ENVIADO_SIN_RSP';
+  }
+
+  if (sinNom) {
+    return 'FALTA_NOMBRE_Y_APELLIDO';
+  }
+  return 'SIN_CONTACTAR_1ER_MSJ';
+}
+
 export function inferirEstadoFlujo(
   raw: RawContactRow,
   sinNombre: boolean,
@@ -510,34 +748,54 @@ export function inferirEstadoFlujo(
   franjaHoraria: FranjaHoraria
 ): EstadoFlujo {
   const com = (raw.comentario || '').toLowerCase();
-  const adh = (raw.adhirio || '').toLowerCase();
-  const rsp = (raw.rsp || '').toLowerCase();
-  const sinPrimerContacto = esContactoSinPrimerContacto(raw);
+  const adh = (raw.adhirio || '').toLowerCase().trim();
+  const rsp = (raw.rsp || '').toLowerCase().trim();
 
-  // 1. VERIFICACIÓN PRIORITARIA DE ADHESIÓN PREVIA:
-  // Antes de asignar cualquier estado activo (como "Prefiere Punto / Café Hub"), verificar si ya adhirió antes.
-  if (yaAdhirioAntes(raw)) {
+  // Si el contacto ya trae un estado explícito desde Google Sheets (Columna H) o desde la App,
+  // respetarlo de forma 1:1 (normalizando únicamente alias heredados).
+  if (raw.estadoFlujo !== undefined) {
+    if (raw.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' && sinNombre) {
+      return 'FALTA_NOMBRE_Y_APELLIDO';
+    }
+    if (raw.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP') {
+      return '1ER_MSJ_ENVIADO_SIN_RSP';
+    }
+    if (raw.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') {
+      return 'YA_ADHIRIO_FIRMA_OK';
+    }
+    return raw.estadoFlujo;
+  }
+
+  // Si Columna F ("Adhirió") es "Sí" y no hay estadoFlujo explícito, garantizar estado 7 (Llevó Fichas Extra) o 9 (Ya Firmó)
+  if (adh === 'sí' || adh === 'si') {
     if (
-      raw.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
-      com.includes('ficha') ||
-      com.includes('retiro') ||
       com.includes('buscar fichas') ||
-      /x\d/i.test(com)
+      /\bfichas\s*x\d/i.test(com) ||
+      /\bx[123]\b/i.test(com)
     ) {
       return 'PENDIENTE_RETIRO_FICHAS';
     }
     return 'YA_ADHIRIO_FIRMA_OK';
   }
 
+  const sinPrimerContacto = esContactoSinPrimerContacto(raw);
+
+  // 1. VERIFICACIÓN PRIORITARIA DE ADHESIÓN PREVIA (cuando no hay estadoFlujo explícito):
+  if (yaAdhirioAntes(raw)) {
+    if (com.includes('buscar fichas') || /x\d/i.test(com)) {
+      return 'PENDIENTE_RETIRO_FICHAS';
+    }
+    return 'YA_ADHIRIO_FIRMA_OK';
+  }
+
   // 2. VERIFICACIÓN DE PERSONAS SIN DNI EN CABA O BAJA QUE YA FUERON RESPONDIDAS:
-  // Si es < #167 con "No tiene domicilio en CABA" + Adhirió=No, o si ya se le envió el mensaje de referidos CABA,
-  // pasa directamente a DESCARTADO_O_BAJA (Archivado / Ya respondido) para salir de la lista de pendientes.
   if (esSinDniCabaYaRespondidoOCerrado(raw)) {
     return 'DESCARTADO_O_BAJA';
   }
 
   if (
     com.includes('no tiene domicilio en caba') ||
+    com.includes('sin dni en caba') ||
     com.includes('fuera de caba') ||
     com.includes('no vive en caba') ||
     com.includes('extranjero') ||
@@ -548,41 +806,27 @@ export function inferirEstadoFlujo(
   if (
     com.includes('enferm') ||
     com.includes('salud') ||
-    com.includes('vive en ') ||
-    com.includes('vive fuera') ||
     com.includes('regresa en ')
   ) {
-    if (adh === 'no' || com.includes('vive en ') || com.includes('vive fuera')) {
-      return 'SIN_DNI_CABA_PEDIR_REFERIDOS';
-    }
     return 'POSTERGO_SALUD_O_VIAJE';
   }
-
-  // Si es un teléfono sin nombre en Google Sheets y aún no se registró envío de 1er contacto
-  if (sinNombre && !raw.vocativoOverride?.trim() && raw.primerContactoEnviado !== true) {
-    return 'FALTA_NOMBRE_Y_APELLIDO';
+  if (com.includes('vive en ') || com.includes('vive fuera')) {
+    return 'SIN_DNI_CABA_PEDIR_REFERIDOS';
   }
 
-  // Si aún NO recibió el primer contacto (#167 en adelante o nuevo ingreso en Sheets)
+  // Si aún NO recibió el primer contacto (#167 en adelante o marcado como Nuevo)
   if (sinPrimerContacto) {
+    if (sinNombre && !raw.vocativoOverride?.trim()) {
+      return 'FALTA_NOMBRE_Y_APELLIDO';
+    }
     return 'SIN_CONTACTAR_1ER_MSJ';
   }
 
-  // Si ya tenía un estado explícito guardado y ya recibió el 1er contacto
-  if (raw.estadoFlujo) {
-    if (
-      (raw.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
-        raw.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ') &&
-      raw.primerContactoEnviado === true
-    ) {
-      return '1ER_MSJ_ENVIADO_SIN_RSP';
-    }
-    if (raw.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' && !sinNombre) {
-      // Sigue abajo para inferir su estado con nombre
-    } else {
-      return raw.estadoFlujo;
-    }
-  }
+  const tieneAlgunDatoEnColG =
+    tieneNuevaInformacionEnColumnaG(raw.comentario) ||
+    Boolean(calleOCruce) ||
+    fechasMencionadas.length > 0 ||
+    franjaHoraria !== 'Flexible';
 
   if (com.includes('recordatorio enviado') || com.includes('en camino')) {
     return 'RECORDATORIO_DIA_ENVIADO';
@@ -612,12 +856,6 @@ export function inferirEstadoFlujo(
   if (visitaCompleta) {
     return 'ENCUENTRO_CONFIRMADO';
   }
-
-  const tieneAlgunDatoEnColG =
-    tieneNuevaInformacionEnColumnaG(raw.comentario) ||
-    Boolean(calleOCruce) ||
-    fechasMencionadas.length > 0 ||
-    franjaHoraria !== 'Flexible';
 
   if (rsp === 'sí' || rsp === 'si') {
     if (tieneAlgunDatoEnColG) {
@@ -659,10 +897,13 @@ export function procesarContacto(
   const rsp = (raw.rsp || '').toLowerCase();
   const enSheets = raw.enSheets !== undefined ? raw.enSheets : raw.rsp !== 'Nuevo';
 
-  const calleOCruce = extraerCalleOCruce(raw.comentario);
+  const calleOCruce = (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
   const tieneDireccionRealEnComentario = calleOCruce.trim().length > 0;
-  const fechasMencionadas = extraerFechasMencionadas(raw.comentario);
-  const franjaHoraria = analizarFranjaHoraria(raw.comentario);
+  const comentarioParaAgenda = (raw.comentario || '')
+    .replace(/\[(?:1er\s*(?:mensaje|msj|contacto)|Intento auto|Enviado|Reintentar)[^\]]*\]/gi, '')
+    .replace(/1er\s*(?:mensaje|msj|contacto)\s*(?:auto\s*)?enviado[^·;\n]*/gi, '');
+  const fechasMencionadas = extraerFechasMencionadas(comentarioParaAgenda);
+  const franjaHoraria = analizarFranjaHoraria(comentarioParaAgenda);
   const geo = geocodificarContactoLocal(calleOCruce, raw.barrio, raw.id);
 
   const adhirioPreviamente = yaAdhirioAntes(raw);
@@ -693,8 +934,10 @@ export function procesarContacto(
     estadoFlujo,
   });
   const esRetiroFichas =
-    (adhirioPreviamente || adh === 'sí' || adh === 'si' || estadoFlujo === 'PENDIENTE_RETIRO_FICHAS') &&
-    (estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' || com.includes('buscar fichas') || /x\d/i.test(com));
+    estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+    (raw.estadoFlujo === undefined &&
+      (adhirioPreviamente || adh === 'sí' || adh === 'si') &&
+      (com.includes('buscar fichas') || /x\d/i.test(com)));
   const esVisitaConcretadaORetiro = visitaCompleta || esRetiroFichas;
 
   const esCerradoOArchivadoSinDniCaba =
@@ -702,7 +945,10 @@ export function procesarContacto(
     (estadoFlujo === 'DESCARTADO_O_BAJA' || esSinDniCabaYaRespondidoOCerrado(raw));
 
   const procesoCompletadoSinMensajes =
-    (adhirioPreviamente || estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') && !esRetiroFichas;
+    (adhirioPreviamente ||
+      estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+      estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') &&
+    !esRetiroFichas;
 
   let situacion: SituacionContacto = 'SEGUIMIENTO_CAMBIO_CHIP';
   let modalidadSugerida: Contact['modalidadSugerida'] = 'CAFE_HUB';
@@ -714,9 +960,8 @@ export function procesarContacto(
   //    nunca como "Prefiere Punto (Convocar a Café Hub)" ni lista de envío.
   if (
     adhirioPreviamente ||
-    adh === 'sí' ||
-    adh === 'si' ||
     estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+    estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' ||
     estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
   ) {
     if (esRetiroFichas) {
@@ -761,7 +1006,11 @@ export function procesarContacto(
     modalidadSugerida = 'PUNTO_ENCUENTRO';
     motivoEstrategico = 'Acordó acercarse a la reunión de los miércoles en la sede de Chile 1408.';
     prioridadCorte = 2;
-  } else if (visitaCompleta) {
+  } else if (
+    estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+    estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+    (raw.estadoFlujo === undefined && visitaCompleta)
+  ) {
     situacion = 'VISITA_AGENDADA';
     modalidadSugerida = 'PUERTA_A_PUERTA';
     motivoEstrategico = `Visita concretada con datos completos (${calleOCruce || raw.barrio} · ${
@@ -771,26 +1020,27 @@ export function procesarContacto(
   } else if (com.includes('pidió más info') || com.includes('mas info') || estadoFlujo === 'PIDIO_MAS_INFO_ENVIADA') {
     situacion = 'PIDIO_MAS_INFO';
     modalidadSugerida = 'CAFE_HUB';
-    motivoEstrategico = 'Pidió información sobre Popurrí en Columna G: falta coordinar punto/dirección de firma.';
+    motivoEstrategico = 'Pidió información sobre Popurrí en Comentario: falta coordinar punto/dirección de firma.';
     prioridadCorte = 2;
   } else if (
-    com.includes('punto') ||
-    com.includes('fds') ||
-    com.includes('plaza') ||
-    estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE'
+    estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+    (raw.estadoFlujo === undefined &&
+      (com.includes('punto') || com.includes('fds') || com.includes('plaza')))
   ) {
     situacion = 'PREFIERE_PUNTO';
     modalidadSugerida = 'CAFE_HUB';
-    motivoEstrategico = 'Expresó en Columna G que prefiere ir a un punto (verificado que NO adhirió antes): proponer café del grupo barrial.';
+    motivoEstrategico = 'Visita/Café propuesto o prefiere acercarse a un punto: esperando confirmación de horario/lugar.';
     prioridadCorte = 2;
-  } else if (rsp === 'sí' || rsp === 'si' || tieneNuevaInfoEnColumnaG) {
+  } else if (
+    estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
+    estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+    (raw.estadoFlujo === undefined && (rsp === 'sí' || rsp === 'si' || tieneNuevaInfoEnColumnaG))
+  ) {
     situacion = 'SEGUIMIENTO_CAMBIO_CHIP';
     modalidadSugerida = calleOCruce ? 'PUERTA_A_PUERTA' : 'CAFE_HUB';
     motivoEstrategico = tieneNuevaInfoEnColumnaG
-      ? `Pasó dato parcial en Columna G (${raw.comentario}) pero es insuficiente para concretar visita: enviar mensaje personalizado para cerrar ${
-          calleOCruce ? 'día/hora' : 'dirección o café cercano'
-        }.`
-      : `Respondió Sí en Columna E pero aún no tiene información cargada en Columna G ni confirmación enviada.`;
+      ? `Datos pasados en Comentario (${raw.comentario}): proponer o confirmar visita de 2 min o café cercano.`
+      : `Respondió Sí: validar DNI en CABA y pedir esquina/zona y disponibilidad.`;
     prioridadCorte = 1;
   } else {
     situacion = 'SEGUIMIENTO_SIN_RESPUESTA';
@@ -801,9 +1051,25 @@ export function procesarContacto(
     prioridadCorte = 3;
   }
 
-  const intentosEfectivos = raw.intentos ?? (primerContactoEnviado ? 1 : 0);
+  const intentosEfectivos =
+    raw.intentos ??
+    (estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ? 2 : primerContactoEnviado ? 1 : 0);
   const adhirioEfectivo: RawContactRow['adhirio'] =
-    adhirioPreviamente || estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ? 'Sí' : raw.adhirio;
+    adhirioPreviamente ||
+    estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+    estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO'
+      ? 'Sí'
+      : estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
+          estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+          estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+          estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+          estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+          estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+          estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
+          estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+          estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
+        ? 'Pendiente'
+        : raw.adhirio;
 
   // Regla Card 3 ("RSP: SÍ"): respondieron según Columna E ("RSP" = "Sí"), no adhirieron aún,
   // no tienen todavía ninguna nueva información cargada en Columna G ("Comentario") y no se les envió confirmación de encuentro.

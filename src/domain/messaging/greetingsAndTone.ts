@@ -51,7 +51,73 @@ export function corregirPelonesDiaSemanaEnTexto(
 }
 
 /**
- * Determina si ya se le envió un mensaje a esta persona en el día de hoy (en horario de Buenos Aires),
+ * Verifica si un timestamp ISO o cadena de fecha corresponde al día de hoy en horario de Buenos Aires.
+ */
+export function esTimestampDeHoyBA(isoOrDateStr?: string, ahoraMs: number = Date.now()): boolean {
+  if (!isoOrDateStr) return false;
+  const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
+  const trimmed = isoOrDateStr.trim();
+  if (trimmed === hoyBA.isoDate || trimmed === hoyBA.ddmm || trimmed.startsWith(hoyBA.isoDate)) {
+    return true;
+  }
+  const ms = Date.parse(trimmed);
+  if (Number.isFinite(ms)) {
+    return obtenerPartesFechaHoraBA(ms).isoDate === hoyBA.isoDate;
+  }
+  return false;
+}
+
+/**
+ * Determina si el contacto tuvo cualquier movimiento en el día de hoy (en horario de Buenos Aires):
+ * edición en la app (`actualizadoEnAppAt`), cambio de estado, mensaje enviado hoy, adhesión hoy o alta hoy.
+ */
+export function esMovimientoDeHoy(
+  contact: {
+    id?: string;
+    ultimoContacto?: string;
+    ultimoMensajeCorteEnviadoAt?: string;
+    actualizadoEnAppAt?: string;
+    fechaAdhesion?: string;
+    fechaAgregado?: string;
+    enviadoEnSesion?: boolean;
+    comentario?: string;
+  },
+  ahoraMs: number = Date.now()
+): boolean {
+  if (!contact) return false;
+  const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
+  const com = contact.comentario || '';
+  if (yaSeHabloConContactoHoy(contact, ahoraMs)) return true;
+  if (esTimestampDeHoyBA(contact.fechaAdhesion, ahoraMs)) return true;
+  if (esTimestampDeHoyBA(contact.fechaAgregado, ahoraMs)) return true;
+  if (
+    com.includes(`Modificado el ${hoyBA.ddmm}`) ||
+    com.includes(`Último cambio: ${hoyBA.ddmm}`) ||
+    com.includes(`Firmó ficha ${hoyBA.ddmm}`)
+  ) {
+    return true;
+  }
+  if (esTimestampDeHoyBA(contact.actualizadoEnAppAt, ahoraMs)) {
+    // Evitar falsos positivos si el comentario tiene una fecha histórica explícita (ej. "Visita 16/10", "Visita 21/10") y ninguna mención de hoy
+    const matchesVisitaPasada = Array.from(
+      com.matchAll(/\b(?:visita|firm[oó]|adhesi[oó]n|adhir[ií]o|retiro)\b[^0-9\n]{0,18}(\d{1,2})\/(\d{1,2})\b/gi)
+    );
+    if (
+      matchesVisitaPasada.length > 0 &&
+      !com.includes(hoyBA.ddmm) &&
+      matchesVisitaPasada.every(
+        (m) => `${String(Number(m[1])).padStart(2, '0')}/${String(Number(m[2])).padStart(2, '0')}` !== hoyBA.ddmm
+      )
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Determina si ya se le envió un mensaje o se registró interacción con esta persona en el día de hoy (en horario de Buenos Aires),
  * en función de las marcas temporales (`ultimoMensajeCorteEnviadoAt`, `ultimoContacto`, `enviadoEnSesion` o sello en comentario).
  */
 export function yaSeHabloConContactoHoy(
@@ -67,23 +133,18 @@ export function yaSeHabloConContactoHoy(
   if (!contact) return false;
   if (contact.enviadoEnSesion === true) return true;
   const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
-  if (contact.ultimoContacto && contact.ultimoContacto.startsWith(hoyBA.isoDate)) {
+  if (contact.ultimoContacto && esTimestampDeHoyBA(contact.ultimoContacto, ahoraMs)) {
     return true;
   }
-  if (contact.ultimoMensajeCorteEnviadoAt) {
-    const msEnvio = Date.parse(contact.ultimoMensajeCorteEnviadoAt);
-    if (Number.isFinite(msEnvio)) {
-      const envioBA = obtenerPartesFechaHoraBA(msEnvio);
-      if (envioBA.isoDate === hoyBA.isoDate) return true;
-    } else if (contact.ultimoMensajeCorteEnviadoAt.startsWith(hoyBA.isoDate)) {
-      return true;
-    }
+  if (contact.ultimoMensajeCorteEnviadoAt && esTimestampDeHoyBA(contact.ultimoMensajeCorteEnviadoAt, ahoraMs)) {
+    return true;
   }
   const com = contact.comentario || '';
   if (
     com.includes(`Corte ${hoyBA.ddmm}`) ||
     com.includes(`auto enviado ${hoyBA.ddmm}`) ||
-    com.includes(`Enviado ${hoyBA.ddmm}`)
+    com.includes(`Enviado ${hoyBA.ddmm}`) ||
+    com.includes(`Modificado el ${hoyBA.ddmm}`)
   ) {
     return true;
   }
@@ -122,21 +183,21 @@ export function aplicarReglaSaludoMismoDia(
 
   // Quitar encabezados de saludo iniciales como:
   // "Hola, Nombre, buen día, ¿cómo estás? ", "Hola, Nombre, ¿cómo estás? ", "Hola, ¿cómo va? ", "Buen día, Nombre. ¿Cómo te va? "
-  const patronesSaludoInicial = [
-    /^¡?(?:hola|buen\s+d[ií]a|buenas(?:\s+tardes|\s+noches)?|qu[eé]\s+tal)[^.!?\n]*[.!?]\s*(?:¿\s*(?:c[oó]mo\s+(?:est[aá]s|te\s+va|va(?:\s+todo)?|and[aá]s)|todo\s+bien|qu[eé]\s+tal)[^?\n]*\?\s*)?(?:espero\s+que\s+(?:est[eé]s\s+)?(?:muy\s+)?bien\.?\s*)?/i,
-    /^¿\s*(?:qu[eé]\s+tal|c[oó]mo\s+(?:est[aá]s|and[aá]s|va\s+todo))[^?\n]*\?\s*(?:¿[^?\n]*\?\s*)?/i,
-    /^hola(?:,\s*[^\s,.!?]+)?,\s*(?:quer[ií]a\s+escribirte|ya\s+estoy|te\s+aviso|claro)/i,
-  ];
+  const regexSaludoConPregunta =
+    /^¡?(?:hola|buen\s+d[ií]a|buenas(?:\s+tardes|\s+noches)?|qu[eé]\s+tal)(?:[,.\s]+[^.!?\n]{1,35})?[,.\s]*¿\s*(?:c[oó]mo\s+(?:est[aá]s|te\s+va|va(?:\s+todo)?|and[aá]s|viene\s+la\s+semana)|todo\s+bien|qu[eé]\s+tal)[^?\n]*\?\s*(?:espero\s+que\s+(?:est[eé]s\s+)?(?:muy\s+)?bien\.?\s*)?/i;
 
-  if (/^hola(?:,\s*[^\s,.!?]+)?[.,]\s*(?:quer[ií]a|ya\s+estoy|te\s+aviso|claro)/i.test(limpio)) {
-    limpio = limpio.replace(/^hola(?:,\s*[^\s,.!?]+)?[.,]\s*/i, '');
-  } else {
-    for (const regex of patronesSaludoInicial) {
-      if (regex.test(limpio)) {
-        limpio = limpio.replace(regex, '').trim();
-        break;
-      }
-    }
+  const regexPreguntaSola =
+    /^¿\s*(?:qu[eé]\s+tal|c[oó]mo\s+(?:est[aá]s|and[aá]s|va\s+todo))[^?\n]*\?\s*(?:¿[^?\n]*\?\s*)?/i;
+
+  const regexSaludoSimple =
+    /^¡?(?:hola|buen\s+d[ií]a|buenas(?:\s+tardes|\s+noches)?)(?:,?\s+[a-záéíóúñü]+(?:\s+[a-záéíóúñü]+)?)?(?:,?\s*(?:muy\s+)?buen(?:os)?\s+(?:d[ií]as?|tardes|noches))?[.,!]\s*/i;
+
+  if (regexSaludoConPregunta.test(limpio)) {
+    limpio = limpio.replace(regexSaludoConPregunta, '').trim();
+  } else if (regexPreguntaSola.test(limpio)) {
+    limpio = limpio.replace(regexPreguntaSola, '').trim();
+  } else if (regexSaludoSimple.test(limpio)) {
+    limpio = limpio.replace(regexSaludoSimple, '').trim();
   }
 
   if (!limpio) return textoCorregido;

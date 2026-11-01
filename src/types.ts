@@ -11,14 +11,16 @@ export type EstadoFlujo =
   | 'SIN_CONTACTAR_1ER_MSJ'
   | 'FALTA_NOMBRE_Y_APELLIDO'
   | '1ER_MSJ_ENVIADO_SIN_RSP'
+  | 'SEGUNDO_SEGUIMIENTO_SIN_RSP'
   | 'RESPONDIO_FALTA_DNI_O_ZONA'
   | 'PIDIO_MAS_INFO_ENVIADA'
-  | 'PREFIERE_CAFE_HUB_O_SEDE'
   | 'PASO_DATOS_FALTA_CONFIRMAR'
+  | 'PREFIERE_CAFE_HUB_O_SEDE'
   | 'ENCUENTRO_CONFIRMADO'
   | 'RECORDATORIO_DIA_ENVIADO'
-  | 'YA_ADHIRIO_FIRMA_OK'
   | 'PENDIENTE_RETIRO_FICHAS'
+  | 'YA_ADHIRIO_FIRMA_OK'
+  | 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO'
   | 'POSTERGO_SALUD_O_VIAJE'
   | 'SIN_DNI_CABA_PEDIR_REFERIDOS'
   | 'DESCARTADO_O_BAJA';
@@ -104,6 +106,7 @@ export interface RawContactRow {
   id: string;
   nombre: string;
   vocativoOverride?: string;
+  calleOCruce?: string;
   barrio: string;
   barrioOriginalSheet?: string;
   barrioCorregidoPorDireccion?: boolean;
@@ -118,6 +121,7 @@ export interface RawContactRow {
   enSheets?: boolean;
   primerContactoEnviado?: boolean;
   fechaPrimerContacto?: string;
+  fechaAdhesion?: string;
   fechaAgregado?: string;
   ultimoContacto?: string;
   intentos?: number;
@@ -325,7 +329,8 @@ export type ModoColaAutomatizacionWA =
   | 'PRIMER_CONTACTO'
   | 'RECORDATORIO_MANIANA_HOY'
   | 'SEGUIMIENTO_24H_48H_BAJA'
-  | 'AGRADECIMIENTO_POST_FIRMA';
+  | 'AGRADECIMIENTO_POST_FIRMA'
+  | 'DISENADOR_PERSONALIZADO';
 
 export interface MicroCluster {
   id: string;
@@ -419,6 +424,8 @@ export interface BloqueAgendaRecomendado {
   duracionTotalMinutos?: number;
   duracionEstimadaMin?: number;
   modalidad: ModalidadEncuentroAgenda;
+  modalidadRecomendada?: ModalidadEncuentroAgenda;
+  motivoRecomendacionModalidad?: string;
   modalidadElegidaUsuario?: ModalidadEncuentroAgenda;
   cafeElegidoUsuario?: string;
   barrio: string;
@@ -545,9 +552,29 @@ export interface AutoFirstMessageConfig {
   incluirOptOutBaja: boolean; // Frase amigable de salida ("respondé Baja")
   usarVariabilidadIAGemini: boolean; // Reescritura polimórfica con Gemini + Spintax
   barrioFiltro: string;
+  estadoFiltro?: string;
+  plantillaPersonalizada?: string;
   modoRompehieloCorto?: boolean; // Mensaje corto conversacional (< 220 chars) que no activa heurística de spam en dispositivos vinculados
   soloNumerosArgentina?: boolean; // Excluir números internacionales (+34, etc.) del lote automático en frío
   modoCola?: ModoColaAutomatizacionWA; // Etapa del proceso a automatizar
+}
+
+export interface FichaEscaneadaRow {
+  id: string;
+  apellidoYNombre: string;
+  nombrePadre?: string;
+  nombreMadre?: string;
+  dni: string;
+  matriculaTipo: string;
+  domicilio: string;
+  lugarYFecha?: string;
+  partido?: string;
+  tieneFirma?: boolean;
+  barrio: string;
+  fechaNacimiento: string;
+  profesionUOficio: string;
+  telefono: string;
+  observaciones: string;
 }
 
 export interface AutoFirstMessageCampaign {

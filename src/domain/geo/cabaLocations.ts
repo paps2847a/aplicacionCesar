@@ -390,7 +390,7 @@ export function inferirBarrioDesdeDireccionOComentario(
   }
 
   if (
-    /plaza italia|pza\.?\s*italia|ecoparque|bot[aá]nico|rosedal|el solar|las ca[ñn]itas|huergo\b|godoy cruz|el salvador|honduras|costa rica|nicaragua|soler\b|guatemala\b|fitz roy|bonpland|carranza|ravignani|ravigniani|niceto|g[üu]emes|coronel d[ií]az|salguero|ar[aá]oz|charcas|scalabrini ort[ií]z y charcas|libertador 4\d\d\d/i.test(
+    /plaza italia|pza\.?\s*italia|ecoparque|bot[aá]nico|rosedal|el solar|las ca[ñn]itas|huergo\b|godoy cruz|el salvador|honduras|costa rica|nicaragua|soler\b|guatemala\b|fitz roy|bonpland|carranza|ravignani|ravigniani|niceto|g[üu]emes|coronel d[ií]az|salguero|ar[aá]oz|charcas|scalabrini ort[ií]z|malabia|paraguay [345]\d\d\d|paraguay y|thames|uriarte|serrano|gorriti|cabrera|arce\b|b[aá]ez|chenaut|migueletes|cervi[ñn]o|lafinur|borges|gurruchaga|armenia|rep[uú]blica [aá]rabe|segu[ií]|ugarteche|bulnes [23]\d\d\d|vidt|jer[oó]nimo salguero|libertador [234]\d\d\d/i.test(
       low
     )
   ) {
@@ -449,7 +449,7 @@ export function inferirBarrioDesdeDireccionOComentario(
     return 'Belgrano';
   }
 
-  if (/las heras y pueyrred[oó]n|plaza francia|jun[ií]n 1\d\d\d|callao 1\d\d\d|quintana\b|alvear 1\d\d\d|posadas 1\d\d\d/i.test(low)) {
+  if (/las heras y pueyrred[oó]n|plaza francia|jun[ií]n 1\d\d\d|callao 1\d\d\d|quintana\b|alvear 1\d\d\d|posadas 1\d\d\d|arenales [12]\d\d\d|juncal [12]\d\d\d|french [23]\d\d\d|beruti [23]\d\d\d|pe[ñn]a [23]\d\d\d|pacheco de melo|agote|paraguay [12]\d\d\d|azcu[eé]naga 1\d\d\d|larrea 1\d\d\d|anchorena 1\d\d\d|ecuador 1\d\d\d|ag[üu]ero [12]\d\d\d|gallo 1\d\d\d|s[aá]nchez de bustamante [12]\d\d\d|billinghurst [12]\d\d\d/i.test(low)) {
     return 'Recoleta';
   }
 
@@ -492,8 +492,28 @@ export function inferirBarrioDesdeDireccionOComentario(
  * no coincide con el barrio cargado en el Google Sheets, modifica automáticamente el barrio al barrio
  * adecuado/correcto en función de la dirección o punto de encuentro cargada.
  */
+export function esDireccionReconocidaEnCABA(textoDireccion: string): boolean {
+  const limpio = (textoDireccion || '').trim();
+  if (!limpio || limpio.length < 4) return false;
+  const low = limpio.toLowerCase();
+  // Si menciona provincia / fuera de CABA explícitamente
+  if (
+    /\b(provincia|gba|pba|zona norte|zona sur|zona oeste|vicente l[oó]pez|olivos|mart[ií]nez|san isidro|tigre|avellaneda|lan[uú]s|lomas|quilmes|la plata|mor[oó]n|ramos mej[ií]a|caseros pba|san mart[ií]n pba|pilar|escobar)\b/i.test(
+      low
+    )
+  ) {
+    return false;
+  }
+  if (inferirBarrioDesdeDireccionOComentario(limpio, limpio)) return true;
+  if (extraerCalleOCruce(limpio).length >= 4) return true;
+  // Verificar formato calle + altura o calle y calle
+  if (/\b[a-záéíóúñ]{3,}\s+\d{2,4}\b/i.test(limpio)) return true;
+  if (/\b[a-záéíóúñ]{3,}\s+(?:y|e\/|esq\.?|esquina)\s+[a-záéíóúñ]{3,}\b/i.test(limpio)) return true;
+  return false;
+}
+
 export function sincronizarBarrioConDireccionComentario(raw: RawContactRow): RawContactRow {
-  const comLow = (raw.comentario || '').toLowerCase();
+  const comLow = `${raw.calleOCruce || ''} ${raw.comentario || ''}`.toLowerCase();
   if (
     comLow.includes('chile 1408') ||
     /reuni[oó]n\s+de\s+los\s+mi[eé]rcoles/i.test(comLow)
@@ -507,20 +527,27 @@ export function sincronizarBarrioConDireccionComentario(raw: RawContactRow): Raw
     };
   }
 
-  const calleOCruce = extraerCalleOCruce(raw.comentario);
+  const calleOCruce = (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
   if (!calleOCruce) {
     return raw;
   }
 
-  const barrioCorrecto = inferirBarrioDesdeDireccionOComentario(calleOCruce, raw.comentario);
+  const barrioCorrecto = inferirBarrioDesdeDireccionOComentario(
+    calleOCruce,
+    `${raw.calleOCruce || ''} ${raw.comentario || ''}`
+  );
   if (!barrioCorrecto) {
-    return raw;
+    return {
+      ...raw,
+      calleOCruce,
+    };
   }
 
   const barrioActual = (raw.barrio || '').trim() ? normalizarBarrioCABA(raw.barrio) : 'Palermo';
   if (barrioCorrecto.toLowerCase() !== barrioActual.toLowerCase()) {
     return {
       ...raw,
+      calleOCruce,
       barrio: barrioCorrecto,
       barrioOriginalSheet: raw.barrioOriginalSheet || barrioActual,
       barrioCorregidoPorDireccion: true,
@@ -529,6 +556,7 @@ export function sincronizarBarrioConDireccionComentario(raw: RawContactRow): Raw
 
   return {
     ...raw,
+    calleOCruce,
     barrio: barrioCorrecto,
   };
 }
@@ -585,7 +613,8 @@ export function resolverCoordenadasPartidaPerfil(profile: VoiceProfile): {
   direccionMaps: string;
 } {
   const dirRaw = (profile.direccionPartida || 'Godoy Cruz 3268, Palermo, CABA').trim();
-  const geo = geocodificarContactoLocal(dirRaw, 'Palermo', '0');
+  const barrioInferido = inferirBarrioDesdeDireccionOComentario(dirRaw, dirRaw) || 'Palermo';
+  const geo = geocodificarContactoLocal(dirRaw, barrioInferido, '0');
   const direccionMaps = /caba|ciudad aut[oó]noma|buenos aires/i.test(dirRaw)
     ? /argentina/i.test(dirRaw)
       ? dirRaw
@@ -746,9 +775,6 @@ export const EVENTOS_FICTICIOS_LEGACY_IDS = new Set([
   'cal-man-1',
   'cal-man-2',
   'cal-pas-1',
-  'cal-dentista',
-  'cal-reunion-virtual',
-  'cal-almuerzo-frima',
 ]);
 
 export const EVENTOS_FICTICIOS_LEGACY_SUMMARIES = new Set([
@@ -759,5 +785,24 @@ export const EVENTOS_FICTICIOS_LEGACY_SUMMARIES = new Set([
   'actividad barrial comuna 14',
   'almuerzo familiar',
 ]);
+
+export function inferirBarrioDesdeTextoCABA(
+  textoODireccion: string,
+  barrioFallback = 'Palermo'
+): string | null {
+  return inferirBarrioDesdeDireccionOComentario(textoODireccion, barrioFallback);
+}
+
+export function geocodificarDireccionCABA(
+  direccionOCalle: string,
+  barrioHint = 'Palermo'
+): { lat: number; lng: number; exacto: boolean } {
+  const barrioEfectivo =
+    inferirBarrioDesdeDireccionOComentario(direccionOCalle, barrioHint) ||
+    normalizarBarrioCABA(barrioHint) ||
+    'Palermo';
+  return geocodificarContactoLocal(barrioEfectivo, direccionOCalle);
+}
+
 
 

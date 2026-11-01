@@ -1,17 +1,50 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Rutas POPURRÍ — Logística Territorial & Adhesiones</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+    <meta name="theme-color" content="#2988FF" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Popurrí CABA" />
+    <link rel="icon" type="image/svg+xml" href="/popurri-icon.svg?v=2" />
+    <link rel="apple-touch-icon" href="/popurri-icon.svg?v=2" />
+    <title>Casa x Casa POPURRÍ — Logística Territorial & Adhesiones</title>
     <meta name="description" content="Plataforma geoespacial e inteligente para coordinar recorridos casa por casa, micro-clusters de Café Hub, seguimiento conversacional por WhatsApp en 1 clic e integración con Google Workspace y Maps para Hacemos Popurrí (Partido Regeneración)." />
-    <meta property="og:title" content="Rutas POPURRÍ — Logística Territorial & Adhesiones" />
+    <meta property="og:title" content="Casa x Casa POPURRÍ — Logística Territorial & Adhesiones" />
     <meta property="og:description" content="Plataforma geoespacial e inteligente para coordinar recorridos casa por casa, micro-clusters de Café Hub, seguimiento conversacional por WhatsApp en 1 clic e integración con Google Workspace y Maps para Hacemos Popurrí (Partido Regeneración)." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Raleway:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+    <script>
+      // Suppress Vite HMR WebSocket connection errors in sandbox/iframe environment
+      window.addEventListener('error', function(event) {
+        var msg = (event && (event.message || (event.error && event.error.message))) || '';
+        var file = (event && event.filename) || '';
+        if (
+          msg.includes('WebSocket') ||
+          msg.includes('createWebSocketModuleRunnerTransport') ||
+          file.includes('@vite/client')
+        ) {
+          event.stopImmediatePropagation();
+          event.preventDefault();
+          return true;
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event && event.reason;
+        var msg = String((reason && (reason.message || reason)) || '');
+        if (
+          msg.includes('WebSocket') ||
+          msg.includes('createWebSocketModuleRunnerTransport') ||
+          String((reason && reason.stack) || '').includes('@vite/client')
+        ) {
+          event.stopImmediatePropagation();
+          event.preventDefault();
+        }
+      }, true);
+    </script>
   </head>
   <body>
     <div id="root"></div>

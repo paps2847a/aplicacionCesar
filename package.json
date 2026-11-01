@@ -7,14 +7,13 @@
     "dev": "tsx server.ts",
     "build": "vite build",
     "start": "node server.ts",
-    "compile": "bun run build && bun scripts/generate_embedded_assets.ts && bun build --compile --minify ./server.ts --outfile popurri-app --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3",
-    "compile:win": "bun run build && bun scripts/generate_embedded_assets.ts && bun build --compile --minify --target=bun-windows-x64 ./server.ts --outfile popurri-app.exe --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3",
-    "compile:mac": "bun run build && bun scripts/generate_embedded_assets.ts && bun build --compile --minify --target=bun-darwin-arm64 ./server.ts --outfile popurri-app-mac --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js popurri-app popurri-app.exe popurri-app-mac",
-    "lint": "tsc --noEmit"
+    "clean": "rm -rf dist server.js",
+    "lint": "tsc --noEmit",
+    "test": "tsx --test src/utils/logic.test.ts"
   },
   "dependencies": {
+    "@esbuild/linux-x64": "^0.28.2",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/qrcode": "^1.5.6",
@@ -28,6 +27,7 @@
     "qrcode": "^1.5.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "tsx": "^4.21.0",
     "vite": "^8.3.0",
     "whatsapp-web.js": "^1.34.7"
   },
@@ -38,9 +38,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
-    "tsx": "^4.21.0",
     "typescript": "^7.0.2"
   }
 }

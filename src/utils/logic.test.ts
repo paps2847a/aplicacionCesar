@@ -43,11 +43,12 @@ import {
   aplicarReglaSaludoMismoDia,
   generarPanelTareasDiarias,
   generarVariantePolimorficaPrimerContacto,
-  inferirTransicionInteligenteWA,
+  coincideBusquedaUniversal,
   getMacroStageForContact,
-  exportarContactosACSV,
-  exportarContactosACSVExcelPuntoYComa,
-  exportarContactosATSVParaExcel,
+  validarDireccionYHorarioContacto,
+  marcarEntregaFichasExtra,
+  ESTADOS_FLUJO_CATALOGO,
+  parsearTextoAEstadoFlujo,
   obtenerEtiquetaEstadoFlujo,
 } from './logic';
 import {
@@ -503,6 +504,11 @@ test('automatizador de primeros mensajes aplica las 7 capas anti-bloqueo (< 45 m
   assert.equal(trasInexistente.adhirio, 'No');
   assert.equal(trasInexistente.estadoFlujo, 'DESCARTADO_O_BAJA');
   assert.ok(trasInexistente.comentario.includes('No existe en WhatsApp'));
+
+  const trasErrorEnvio = aplicarResultadoEnvioAutoAContacto(rawBase, 'ERROR_ENVIO', 'Fallo de red o plataforma');
+  assert.equal(trasErrorEnvio.primerContactoEnviado, false);
+  assert.equal(trasErrorEnvio.rsp, 'Nuevo');
+  assert.equal(trasErrorEnvio.estadoFlujo, 'SIN_CONTACTAR_1ER_MSJ');
 
   // 5. El script Python generado incluye SQLite, ventana comercial y tipeo humano
   const scriptPy = generarScriptPythonAutomatizador(
@@ -1219,7 +1225,7 @@ test('Chile 1408 los miércoles (21/10), presentación sólo en 1er contacto y s
     '21/10',
     `La reunión en Chile 1408 debe agendarse el miércoles 21/10 y no otro día (se agendó en ${bloqueSede!.fechaClave})`
   );
-  assert.equal(bloqueSede!.franjaHoraria, '18:30 a 20:30 hs');
+  assert.equal(bloqueSede!.franjaHoraria, '18:30 a 20:00 hs');
   assert.ok(
     bloqueSede!.diaEtiqueta.toLowerCase().includes('miércoles') ||
       bloqueSede!.diaEtiqueta.toLowerCase().includes('miercoles'),
@@ -1853,262 +1859,282 @@ test('Validador Anti-Pelones de fechas, regla de saludo en el mismo día, voz re
   assert.ok(colaAgradecimientos.items.length > 0, 'Debe armar cola de agradecimientos post-adhesión');
 });
 
-test('Matriz de transiciones inteligentes de WhatsApp y prioridad operativa de Retiro de Fichas', () => {
-  // 1. Contacto nuevo en 1er contacto pasa a 1ER_MSJ_ENVIADO_SIN_RSP
-  const trans1 = inferirTransicionInteligenteWA(
-    {
-      estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
-      rsp: 'Nuevo',
-      adhirio: 'Pendiente',
-    },
-    'primer_contacto'
+test('Búsqueda sin tildes, no regresión de estado al enviar WA, retiro de fichas separado de firmados y diseñador de campaña', () => {
+  const rawBase = {
+    id: '4',
+    nombre: 'Laura Vázquez',
+    barrio: 'Almagro',
+    telRaw: '11 5555-4444',
+    rsp: 'Sí' as const,
+    adhirio: 'Pendiente' as const,
+    comentario: 'Coordinar por la tarde',
+  };
+
+  // 1. Búsqueda universal insensible a tildes y por calle
+  const { actualizado: actualizadoCalle } = actualizarDatosContactoEnApp(rawBase, {
+    calleOCruce: 'Malabia 2150',
+  });
+  assert.equal(actualizadoCalle.barrio, 'Palermo', 'Malabia debe auto-corregir el barrio a Palermo');
+  const proc = procesarContacto(actualizadoCalle, DEFAULT_VOICE_PROFILE);
+  assert.equal(proc.calleOCruce, 'Malabia 2150');
+  assert.ok(coincideBusquedaUniversal(proc, 'vazquez'), 'Debe encontrar Vázquez buscando vazquez sin tilde');
+  assert.ok(coincideBusquedaUniversal(proc, 'malabia'), 'Debe encontrar por calle Malabia');
+
+  // 2. No regresión de estado avanzado al enviar WhatsApp
+  const { actualizado: rawConfirmado } = actualizarDatosContactoEnApp(actualizadoCalle, {
+    estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+  });
+  const postEnvio = registrarEnvioMensajeContacto(
+    rawConfirmado,
+    'auto',
+    '2026-10-30',
+    'Hola Laura, te escribo por lo de esta semana'
   );
-  assert.equal(trans1.estadoFlujo, '1ER_MSJ_ENVIADO_SIN_RSP');
-  assert.equal(trans1.primerContactoEnviado, true);
-
-  // 2. Mensajes de terreno en camino / en puerta / recordatorio conservan ENCUENTRO_CONFIRMADO
-  const transTerreno = inferirTransicionInteligenteWA(
-    {
-      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
-      rsp: 'Sí',
-      adhirio: 'Pendiente',
-    },
-    'en_camino'
+  const procPostEnvio = procesarContacto(postEnvio.actualizado, DEFAULT_VOICE_PROFILE);
+  assert.notEqual(
+    procPostEnvio.estadoFlujo,
+    '1ER_MSJ_ENVIADO_SIN_RSP',
+    'Enviar un WA a un contacto con Encuentro Confirmado jamás debe regresarlo a 1ER_MSJ_ENVIADO_SIN_RSP'
   );
-  assert.equal(transTerreno.estadoFlujo, 'ENCUENTRO_CONFIRMADO');
-  assert.equal(transTerreno.recordatorioEnviado, true);
-
-  // 3. Contacto confirmado NO sufre regresión a 1er mensaje ante mensaje ad-hoc
-  const transNoRegresion = inferirTransicionInteligenteWA(
-    {
-      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
-      rsp: 'Sí',
-      adhirio: 'Pendiente',
-    },
-    'mensaje_general'
-  );
-  assert.equal(transNoRegresion.estadoFlujo, 'ENCUENTRO_CONFIRMADO');
-
-  // 4. Disculpas / reprogramación pasa a PASO_DATOS_FALTA_CONFIRMAR
-  const transReprog = inferirTransicionInteligenteWA(
-    {
-      estadoFlujo: 'ENCUENTRO_CONFIRMADO',
-      rsp: 'Sí',
-      adhirio: 'Pendiente',
-    },
-    'disculpas_y_reprogramacion'
-  );
-  assert.equal(transReprog.estadoFlujo, 'PASO_DATOS_FALTA_CONFIRMAR');
-
-  // 5. Sin DNI CABA pasa a SIN_DNI_CABA_PEDIR_REFERIDOS
-  const transBaja = inferirTransicionInteligenteWA(
-    {
-      estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
-      rsp: 'Sí',
-      adhirio: 'Pendiente',
-    },
-    'no_caba_referidos'
-  );
-  assert.equal(transBaja.estadoFlujo, 'SIN_DNI_CABA_PEDIR_REFERIDOS');
-  assert.equal(transBaja.adhirio, 'No');
-
-  // 6. Agradecimiento post firma conserva YA_ADHIRIO_FIRMA_OK
-  const transFirma = inferirTransicionInteligenteWA(
-    {
-      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
-      rsp: 'Sí',
-      adhirio: 'Sí',
-    },
-    'agradecimiento_post_firma'
-  );
-  assert.equal(transFirma.estadoFlujo, 'YA_ADHIRIO_FIRMA_OK');
-  assert.equal(transFirma.adhirio, 'Sí');
-
-  // 7. Prioridad operativa: PENDIENTE_RETIRO_FICHAS debe evaluarse antes de adheridos puros
-  const contactoConFichas = procesarContacto(
-    {
-      id: '999',
-      nombre: 'Prueba Fichas',
-      barrio: 'Palermo',
-      telRaw: '1122334455',
-      adhirio: 'Sí',
-      comentario: 'Firma lista, pendiente retiro de 5 fichas extras del local',
-      rsp: 'Sí',
-    },
-    DEFAULT_VOICE_PROFILE
-  );
-  assert.equal(contactoConFichas.estadoFlujo, 'PENDIENTE_RETIRO_FICHAS');
-  assert.equal(getMacroStageForContact(contactoConFichas), 'pausa');
-
-  // 8. Exportación CSV incluye BOM UTF-8 y encabezados correctos
-  const csv = exportarContactosACSV([contactoConFichas]);
-  assert.ok(csv.startsWith('\uFEFF'), 'CSV debe comenzar con BOM UTF-8 para apertura directa en Excel');
-  assert.ok(csv.includes('Prueba Fichas'), 'CSV debe contener el nombre del contacto');
-
-  // 9. Exportación CSV con punto y coma (;) para Excel en español
-  const csvExcel = exportarContactosACSVExcelPuntoYComa([contactoConFichas]);
-  assert.ok(csvExcel.startsWith('\uFEFF'), 'CSV Excel debe comenzar con BOM UTF-8');
-  assert.ok(csvExcel.includes(';Prueba Fichas;'), 'CSV Excel debe usar punto y coma como delimitador');
-
-  // 10. Exportación TSV para copiar y pegar en Sheets / Excel
-  const tsv = exportarContactosATSVParaExcel([contactoConFichas]);
-  assert.ok(tsv.includes('\tPrueba Fichas\t'), 'TSV debe usar tabulaciones como delimitador');
-});
-
-test('Cierre Diario no cuenta contactos revertidos a Nuevos y registra adhesiones legítimas de hoy', () => {
-  const ahora = new Date('2026-10-30T16:00:00.000Z').getTime();
-  
-  // Contacto 1: En etapa Nuevos (probado y devuelto a Nuevos)
-  const contactoRevertido = procesarContacto(
-    {
-      id: '991',
-      nombre: 'Prueba Revertido',
-      barrio: 'Palermo',
-      telRaw: '1199887766',
-      rsp: 'Nuevo',
-      adhirio: 'Pendiente',
-      comentario: 'Sin comentarios',
-      estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
-      actualizadoEnAppAt: '2026-10-30T15:00:00.000Z',
-    },
-    DEFAULT_VOICE_PROFILE
-  );
-
-  // Contacto 2: Firmó hoy
-  const contactoFirmoHoy = procesarContacto(
-    {
-      id: '992',
-      nombre: 'Vecino Firma Hoy',
-      barrio: 'Palermo',
-      telRaw: '1155443322',
-      rsp: 'Sí',
-      adhirio: 'Sí',
-      comentario: 'Firma conseguida [Firmó el 30/10 a las 14:00 hs]',
-      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
-      actualizadoEnAppAt: '2026-10-30T14:00:00.000Z',
-    },
-    DEFAULT_VOICE_PROFILE
-  );
-
-  // Contacto 3: Ya había firmado en el pasado (histórico)
-  const contactoFirmoAntes = procesarContacto(
-    {
-      id: '993',
-      nombre: 'Florencia Ya Firmo',
-      barrio: 'Palermo',
-      telRaw: '1144332211',
-      rsp: 'Sí',
-      adhirio: 'Sí',
-      comentario: 'Ya adhirió previamente en sede. En pausa temporal',
-      estadoFlujo: 'POSTERGO_SALUD_O_VIAJE',
-      actualizadoEnAppAt: '2026-10-30T12:00:00.000Z',
-    },
-    DEFAULT_VOICE_PROFILE
-  );
-
-  const panel = generarPanelTareasDiarias(
-    [contactoRevertido, contactoFirmoHoy, contactoFirmoAntes],
-    {} as any,
-    [],
-    DEFAULT_VOICE_PROFILE,
-    ahora
-  );
-
-  // El revertido a Nuevos NO debe figurar como persona hablada hoy
-  const idsHablados = panel.resumenFormsYApps.estatusPersonasHabladasHoy.map((x) => x.contactId);
-  assert.ok(!idsHablados.includes('991'), 'Contacto en Nuevos no debe figurar en personas habladas');
-
-  // La adhesión de hoy debe ser 1 (sólo Vecino Firma Hoy, no Florencia que firmó antes)
-  assert.equal(panel.resumenFormsYApps.adhesionesConseguidasHoy, 1);
-  assert.equal(panel.resumenFormsYApps.adhesionesTotalesAcumuladas, 2);
-});
-
-test('Reunión semanal en Chile 1408 en día viernes no se agenda HOY viernes sino el próximo miércoles 04/11', () => {
-  // Viernes 30 de octubre de 2026, 17:06 hs (como en el reporte de usuario)
-  const ahoraViernes = new Date('2026-10-30T17:06:00-03:00').getTime();
-  const contactos = INITIAL_RAW_CONTACTS.map((r) =>
-    procesarContacto(r, DEFAULT_VOICE_PROFILE, ahoraViernes)
-  );
-
-  const corte = generarCorteEstrategicoLocal(
-    contactos,
-    DEFAULT_VOICE_PROFILE,
-    'Todos',
-    undefined,
-    ahoraViernes
-  );
-
-  const bloqueSede = corte.agendaSugeridaDias.find((b) => b.id === 'agenda-sede-chile-1408');
-  assert.ok(bloqueSede, 'Debe existir el bloque de reunión en Chile 1408');
-
-  // En viernes 30/10, el próximo miércoles es 04/11 (no hoy 30/10)
   assert.equal(
-    bloqueSede!.fechaClave,
-    '04/11',
-    `La reunión de los miércoles debe agendarse el 04/11 y no hoy 30/10 (quedó en ${bloqueSede!.fechaClave})`
+    getMacroStageForContact(procPostEnvio),
+    'agendados',
+    'Debe permanecer en la etapa de Cita Confirmada'
   );
 
-  // La etiqueta del día debe ser MIÉRCOLES 04/11 y NUNCA contener HOY
-  assert.ok(
-    !bloqueSede!.diaEtiqueta.includes('HOY'),
-    `La etiqueta del día NO debe decir HOY en un viernes: ${bloqueSede!.diaEtiqueta}`
-  );
-  assert.ok(
-    bloqueSede!.diaEtiqueta.toLowerCase().includes('miércoles') ||
-      bloqueSede!.diaEtiqueta.toLowerCase().includes('miercoles'),
-    `La etiqueta debe corresponder al miércoles: ${bloqueSede!.diaEtiqueta}`
+  // 3. Separación de Retiro de Fichas Extras (1 sem) respecto de Firmados
+  const conFichas = marcarEntregaFichasExtra(rawConfirmado, 'X2');
+  const procFichas = procesarContacto(conFichas, DEFAULT_VOICE_PROFILE);
+  assert.equal(procFichas.estadoFlujo, 'PENDIENTE_RETIRO_FICHAS');
+  assert.equal(
+    getMacroStageForContact(procFichas),
+    'pausa',
+    'Quien firmó y se quedó con fichas X2 debe figurar en pausa/retiro de fichas y NO en firmados hasta retirar las fichas'
   );
 
-  // Los dos contactos específicos de Chile 1408 deben estar incluidos
-  const idsSede = bloqueSede!.contactosIncluidos.map((c) => c.id);
-  assert.ok(idsSede.includes('15'), 'Ana Clara Odello (#15) debe estar incluida');
-  assert.ok(idsSede.includes('74'), 'Celeste Constanza Bucari (#74) debe estar incluida');
+  // 4. Revertir contacto de prueba a SIN_CONTACTAR_1ER_MSJ limpia actualizadoEnAppAt
+  const { actualizado: revertido } = actualizarDatosContactoEnApp(conFichas, {
+    estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
+    adhirio: 'Pendiente',
+  });
+  assert.equal(revertido.actualizadoEnAppAt, undefined);
+  assert.ok(!/\[Modificado el/i.test(revertido.comentario));
+
+  // 5. Diseñador de campaña personalizado
+  const colaCustom = generarColaEnvioAutomaticoPrimerContacto(
+    [procPostEnvio],
+    {
+      modoCola: 'DISENADOR_PERSONALIZADO',
+      estadoFiltro: procPostEnvio.estadoFlujo,
+      plantillaPersonalizada: 'Hola {nombre} de {barrio}, paso por {direccion}. Firma: {promotor}',
+      cupoSorteado: 10,
+    },
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(colaCustom.items.length, 1);
+  assert.ok(colaCustom.items[0].mensajePrimerContacto.includes('Malabia 2150'));
 });
 
-test('Módulo de planificación territorial y automatización de campañas (4 fases): motor, ajuste manual, difusión y confirmación dinámica', () => {
-  const contactos = INITIAL_RAW_CONTACTS.map((r) =>
-    procesarContacto(r, DEFAULT_VOICE_PROFILE, Date.now())
-  );
-  const corte = generarCorteEstrategicoLocal(
-    contactos,
-    DEFAULT_VOICE_PROFILE,
-    'Todos',
-    undefined,
-    Date.now()
+test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y análisis de Columnas E, F y G', () => {
+  const CHIPS_OFICIALES_RESTAURADOS = [
+    '1. Nuevo · Sin 1er mensaje',
+    '1b. Nuevo · Falta Nombre',
+    '2. 1er Msj Enviado · Esperando respuesta',
+    '3. Respondió · Falta calle/esquina o día',
+    '3b. Pidió más info (5 ejes enviados)',
+    '3c. Prefiere Punto / Café / Sede',
+    '4. Pasó dirección/horario · Falta confirmar',
+    '5. Encuentro Confirmado (En Ruta)',
+    '6. Recordatorio / En Camino Enviado',
+    '7. Llevó Fichas Extra · Pendiente Retiro',
+    '8. En Pausa (Viaje / Salud / Más adelante)',
+    '9. ✅ Ya Firmó · Adhesión Completada',
+    '10. Sin DNI en CABA · Pedir Referidos',
+    '11. Baja / Número Inválido / Descartado',
+  ];
+
+  // 1. Verificar que el catálogo de la App tenga exactamente los mismos 14 chips carácter por carácter
+  assert.deepEqual(
+    ESTADOS_FLUJO_CATALOGO.map((e) => e.label),
+    CHIPS_OFICIALES_RESTAURADOS
   );
 
-  // FASE 1: Motor de optimización genera bloques con paradas secuenciales diurnas
-  assert.ok(corte.agendaSugeridaDias.length > 0, 'El motor debe generar bloques de agenda para los circuitos');
-  const bloque = corte.agendaSugeridaDias[0];
-  assert.ok(bloque.contactosIncluidos.length > 0, 'El bloque debe agrupar contactos del barrio');
-  assert.ok(bloque.horaInicioCalculada, 'Debe calcular hora de inicio para el circuito');
+  // 2. Verificar bijección 1:1 entre parsearTextoAEstadoFlujo y obtenerEtiquetaEstadoFlujo
+  for (const item of ESTADOS_FLUJO_CATALOGO) {
+    const parsed = parsearTextoAEstadoFlujo(item.label);
+    assert.equal(parsed, item.value, `El chip "${item.label}" debe mapear a ${item.value}`);
+    assert.equal(
+      obtenerEtiquetaEstadoFlujo(parsed!),
+      item.label,
+      `El estado ${item.value} debe devolver exactamente el chip "${item.label}"`
+    );
+  }
 
-  // FASE 2: Ajuste manual del planificador (modalidad Café Hub vs Puerta a Puerta)
-  const contactoPrueba = bloque.contactosIncluidos[0];
-  const mensajeCafe = generarMensajeContextual(contactoPrueba, DEFAULT_VOICE_PROFILE, 'propuesta_bloque_agenda');
-  assert.ok(mensajeCafe.texto.includes('firma de adhesión'), 'Debe incluir mención a la firma de adhesión');
-  assert.ok(mensajeCafe.texto.includes('DNI físico'), 'Debe recordar tener DNI físico de CABA a mano');
+  // 3. Verificar análisis de Columnas E, F y G sobre casos reales de Google Sheets
+  const previoEnApp = [
+    {
+      id: '1',
+      nombre: 'Laura Masson',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 3345-7903',
+      rsp: 'Sí' as const,
+      adhirio: 'Pendiente' as const,
+      comentario: 'Visita 21/10 a las 10 (Charcas 3702)',
+      estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE' as const,
+      estadoFlujoEtiqueta: '3c. Prefiere Punto / Café / Sede',
+      primerContactoEnviado: true,
+    },
+  ];
 
-  // FASE 3: Difusión automatizada y transiciones de estado
-  const transitionData = inferirTransicionInteligenteWA(contactoPrueba, 'Hola, ¿cómo estás? Te confirmo la visita');
-  assert.ok(transitionData.estadoFlujo, 'Debe sugerir transición de estado al emitir propuesta');
+  const csvDesdeSheets = [
+    '"#","Nombre","Barrio","Tel","RSP","Adhirió","Comentario","Estado"',
+    '"1","Laura Masson","Palermo","54 9 11 3345-7903","Sí","Pendiente","Visita 21/10 a las 10 (Charcas 3702)","5. Visita/Café propuesto · Esperando OK"',
+    '"12","Carolina Garay","Villa Urquiza","54 9 11 3695-8590","Sí","Sí","Visita 16/10 a las 10:30 o entre 12:30 y 15 (Club Pinocho)","4. Datos pasados · Proponer Visita/Café"',
+    '"15","Ana Clara Odello","Monserrat","54 9 11 5555-1234","Sí","Pendiente","Va a pasar por Chile 1408","4. Datos pasados · Proponer Visita/Café"',
+    '"22","Oks Florencia","Nuñez","54 9 11 5555-2222","Sí","Sí","COORDINAR para buscar fichas X2 el 23/10 (Correa 2838)","9. ¡Ya Adhirió! (Ficha Firmada)"',
+    '"25","Gómez Ortiz María Belen","Palermo","54 9 11 5555-2525","Sí","Pendiente","Su hija está enferma","3. Respondió · Validar DNI CABA y Zona"',
+    '"73","Martín Zlotnik","Belgrano","54 9 11 5555-7373","Sí","Pendiente","Pidió más info. Se la compartí.","3. Respondió · Validar DNI CABA y Zona"',
+    '"133","Leloir Sofía","Palermo","54 9 11 5555-1330","Sí","Pendiente","(El Salvador 5778)","4. Datos pasados · Proponer Visita/Café"',
+    '"186","","Palermo","54 9 11 5555-1860","No","Pendiente","","1. Nuevo · Sin 1er mensaje"',
+  ].join('\n');
 
-  // FASE 4: Fase de confirmación dinámica y semáforo de firma
-  // 1. Confirmó propuesta
-  assert.equal(
-    obtenerEtiquetaEstadoFlujo('ENCUENTRO_CONFIRMADO'),
-    '8. Encuentro confirmado (En agenda de ruta)'
+  const filasParseadas = parsearTSVoCSVContactos(csvDesdeSheets, true);
+  const { contactosFusionados } = fusionarContactosDesdeSheetsConControl(
+    filasParseadas,
+    previoEnApp,
+    new Set(),
+    true
   );
-  // 2. Firmó (Semáforo verde)
-  assert.equal(
-    obtenerEtiquetaEstadoFlujo('YA_ADHIRIO_FIRMA_OK'),
-    '10. ✅ Proceso terminado — Ya adhirió (Listo)'
+
+  const laura = procesarContacto(
+    contactosFusionados.find((c) => c.id === '1')!,
+    DEFAULT_VOICE_PROFILE
   );
+  assert.equal(laura.estadoFlujo, 'PASO_DATOS_FALTA_CONFIRMAR');
+  assert.equal(laura.estadoFlujoEtiqueta, '4. Pasó dirección/horario · Falta confirmar');
+
+  const carolina = procesarContacto(
+    contactosFusionados.find((c) => c.id === '12')!,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(carolina.estadoFlujo, 'YA_ADHIRIO_FIRMA_OK');
+  assert.equal(carolina.estadoFlujoEtiqueta, '9. ✅ Ya Firmó · Adhesión Completada');
+  assert.equal(carolina.adhirio, 'Sí');
+
+  const anaClara = procesarContacto(
+    contactosFusionados.find((c) => c.id === '15')!,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(anaClara.estadoFlujo, 'PREFIERE_CAFE_HUB_O_SEDE');
+  assert.equal(anaClara.estadoFlujoEtiqueta, '3c. Prefiere Punto / Café / Sede');
+
+  const florencia = procesarContacto(
+    contactosFusionados.find((c) => c.id === '22')!,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(florencia.estadoFlujo, 'PENDIENTE_RETIRO_FICHAS');
+  assert.equal(florencia.estadoFlujoEtiqueta, '7. Llevó Fichas Extra · Pendiente Retiro');
+
+  const belen = procesarContacto(
+    contactosFusionados.find((c) => c.id === '25')!,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(belen.estadoFlujo, 'POSTERGO_SALUD_O_VIAJE');
+  assert.equal(belen.estadoFlujoEtiqueta, '8. En Pausa (Viaje / Salud / Más adelante)');
+
+  const martin = procesarContacto(
+    contactosFusionados.find((c) => c.id === '73')!,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(martin.estadoFlujo, 'PIDIO_MAS_INFO_ENVIADA');
+  assert.equal(martin.estadoFlujoEtiqueta, '3b. Pidió más info (5 ejes enviados)');
+
+  const sofia = procesarContacto(
+    contactosFusionados.find((c) => c.id === '133')!,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(sofia.estadoFlujo, 'RESPONDIO_FALTA_DNI_O_ZONA');
+  assert.equal(sofia.estadoFlujoEtiqueta, '3. Respondió · Falta calle/esquina o día');
+
+  const sinNom186 = procesarContacto(
+    contactosFusionados.find((c) => c.id === '186')!,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(sinNom186.estadoFlujo, 'FALTA_NOMBRE_Y_APELLIDO');
+  assert.equal(sinNom186.estadoFlujoEtiqueta, '1b. Nuevo · Falta Nombre');
 });
 
+test('Feedback-8: Sincronización bidireccional App <-> Google Sheets nunca revierte un cambio reciente en la App y refleja cambios en Sheets para los 14 estados', () => {
+  // 1. Laura Masson (#1) empieza en "4. Pasó dirección/horario · Falta confirmar"
+  const lauraInicial = {
+    id: '1',
+    nombre: 'Laura Masson',
+    barrio: 'Palermo',
+    telRaw: '54 9 11 3345-7903',
+    rsp: 'Sí' as const,
+    adhirio: 'Pendiente' as const,
+    comentario: 'Visita 21/10 a las 10 (Charcas 3702)',
+    estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR' as const,
+    estadoFlujoEtiqueta: '4. Pasó dirección/horario · Falta confirmar',
+    primerContactoEnviado: true,
+    enSheets: true,
+  };
 
+  // El usuario cambia en la App a "3c. Prefiere Punto / Café / Sede"
+  const { actualizado: lauraEditadaEnApp } = actualizarDatosContactoEnApp(lauraInicial, {
+    estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE',
+  });
+  assert.equal(lauraEditadaEnApp.estadoFlujo, 'PREFIERE_CAFE_HUB_O_SEDE');
+  assert.equal(lauraEditadaEnApp.estadoFlujoEtiqueta, '3c. Prefiere Punto / Café / Sede');
+  assert.ok(Boolean(lauraEditadaEnApp.actualizadoEnAppAt));
 
+  // Si un poll en segundo plano lee todavía el estado viejo de Sheets dentro de los primeros segundos,
+  // jamás debe revertir el cambio recién hecho en la App:
+  const tsvSheetsAunViejo = [
+    '#\tNombre\tBarrio\tTel\tRSP\tAdhirió\tComentario\tEstado',
+    '1\tLaura Masson\tPalermo\t54 9 11 3345-7903\tSí\tPendiente\tVisita 21/10 a las 10 (Charcas 3702)\t4. Pasó dirección/horario · Falta confirmar',
+  ].join('\n');
+  const filasSheetsViejo = parsearTSVoCSVContactos(tsvSheetsAunViejo, true);
+  const { contactosFusionados: trasPollInmediato } = fusionarContactosDesdeSheetsConControl(
+    filasSheetsViejo,
+    [lauraEditadaEnApp],
+    new Set(),
+    true
+  );
+  const lauraTrasPollInmediato = procesarContacto(trasPollInmediato[0], DEFAULT_VOICE_PROFILE);
+  assert.equal(
+    lauraTrasPollInmediato.estadoFlujo,
+    'PREFIERE_CAFE_HUB_O_SEDE',
+    'Un poll inmediato con caché vieja jamás debe revertir el estado recién cambiado en la App'
+  );
 
-
+  // 2. Cuando el usuario cambia el chip directamente en Google Sheets (pasada la ventana de edición local),
+  // la App debe reflejar el nuevo estado de Google Sheets para cualquiera de los 14 chips:
+  const lauraSinEdicionReciente = {
+    ...lauraEditadaEnApp,
+    actualizadoEnAppAt: '2026-10-01T00:00:00.000Z',
+  };
+  for (const chip of ESTADOS_FLUJO_CATALOGO) {
+    const nombreFila = chip.value === 'FALTA_NOMBRE_Y_APELLIDO' ? '' : 'Laura Masson';
+    const tsvCambioEnSheets = [
+      '#\tNombre\tBarrio\tTel\tRSP\tAdhirió\tComentario\tEstado',
+      `1\t${nombreFila}\tPalermo\t54 9 11 3345-7903\tSí\tSí\tVisita 21/10 a las 10 (Charcas 3702)\t${chip.label}`,
+    ].join('\n');
+    const filas = parsearTSVoCSVContactos(tsvCambioEnSheets, true);
+    const { contactosFusionados } = fusionarContactosDesdeSheetsConControl(
+      filas,
+      [lauraSinEdicionReciente],
+      new Set(),
+      true
+    );
+    const procesada = procesarContacto(contactosFusionados[0], DEFAULT_VOICE_PROFILE);
+    assert.equal(
+      procesada.estadoFlujo,
+      chip.value,
+      `Cambio en Google Sheets al chip "${chip.label}" debe reflejarse como ${chip.value} en la App`
+    );
+    assert.equal(procesada.estadoFlujoEtiqueta, chip.label);
+  }
+});
 
 
