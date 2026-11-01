@@ -6,9 +6,17 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
+    "embed": "bun scripts/generate_embedded_assets.ts",
     "start": "node server.ts",
+    "compile": "bun run build && bun run embed && bun build --compile --minify --bytecode --format=esm --target=bun-linux-x64 ./server.ts --outfile popurri-app --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3 --external tsx",
+    "compile:linux": "bun run build && bun run embed && bun build --compile --minify --bytecode --format=esm --target=bun-linux-x64 ./server.ts --outfile popurri-app-linux-x64 --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3 --external tsx",
+    "compile:linux-arm": "bun run build && bun run embed && bun build --compile --minify --bytecode --format=esm --target=bun-linux-arm64 ./server.ts --outfile popurri-app-linux-arm64 --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3 --external tsx",
+    "compile:win": "bun run build && bun run embed && bun build --compile --minify --bytecode --format=esm --target=bun-windows-x64 ./server.ts --outfile popurri-app.exe --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3 --external tsx",
+    "compile:mac": "bun run build && bun run embed && bun build --compile --minify --bytecode --format=esm --target=bun-darwin-arm64 ./server.ts --outfile popurri-app-mac-arm64 --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3 --external tsx",
+    "compile:mac-intel": "bun run build && bun run embed && bun build --compile --minify --bytecode --format=esm --target=bun-darwin-x64 ./server.ts --outfile popurri-app-mac-x64 --env=inline --define process.env.BUN_STANDALONE='\"true\"' --external vite --external @aws-sdk/client-s3 --external tsx",
+    "compile:all": "bun run compile && bun run compile:win && bun run compile:mac && bun run compile:mac-intel",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist server.js popurri-app popurri-app* popurri-app.exe",
     "lint": "tsc --noEmit",
     "test": "tsx --test src/utils/logic.test.ts"
   },

@@ -37,6 +37,11 @@ import {
   setSetting,
   getAllSettings,
 } from './repositories/settingsRepository';
+import {
+  getEmbeddedAsset,
+  getEmbeddedIndexHtml,
+  hasEmbeddedFrontend,
+} from './embeddedAssets';
 
 import { INITIAL_CALENDAR_EVENTS } from '../src/data/estatusPopurriData';
 import {
@@ -56,7 +61,16 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 const PORT = Number(process.env.PORT) || 3000;
-const DATA_DIR = path.join(ROOT_DIR, 'data');
+const DATA_DIR = fs.existsSync(path.join(ROOT_DIR, 'data'))
+  ? path.join(ROOT_DIR, 'data')
+  : path.resolve(process.cwd(), 'data');
+
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch {}
+}
+
 const SHARED_STATE_PATH = path.join(DATA_DIR, 'popurri_shared_state.json');
 const TMP_SHARED_STATE_PATH = path.join(os.tmpdir(), 'popurri_shared_state.json');
 
@@ -1304,8 +1318,33 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     process.env.npm_lifecycle_event === 'dev' ||
     process.env.NODE_ENV === 'development' ||
     (!process.env.NODE_ENV && process.env.npm_lifecycle_event !== 'start');
+  const isStandalone = Boolean(process.env.BUN_STANDALONE) || hasEmbeddedFrontend();
 
-  if (!isDev && fs.existsSync(path.join(distPath, 'index.html'))) {
+  if (isStandalone && hasEmbeddedFrontend()) {
+    // Modo 100% Autocontenido: El ejecutable sirve el frontend directamente desde memoria
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+      if (req.path.startsWith('/api')) return next();
+
+      const asset = getEmbeddedAsset(req.path);
+      if (asset) {
+        res.setHeader('Content-Type', asset.contentType);
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        return res.send(asset.buffer);
+      }
+      next();
+    });
+
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) return next();
+      const index = getEmbeddedIndexHtml();
+      if (index) {
+        res.setHeader('Content-Type', index.contentType);
+        return res.send(index.buffer);
+      }
+      res.status(404).send('No frontend found');
+    });
+  } else if (!isDev && fs.existsSync(path.join(distPath, 'index.html'))) {
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
