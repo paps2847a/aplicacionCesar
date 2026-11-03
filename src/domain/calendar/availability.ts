@@ -85,7 +85,7 @@ export function extraerFechasMencionadas(comentario: string): string[] {
 export function limpiarFechasDeTextoParaHorario(comentario: string): string {
   const raw = String(comentario || '');
   const sinPropuestaBloque = raw
-    .replace(/\[Propuesta\s+[^\]]*\]/gi, ' ')
+    .replace(/\[(?:Propuesta|Confirmado|Modalidad|Reprogramado|Reprogramación)[^\]]*\]/gi, ' ')
     .replace(/\(\d{1,2}:\d{2}\s*a\s*\d{1,2}:\d{2}\s*hs(?:\s*\([^)]*\))?\)/gi, ' ');
   const sinFechas = (txt: string) =>
     txt
@@ -264,24 +264,7 @@ export function extraerHoraVencimientoEnColumnaG(
 ): { tieneHoraEnCelda: boolean; minutosFin: number; etiquetaHora: string } {
   const com = limpiarFechasDeTextoParaHorario(comentario || '').toLowerCase();
 
-  // 1. Hora puntual explícita con prefijo ("a las 10", "cerca de las 17:30", "alrededor de las 15", "tipo 16 hs")
-  // Se evalúa primero para que una cita puntual (ej. Laura 10:00 hs) nunca sea eclipsada por un rango secundario.
-  const mPuntualPrefijo = com.match(
-    /\b(?:a\s+las\s+|cerca\s+de\s+las\s+|alrededor\s+de\s+las\s+|tipo\s+)(\d{1,2})(?::(\d{2}))?(?!\s*\/)(?:\s*hs|\s*h)?\b/i
-  );
-  if (mPuntualPrefijo) {
-    const h = parseInt(mPuntualPrefijo[1], 10);
-    const min = mPuntualPrefijo[2] ? parseInt(mPuntualPrefijo[2], 10) : 0;
-    if (Number.isFinite(h) && h >= 6 && h <= 23) {
-      return {
-        tieneHoraEnCelda: true,
-        minutosFin: Math.min(23 * 60 + 59, h * 60 + min + 5),
-        etiquetaHora: `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')} hs`,
-      };
-    }
-  }
-
-  // 2. "antes de las 11:30 y 12:00", "antes de las 18", "hasta las 16"
+  // 1. "antes de las 11:30 y 12:00", "antes de las 18", "hasta las 16"
   const mAntesRango = com.match(
     /\b(?:antes\s+de\s+(?:las\s+)?|hasta\s+(?:las\s+)?)(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?(?:\s*(?:y|o|a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?)?\b/i
   );
@@ -296,15 +279,16 @@ export function extraerHoraVencimientoEnColumnaG(
         : `antes de las ${String(h1).padStart(2, '0')}:${String(min1).padStart(2, '0')} hs`;
       return {
         tieneHoraEnCelda: true,
-        minutosFin: h1 * 60 + min1,
+        minutosFin: h2 * 60 + min2,
         etiquetaHora: etiq,
       };
     }
   }
 
-  // 3. Rango explícito: "entre (las) 15 y (las) 18", "entre 15:30 y 17:30", "de 13 a 15", "10 a 13 hs"
+  // 2. Rango explícito: "entre (las) 15 y (las) 16:00", "entre 15:30 y 17:30", "de 13 a 15", "10 a 13 hs", "a las 18:00 y 19:00 hs"
+  // Se evalúa ANTES de hora puntual para que el vencimiento ocurra al FINAL del rango (ej. 16:00 hs y no 15:00 hs).
   const mRango = com.match(
-    /\b(?:(?:entre\s+(?:las\s+)?|de\s+(?:las\s+)?)(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:y|a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?|(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h))\b/i
+    /\b(?:(?:entre\s+(?:las\s+)?|de\s+(?:las\s+)?|a\s+las\s+)(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:y|a|o|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?|(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?)\b/i
   );
   if (mRango) {
     const h1 = parseInt(mRango[1] || mRango[5], 10);
@@ -316,6 +300,22 @@ export function extraerHoraVencimientoEnColumnaG(
         tieneHoraEnCelda: true,
         minutosFin: h2 * 60 + min2,
         etiquetaHora: `${String(h1).padStart(2, '0')}:${String(min1).padStart(2, '0')} a ${String(h2).padStart(2, '0')}:${String(min2).padStart(2, '0')} hs`,
+      };
+    }
+  }
+
+  // 3. Hora puntual explícita con prefijo ("a las 10", "cerca de las 17:30", "alrededor de las 15", "tipo 16 hs")
+  const mPuntualPrefijo = com.match(
+    /\b(?:a\s+las\s+|cerca\s+de\s+las\s+|alrededor\s+de\s+las\s+|tipo\s+)(\d{1,2})(?::(\d{2}))?(?!\s*\/)(?:\s*hs|\s*h)?\b/i
+  );
+  if (mPuntualPrefijo) {
+    const h = parseInt(mPuntualPrefijo[1], 10);
+    const min = mPuntualPrefijo[2] ? parseInt(mPuntualPrefijo[2], 10) : 0;
+    if (Number.isFinite(h) && h >= 6 && h <= 23) {
+      return {
+        tieneHoraEnCelda: true,
+        minutosFin: Math.min(23 * 60 + 59, h * 60 + min + 5),
+        etiquetaHora: `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')} hs`,
       };
     }
   }
@@ -494,8 +494,14 @@ export function detectarAlertaPendienteVencido(
   if (!fechaVencidaDetectada) {
     return undefined;
   }
-  const yaConfirmadoEnApp = /\[Confirmado 1-a-1\]|\[Modalidad:/i.test(params.comentario || '');
-  if (tieneFechaHoraHoyOFuturaVigente && (!tieneAlgunaFechaAnteriorAHoy || yaConfirmadoEnApp)) {
+  const yaConfirmadoOReprogramadoEnApp =
+    /\[Confirmado 1-a-1\]|\[Modalidad:|visita\s+reprogramada|\[reprogramad/i.test(
+      params.comentario || ''
+    );
+  if (
+    tieneFechaHoraHoyOFuturaVigente &&
+    (!tieneAlgunaFechaAnteriorAHoy || yaConfirmadoOReprogramadoEnApp)
+  ) {
     return undefined;
   }
 

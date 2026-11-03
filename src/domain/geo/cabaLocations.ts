@@ -167,6 +167,9 @@ export function extraerCalleOCruce(comentario: string): string {
 
   if (
     antesDeParentesis.length >= 5 &&
+    antesDeParentesis.length <= 52 &&
+    !antesDeParentesis.includes('?') &&
+    !/respondi[oó]\s+en\s+wa|tengo\s+dni|radicad[oa]/i.test(antesDeParentesis) &&
     !esExpresionFechaOHora(antesDeParentesis) &&
     !esBarrioDeCABA(antesDeParentesis) &&
     !/^(sin\s+respuesta|no\s+contesta|1er\s+mensaje|pidi[oó]\s+m[aá]s\s+info|no\s+tiene\s+domicilio)/i.test(
@@ -175,7 +178,9 @@ export function extraerCalleOCruce(comentario: string): string {
   ) {
     const tieneAlturaOCruce =
       /\b(?:al\s+)?\d{3,4}\b/.test(antesDeParentesis) ||
-      /\b[A-ZÁÉÍÓÚÑa-záéíóúñ.]{3,}\s+(?:y|e)\s+[A-ZÁÉÍÓÚÑa-záéíóúñ.]{3,}/i.test(antesDeParentesis) ||
+      /\b[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ.]{2,}\s+(?:y|e)\s+[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ.]{2,}/.test(
+        antesDeParentesis
+      ) ||
       /\b(parque|pqe\.?|plaza|pza\.?|estaci[oó]n|subte|club|shopping|caf[eé]|sede|ecoparque|bot[aá]nico)\b/i.test(
         antesDeParentesis
       );
@@ -691,6 +696,15 @@ export function tienePuntoEncuentroODireccionDeterminada(input: {
   tieneDireccionRealEnComentario?: boolean;
   comentario?: string;
 }): boolean {
+  const esRetiroFichasConFecha =
+    (input.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' || input.situacion === 'RETIRO_FICHAS') &&
+    Boolean(input.tieneDireccionRealEnComentario || (input.calleOCruce && input.calleOCruce.trim().length > 0)) &&
+    /\b\d{1,2}\/\d{1,2}\b/.test(input.comentario || '');
+
+  if (esRetiroFichasConFecha) {
+    return true;
+  }
+
   const adh = (input.adhirio || '').toLowerCase();
   if (adh === 'sí' || adh === 'si') return false;
   if (

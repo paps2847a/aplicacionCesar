@@ -21,8 +21,11 @@ import {
   ArrowRight,
   Copy,
   Check,
+  X,
+  User,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { CandidateCard } from '../pipeline/CandidateCard';
 import type {
   CorteResultado,
   BloqueAgendaRecomendado,
@@ -228,6 +231,57 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   const [showVencidosSection, setShowVencidosSection] = useState<boolean>(false);
   const [syncingCalendarRoute, setSyncingCalendarRoute] = useState<boolean>(false);
   const [calendarQuickLinks, setCalendarQuickLinks] = useState<{ summary: string; url: string }[]>([]);
+  const [modalContactId, setModalContactId] = useState<string | null>(null);
+  const [fichasPickerParadaId, setFichasPickerParadaId] = useState<string | null>(null);
+
+  const modalContact = useMemo(() => {
+    if (!modalContactId) return null;
+    for (const b of bloques) {
+      const inB = b.contactosIncluidos.find((c) => c.id === modalContactId);
+      if (inB) return inB;
+      const inP = (b.paradasRutaSugerida || []).find((p) => p.contact.id === modalContactId);
+      if (inP) return inP.contact;
+    }
+    return alertasVencidos.find((c) => c.id === modalContactId) || null;
+  }, [modalContactId, bloques, alertasVencidos]);
+
+  const handleQuitarDelPlanificador = async (contact: Contact) => {
+    const comLimpio = (contact.comentario || '')
+      .replace(/\s*\[Confirmado\s+1-a-1[^\]]*\]/gi, '')
+      .replace(/\s*\[Declinó\s+Café\s+Hub[^\]]*\]/gi, '')
+      .replace(/\b([0-3]?\d\/[0-1]?\d)\b/g, '')
+      .trim();
+    const nota = `[Movido a "3. Falta calle/día" desde Planificador]`;
+    await onUpdateContact(contact.id, {
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      estadoFlujo: 'RESPONDIO_FALTA_DNI_O_ZONA',
+      comentario: comLimpio ? `${comLimpio} · ${nota}` : nota,
+    });
+    triggerToast(
+      `✓ #${contact.id} ${contact.primerNombre || contact.nombre}: Quitado del Planificador (pasó a 3. Falta calle/día)`
+    );
+  };
+
+  const handleMarcarReprogramacionVencido = async (contact: Contact) => {
+    const comSinFechasVencidas = (contact.comentario || '')
+      .replace(/\s*\[Confirmado\s+1-a-1[^\]]*\]/gi, '')
+      .replace(/\b([0-3]?\d\/[0-1]?\d)\b/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    const notaReprog = `[Reprogramación enviada · esperando nuevo día/hora]`;
+    await onUpdateContact(contact.id, {
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      estadoFlujo: 'RESPONDIO_FALTA_DNI_O_ZONA',
+      comentario: comSinFechasVencidas
+        ? `${comSinFechasVencidas} · ${notaReprog}`
+        : `${contact.calleOCruce ? `${contact.calleOCruce} · ` : ''}${notaReprog}`,
+    });
+    triggerToast(
+      `✓ #${contact.id} ${contact.primerNombre || contact.nombre}: Movido a "3. Falta calle/día" (esperando nuevo horario)`
+    );
+  };
 
   const triggerToast = (msg: string) => {
     setToastMsg(msg);
@@ -467,7 +521,11 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     );
   };
 
-  const handleSendWA = (contact: Contact, text: string) => {
+  const handleSendWA = (
+    contact: Contact,
+    text: string,
+    onAfterSent?: () => Promise<void> | void
+  ) => {
     const phone = contact.tel || contact.telRaw || contact.telWA || '';
     if (!phone || !onSendDirectWA) return;
 
@@ -499,7 +557,11 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
           );
           if (ok) {
             setSentSuccessIds((prev) => new Set(prev).add(contact.id));
-            triggerToast(`✅ Mensaje enviado a ${contact.primerNombre || contact.nombre}`);
+            if (onAfterSent) {
+              await onAfterSent();
+            } else {
+              triggerToast(`✅ Mensaje enviado a ${contact.primerNombre || contact.nombre}`);
+            }
           }
         } finally {
           setSendingId(null);
@@ -510,8 +572,17 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     setCountdownSending({ contactId: contact.id, secondsLeft: 3, timer });
   };
 
-  const handleMarkFichasParada = async (contact: Contact, cant: 1 | 2 | 3) => {
-    const xCant: 'X1' | 'X2' | 'X3' = cant === 1 ? 'X1' : cant === 3 ? 'X3' : 'X2';
+  const handleMarkFichasParada = async (contact: Contact, cant: 1 | 2 | 3 | 4 | 5) => {
+    const xCant: 'X1' | 'X2' | 'X3' | 'X4' | 'X5' =
+      cant === 1
+        ? 'X1'
+        : cant === 3
+        ? 'X3'
+        : cant === 4
+        ? 'X4'
+        : cant === 5
+        ? 'X5'
+        : 'X2';
     const actualizado = marcarEntregaFichasExtra(contact, xCant, Date.now());
     await onUpdateContact(contact.id, {
       rsp: actualizado.rsp,
@@ -520,8 +591,9 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
       comentario: actualizado.comentario,
       fechaAdhesion: actualizado.fechaAdhesion,
     });
+    setFichasPickerParadaId(null);
     triggerToast(
-      `✓ ${contact.primerNombre || contact.nombre}: Firmó y se dejaron X${cant} fichas (retiro en 1 semana)`
+      `✓ ${contact.primerNombre || contact.nombre}: Firmó y se dejaron X${cant} fichas (retiro 1 sem)`
     );
   };
 
@@ -608,192 +680,146 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl min-w-0 overflow-x-hidden px-3 sm:px-6 py-4 sm:py-6 space-y-5 sm:space-y-6">
-      {/* 1. Cabecera Principal con Conmutador Planificador vs Hoja de Ruta en Terreno + Escáner OCR */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-2xl border-2 border-[#323232] bg-white p-4 sm:p-5 shadow-[4px_4px_0px_#323232]">
-        <div>
+    <div className="mx-auto w-full max-w-6xl min-w-0 overflow-x-hidden px-2.5 sm:px-6 py-3 sm:py-5 space-y-4">
+      {/* 1. Cabecera Compacta con Conmutador de Modo + Selector Desplegable de Día */}
+      <div className="rounded-2xl border-2 border-[#323232] bg-white p-3.5 sm:p-4 shadow-[4px_4px_0px_#323232] space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-bold font-display text-[#323232]">
-              Planificador Inteligente & Hoja de Ruta en Terreno
+            <h2 className="text-base sm:text-lg font-bold font-display text-[#323232]">
+              Planificador &amp; Hoja de Ruta
             </h2>
-            <span className="rounded-lg bg-[#FFF06B] px-2.5 py-0.5 text-xs font-bold font-display text-[#323232] border border-[#323232]">
+            <span className="rounded-lg bg-[#FFF06B] px-2 py-0.5 text-[11px] font-bold font-display text-[#323232] border border-[#323232]">
               {corteResultado.fechaHoraActualEtiqueta || 'Hoy'}
             </span>
           </div>
-          <p className="text-xs font-medium text-[#5A5955] mt-1 max-w-2xl">
-            En <strong className="text-[#323232]">1. Planificador de Propuestas</strong> enviás las propuestas por barrio y marcás quién confirmó. En{' '}
-            <strong className="text-[#323232]">2. Hoja de Ruta en Terreno</strong> aparecen únicamente las citas confirmadas con{' '}
-            <strong className="text-[#323232]">✓ Confirmó Cita</strong> (con 10 min de buffer entre paradas).
-          </p>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          {/* Switch de modo: Planificador de Propuestas vs Hoja de Ruta en Terreno */}
-          <div className="flex flex-wrap items-center rounded-xl border-2 border-[#323232] bg-[#ECEAE2] p-1 gap-1">
+          {/* Switch en 1 fila (Mobile y Desktop) */}
+          <div className="grid grid-cols-2 sm:flex items-center rounded-xl border-2 border-[#323232] bg-[#ECEAE2] p-1 gap-1 w-full sm:w-auto">
             <button
               type="button"
               onClick={() => setActiveSubMode('planificador')}
-              className={`rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-bold font-display transition ${
+              className={`flex items-center justify-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-bold font-display transition cursor-pointer ${
                 activeSubMode === 'planificador'
                   ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] shadow-[2px_2px_0px_#323232]'
                   : 'text-[#5A5955] hover:text-[#323232]'
               }`}
             >
-              📋 1. Planificador de Propuestas
+              <span>📋 1. Propuestas</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveSubMode('terreno')}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-bold font-display transition ${
+              className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold font-display transition cursor-pointer ${
                 activeSubMode === 'terreno'
                   ? 'bg-[#29B8FF] text-[#323232] border border-[#323232] shadow-[2px_2px_0px_#323232]'
                   : 'text-[#5A5955] hover:text-[#323232]'
               }`}
             >
-              <span>🚶‍♂️ 2. Hoja de Ruta en Terreno</span>
+              <span>🚶‍♂️ 2. Ruta</span>
               <span
-                className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold border border-[#323232] ${
+                className={`rounded-md px-1.5 py-0.2 text-[10px] font-bold border border-[#323232] ${
                   totalConfirmadosDiaSeleccionado > 0
                     ? 'bg-emerald-200 text-emerald-950'
                     : 'bg-white text-[#5A5955]'
                 }`}
               >
-                {totalConfirmadosDiaSeleccionado} conf.
+                {totalConfirmadosDiaSeleccionado}
               </span>
             </button>
           </div>
-
-          {onOpenScannerModal && (
-            <button
-              type="button"
-              onClick={onOpenScannerModal}
-              className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#DFF4FF] px-3 py-2 text-xs font-bold font-display text-[#323232] hover:bg-[#29B8FF] transition shadow-[2px_2px_0px_#323232]"
-              title="Escanear foto de ficha de adhesión física con IA para actualizar contactos"
-            >
-              <Camera className="h-4 w-4" />
-              <span>Escanear Ficha</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={onRefreshCorte}
-            className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232]"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>Recalcular</span>
-          </button>
         </div>
-      </div>
 
-      {/* 2. Selector de Día Operativo + Sincronización de Ruta con Google Calendar (SIEMPRE ARRIBA) */}
-      {diasUnicos.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-[#323232] bg-white px-4 py-3 shadow-[3px_3px_0px_#323232]">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-bold font-display uppercase text-[#5A5955] mr-1">
-              Día del recorrido:
-            </span>
-            {diasUnicos.map((dia) => {
-              const isSelected = selectedDia === dia;
-              const esHoy = /hoy/i.test(dia);
-
-              return (
-                <button
-                  key={dia}
-                  type="button"
-                  onClick={() => setSelectedDia(dia)}
-                  className={`inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-3.5 py-1.5 text-xs font-bold font-display transition-all ${
-                    isSelected
-                      ? 'bg-[#FFF06B] text-[#323232] shadow-[2px_2px_0px_#323232]'
-                      : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
-                  }`}
-                >
-                  {esHoy && (
-                    <span className="h-2.5 w-2.5 rounded-full bg-[#FF2C00] border border-[#323232]" />
-                  )}
-                  {dia}
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              onClick={() => setSelectedDia('Todos')}
-              className={`rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition ${
-                selectedDia === 'Todos'
-                  ? 'bg-[#323232] text-[#FFF06B]'
-                  : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
-              }`}
+        {/* Barra Compacta: Selector de Día (Dropdown) + Calendar + Recalcular */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#323232]/15">
+          <div className="flex items-center gap-2 flex-1 min-w-[210px] sm:flex-initial">
+            <label className="text-xs font-bold font-display uppercase text-[#5A5955] shrink-0">
+              Día:
+            </label>
+            <select
+              value={selectedDia}
+              onChange={(e) => setSelectedDia(e.target.value)}
+              className="flex-1 sm:w-64 min-w-0 rounded-xl border-2 border-[#323232] bg-[#FFF06B]/60 px-3 py-1.5 text-xs font-bold font-display text-[#323232] shadow-[2px_2px_0px_#323232] focus:outline-none cursor-pointer"
             >
-              Todos los días ({bloques.length})
-            </button>
+              {diasUnicos.map((dia) => (
+                <option key={dia} value={dia}>
+                  {/hoy/i.test(dia) ? `🔴 ${dia}` : dia}
+                </option>
+              ))}
+              <option value="Todos">📅 Todos los días ({bloques.length} circuitos)</option>
+            </select>
           </div>
 
-          {totalConfirmadosDiaSeleccionado > 0 && (
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {totalConfirmadosDiaSeleccionado > 0 && (
               <button
                 type="button"
                 onClick={handleSyncConfirmedRouteToCalendar}
                 disabled={syncingCalendarRoute}
-                className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-emerald-200 px-3.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-300 transition shadow-[2px_2px_0px_#323232]"
-                title="Bloquear las franjas de este recorrido confirmado en el Calendario de la App y Google Calendar"
+                className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-emerald-200 px-3 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-300 transition shadow-[2px_2px_0px_#323232] cursor-pointer"
+                title="Bloquear este recorrido confirmado en Calendar"
               >
                 <Calendar className="h-3.5 w-3.5" />
                 <span>
                   {syncingCalendarRoute
-                    ? 'Sincronizando Calendar...'
-                    : `📅 Agendar Ruta en Calendar (${totalConfirmadosDiaSeleccionado} conf.)`}
+                    ? 'Sincronizando...'
+                    : `Agendar Calendar (${totalConfirmadosDiaSeleccionado})`}
                 </span>
               </button>
-              {calendarQuickLinks.map((lnk, idx) => (
-                <a
-                  key={idx}
-                  href={lnk.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#DFF4FF] px-2.5 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#29B8FF]"
-                  title={`Abrir "${lnk.summary}" en Google Calendar Web`}
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  <span>GCal #{idx + 1}</span>
-                </a>
-              ))}
-            </div>
-          )}
+            )}
+            {calendarQuickLinks.map((lnk, idx) => (
+              <a
+                key={idx}
+                href={lnk.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#DFF4FF] px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#29B8FF]"
+              >
+                <ExternalLink className="h-3 w-3" />
+                <span>GCal #{idx + 1}</span>
+              </a>
+            ))}
+            <button
+              type="button"
+              onClick={onRefreshCorte}
+              className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232] cursor-pointer"
+              title="Recalcular circuitos y horarios"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Recalcular</span>
+            </button>
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* 3. SECCIÓN COLAPSABLE: Citas Vencidas / Sin Confirmar para Reprogramar */}
+      {/* 2. ACORDEÓN COLAPSABLE: Citas Vencidas / Sin Concretar */}
       {alertasVencidos.length > 0 && (
-        <div className="rounded-2xl border-2 border-[#323232] bg-[#F5817F]/25 p-3.5 sm:p-4 shadow-[3px_3px_0px_#323232] space-y-3">
+        <div className="rounded-2xl border-2 border-[#323232] bg-[#F5817F]/25 px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-[3px_3px_0px_#323232] space-y-2.5">
           <div
             onClick={() => setShowVencidosSection((prev) => !prev)}
-            className="flex cursor-pointer flex-wrap items-center justify-between gap-2"
+            className="flex cursor-pointer items-center justify-between gap-2"
           >
-            <div className="flex items-center gap-2">
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border-2 border-[#323232] bg-[#FF2C00] text-white">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 border-[#323232] bg-[#FF2C00] text-white">
                 <AlertCircle className="h-4 w-4" />
               </span>
-              <div>
-                <h3 className="text-sm font-bold font-display text-[#323232]">
-                  ⚠️ Prioridad 1: Citas Vencidas o Sin Concretar ({alertasVencidos.length})
+              <div className="min-w-0">
+                <h3 className="text-xs sm:text-sm font-bold font-display text-[#323232] truncate">
+                  ⚠️ Citas Vencidas ({alertasVencidos.length})
                 </h3>
-                <p className="text-xs font-medium text-[#323232]/80">
-                  Vecinos con fecha/hora pasada sin concretar. Tocá para {showVencidosSection ? 'ocultar' : 'desplegar y reprogramar'}.
-                </p>
               </div>
             </div>
             <button
               type="button"
-              className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-3 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#FFF06B]"
+              className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#FFF06B] shrink-0 cursor-pointer"
             >
-              <span>{showVencidosSection ? 'Ocultar vencidas' : `Ver ${alertasVencidos.length} vencidas`}</span>
+              <span>{showVencidosSection ? 'Plegar' : `Desplegar (${alertasVencidos.length})`}</span>
               {showVencidosSection ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             </button>
           </div>
 
           {showVencidosSection && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-              {alertasVencidos.slice(0, 6).map((c) => {
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+              {alertasVencidos.map((c) => {
                 const phone = c.tel || c.telRaw || c.telWA || '';
                 const msgDisculpas =
                   c.alertaVencido?.mensajeDisculpasReprogramacion || c.mensajeSugerido || '';
@@ -802,18 +828,18 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                 return (
                   <div
                     key={c.id}
-                    className="rounded-xl border-2 border-[#323232] bg-white p-3.5 shadow-[2px_2px_0px_#323232] flex flex-col justify-between gap-2.5"
+                    className="rounded-xl border-2 border-[#323232] bg-white p-3 shadow-[2px_2px_0px_#323232] flex flex-col justify-between gap-2"
                   >
                     <div>
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-display text-xs font-bold text-[#323232]">
+                        <span className="font-display text-xs font-bold text-[#323232] truncate">
                           #{c.id} {c.nombreCompletoCorregido || c.nombre} ({c.barrio})
                         </span>
-                        <span className="rounded bg-[#FF2C00] px-2 py-0.5 text-[10px] font-bold text-white">
+                        <span className="rounded bg-[#FF2C00] px-1.5 py-0.5 text-[10px] font-bold text-white shrink-0">
                           {c.alertaVencido?.fechaVencida || 'Vencido'}
                         </span>
                       </div>
-                      <p className="text-[11px] font-semibold text-[#5A5955] mt-1">
+                      <p className="text-[11px] font-semibold text-[#5A5955] mt-0.5 truncate">
                         📍 {c.calleOCruce || c.comentario}
                       </p>
                     </div>
@@ -822,23 +848,39 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                       {onSendDirectWA && phone && (
                         <button
                           type="button"
-                          onClick={() => handleSendWA(c, msgDisculpas)}
+                          onClick={() =>
+                            handleSendWA(c, msgDisculpas, () => handleMarcarReprogramacionVencido(c))
+                          }
                           disabled={sendingId === c.id}
-                          className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838]"
+                          className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] cursor-pointer"
+                          title="Envía disculpas por WhatsApp y mueve automáticamente a 3. Falta calle/día"
                         >
                           <Send className="h-3 w-3" />
-                          <span>Enviar Disculpas + Reprogramar</span>
+                          <span>
+                            {countdownSending?.contactId === c.id
+                              ? `⏳ ${countdownSending.secondsLeft}s (Cancelar)`
+                              : 'Disculpas + Reprogramar'}
+                          </span>
                         </button>
                       )}
                       <a
                         href={waLink}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2.5 py-1 text-xs font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                        onClick={() => handleMarcarReprogramacionVencido(c)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2 py-1 text-xs font-bold text-[#323232] hover:bg-[#ECEAE2]"
                       >
                         <ExternalLink className="h-3 w-3" />
                         <span>wa.me</span>
                       </a>
+                      <button
+                        type="button"
+                        onClick={() => handleMarcarReprogramacionVencido(c)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#DFF4FF] px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#29B8FF] cursor-pointer"
+                        title="Pasar a '3. Falta calle/día' y quitar de citas vencidas"
+                      >
+                        <span>↺ Quitar vencido</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() =>
@@ -848,21 +890,19 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                             estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
                           })
                         }
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-950"
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-950 cursor-pointer"
                       >
                         <CheckCircle2 className="h-3 w-3" />
-                        <span>Ya Firmó</span>
+                        <span>Firmó</span>
                       </button>
-                      {onJumpToCandidate && (
-                        <button
-                          type="button"
-                          onClick={() => onJumpToCandidate(c.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-[#323232]/40 bg-white px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
-                        >
-                          <span>Editar</span>
-                          <ArrowRight className="h-3 w-3" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => setModalContactId(c.id)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#FFF06B] cursor-pointer"
+                      >
+                        <User className="h-3 w-3" />
+                        <span>Ficha</span>
+                      </button>
                     </div>
                   </div>
                 );
@@ -1018,13 +1058,13 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                       exit={{ height: 0, opacity: 0 }}
                       className="border-t-2 border-[#323232] bg-[#F5F4F0] p-5 space-y-4"
                     >
-                      {/* Barra de Ajuste del Circuito (Cambiar entre Puerta a Puerta y Café Único del Circuito) */}
+                      {/* Barra de Ajuste del Circuito (Cambiar entre Domicilio y Café del Circuito) */}
                       {!esSede && (
-                        <div className="rounded-xl border-2 border-[#323232] bg-white p-3.5 shadow-[2px_2px_0px_#323232] space-y-2.5">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex flex-wrap items-center gap-2">
+                        <div className="rounded-xl border-2 border-[#323232] bg-white p-3 shadow-[2px_2px_0px_#323232] space-y-2 min-w-0">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5">
                               <span className="text-xs font-bold font-display text-[#323232]">
-                                Modalidad del circuito:
+                                Modalidad:
                               </span>
                               <button
                                 type="button"
@@ -1035,17 +1075,17 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                     [getBloqueOverrideKey(bloque)]: 'PUERTA_A_PUERTA',
                                   }))
                                 }
-                                className={`inline-flex items-center gap-1.5 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display ${
+                                className={`inline-flex items-center gap-1 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display cursor-pointer ${
                                   modalidadActiva === 'PUERTA_A_PUERTA'
                                     ? 'bg-[#29B8FF] text-[#323232]'
                                     : 'bg-[#F5F4F0] text-[#5A5955]'
                                 }`}
                               >
-                                <span>🏠 Puerta a Puerta (10 min buffer)</span>
+                                <span>🏠 Domicilio</span>
                                 {(bloque.modalidadRecomendada === 'PUERTA_A_PUERTA' ||
                                   bloque.contactosIncluidos.length < 2) && (
-                                  <span className="rounded bg-[#FFF06B] px-1.5 py-0.2 text-[10px] font-black text-[#323232] border border-[#323232]">
-                                    ⭐ Recomendado
+                                  <span className="rounded bg-[#FFF06B] px-1 py-0.2 text-[9px] font-black text-[#323232] border border-[#323232]">
+                                    ⭐ Rec.
                                   </span>
                                 )}
                               </button>
@@ -1059,27 +1099,27 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                       [getBloqueOverrideKey(bloque)]: 'CAFE_HUB',
                                     }))
                                   }
-                                  className={`inline-flex items-center gap-1.5 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display ${
+                                  className={`inline-flex items-center gap-1 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display cursor-pointer ${
                                     modalidadActiva === 'CAFE_HUB'
                                       ? 'bg-[#FFF06B] text-[#323232]'
                                       : 'bg-[#F5F4F0] text-[#5A5955]'
                                   }`}
                                 >
-                                  <span>☕ Convocar al Café Óptimo</span>
+                                  <span>☕ Café</span>
                                   {bloque.modalidadRecomendada === 'CAFE_HUB' && (
-                                    <span className="rounded bg-[#323232] px-1.5 py-0.2 text-[10px] font-black text-[#FFF06B]">
-                                      ⭐ Recomendado
+                                    <span className="rounded bg-[#323232] px-1 py-0.2 text-[9px] font-black text-[#FFF06B]">
+                                      ⭐ Rec.
                                     </span>
                                   )}
                                 </button>
                               )}
                             </div>
 
-                            {/* Café único recomendado para este circuito (por menor distancia geográfica real a los vecinos) */}
+                            {/* Café único recomendado para este circuito (100% responsive sin desborde en móvil) */}
                             {bloque.cafesHubOpciones && bloque.cafesHubOpciones.length > 0 && (
-                              <div className="flex items-center gap-2">
-                                <span className="text-[11px] font-bold text-[#5A5955]">
-                                  Café más cercano al grupo:
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 w-full sm:w-auto min-w-0">
+                                <span className="text-[11px] font-bold text-[#5A5955] shrink-0">
+                                  Café:
                                 </span>
                                 <select
                                   value={
@@ -1101,13 +1141,13 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                       }));
                                     }
                                   }}
-                                  className="rounded-lg border-2 border-[#323232] bg-[#FFF06B]/40 px-2.5 py-1 text-xs font-bold text-[#323232]"
+                                  className="w-full sm:max-w-xs min-w-0 truncate rounded-lg border-2 border-[#323232] bg-[#FFF06B]/40 px-2.5 py-1 text-xs font-bold text-[#323232]"
                                 >
                                   {bloque.cafesHubOpciones.map((cf, i) => (
                                     <option key={cf.nombre} value={cf.nombre}>
-                                      {i === 0 ? '⭐ Más cercano: ' : ''}
+                                      {i === 0 ? '⭐ ' : ''}
                                       {cf.nombre} ({cf.direccion.split(',')[0]} · ~
-                                      {cf.minutosCaminando} min a pie)
+                                      {cf.minutosCaminando} min)
                                     </option>
                                   ))}
                                 </select>
@@ -1115,13 +1155,15 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                             )}
                           </div>
 
-                          {/* Banner con la recomendación de eficiencia según ubicaciones, distancias y franjas horarias */}
-                          {bloque.motivoRecomendacionModalidad && (
-                            <div className="rounded-lg border border-[#323232]/25 bg-[#FFF06B]/30 px-3 py-2 text-xs font-semibold text-[#323232] flex items-start gap-2">
-                              <span className="shrink-0 font-black">💡 Opción más eficiente:</span>
-                              <span>{bloque.motivoRecomendacionModalidad}</span>
-                            </div>
-                          )}
+                          {/* Banner conciso en 1 línea */}
+                          <div className="rounded-lg border border-[#323232]/20 bg-[#FFF06B]/25 px-2.5 py-1.5 text-[11px] font-semibold text-[#323232] flex items-center gap-1.5">
+                            <span className="shrink-0 font-black">💡 Sugerido:</span>
+                            <span className="truncate">
+                              {bloque.modalidadRecomendada === 'CAFE_HUB'
+                                ? `Café del circuito (${bloque.contactosIncluidos.length} vecinos cercanos)`
+                                : 'Domicilio Puerta a Puerta (10 min buffer por parada)'}
+                            </span>
+                          </div>
                         </div>
                       )}
 
@@ -1130,12 +1172,12 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                       {/* ========================================================= */}
                       {activeSubMode === 'planificador' && (
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between">
+                          <div className="flex flex-wrap items-center justify-between gap-1">
                             <h4 className="text-xs font-bold uppercase tracking-wider text-[#323232] font-display">
-                              Propuestas Individuales y Consolidación de Confirmaciones
+                              Propuestas Individuales ({bloque.contactosIncluidos.length})
                             </h4>
                             <span className="text-[11px] font-semibold text-[#5A5955]">
-                              Al marcar &ldquo;Confirmó&rdquo;, se habilita el botón &ldquo;Estoy en camino&rdquo; en la Hoja de Ruta.
+                              Al marcar &ldquo;Confirmó Cita&rdquo;, pasa a 2. Ruta en Terreno.
                             </span>
                           </div>
 
@@ -1151,14 +1193,14 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                             return (
                               <div
                                 key={contact.id}
-                                className={`rounded-2xl border-2 p-4 shadow-[2px_2px_0px_#323232] space-y-3 transition-colors ${
+                                className={`rounded-2xl border-2 p-3.5 sm:p-4 shadow-[2px_2px_0px_#323232] space-y-2.5 transition-colors ${
                                   yaConfirmado
                                     ? 'border-emerald-700 bg-emerald-50/60'
                                     : 'border-[#323232] bg-white'
                                 }`}
                               >
                                 <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2 flex-wrap">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="rounded bg-[#323232] px-2 py-0.5 font-mono text-xs font-bold text-[#FFF06B]">
                                       #{contact.id}
                                     </span>
@@ -1170,36 +1212,47 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                     </span>
                                     {paradaRef && (
                                       <span className="rounded-md bg-[#FFF06B] px-2 py-0.5 font-mono text-xs font-bold text-[#323232] border border-[#323232]">
-                                        {yaConfirmado ? 'Horario en Ruta:' : 'Horario sugerido:'}{' '}
+                                        {yaConfirmado ? 'Ruta:' : 'Sugerido:'}{' '}
                                         {paradaRef.horaLlegada} hs
                                       </span>
                                     )}
                                     {contact.alertaVencido?.activa && (
                                       <span className="rounded-md bg-[#FF2C00] px-2 py-0.5 text-xs font-bold text-white border border-[#323232]">
-                                        ⚠️ Fecha vencida ({contact.alertaVencido.fechaVencida || 'pasada'}) · Reprogramar
+                                        ⚠️ Vencido ({contact.alertaVencido.fechaVencida || 'pasado'})
                                       </span>
                                     )}
                                     {yaConfirmado ? (
-                                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white border border-[#323232] shadow-[1px_1px_0px_#323232]">
-                                        ✓ Confirmado 1-a-1 (En Hoja de Ruta)
+                                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-0.5 text-xs font-bold text-white border border-[#323232] shadow-[1px_1px_0px_#323232]">
+                                        ✓ Confirmado
                                       </span>
                                     ) : (
                                       <span className="rounded-md bg-[#ECEAE2] px-2 py-0.5 text-[11px] font-bold text-[#5A5955] border border-[#323232]/30">
-                                        Pendiente de confirmar cita
+                                        Por confirmar
                                       </span>
                                     )}
                                   </div>
 
-                                  {onJumpToCandidate && (
+                                  <div className="flex items-center gap-1.5">
                                     <button
                                       type="button"
-                                      onClick={() => onJumpToCandidate(contact.id)}
-                                      className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#FFF06B]"
+                                      onClick={() => setModalContactId(contact.id)}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#FFF06B] cursor-pointer"
+                                      title="Ver y editar ficha completa sin salir del Planificador"
                                     >
-                                      <span>Abrir en Candidatos</span>
-                                      <ArrowRight className="h-3 w-3" />
+                                      <User className="h-3 w-3" />
+                                      <span>Ficha / Editar</span>
                                     </button>
-                                  )}
+                                    {!yaConfirmado && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuitarDelPlanificador(contact)}
+                                        className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-800 hover:bg-rose-100 cursor-pointer"
+                                        title="Quitar del Planificador y devolver a '3. Falta calle/día'"
+                                      >
+                                        <span>✕ Quitar</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
 
                                 <p className="text-xs text-[#5A5955] font-medium">
@@ -1207,35 +1260,35 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                 </p>
 
                                 {yaConfirmado && !isEditingConfirmed ? (
-                                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-emerald-700 bg-emerald-100/80 px-3.5 py-2.5">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-emerald-700 bg-emerald-100/80 px-3 py-2">
                                     <span className="text-xs font-bold text-emerald-950">
-                                      ✅ Cita confirmada y sincronizada con Candidatos y con 2. Hoja de Ruta en Terreno.
+                                      ✅ Cita confirmada y lista en 2. Ruta en Terreno.
                                     </span>
-                                    <div className="flex flex-wrap items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-1.5">
                                       <button
                                         type="button"
                                         onClick={() => setActiveSubMode('terreno')}
-                                        className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#29B8FF] px-3 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#1aa8f0] shadow-[2px_2px_0px_#323232]"
+                                        className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#29B8FF] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#1aa8f0] shadow-[2px_2px_0px_#323232] cursor-pointer"
                                       >
                                         <Navigation className="h-3.5 w-3.5" />
-                                        <span>🚶‍♂️ Ver en 2. Hoja de Ruta en Terreno</span>
+                                        <span>🚶‍♂️ Ver en Ruta</span>
                                       </button>
                                       <button
                                         type="button"
                                         onClick={() =>
                                           abrirEdicionPlanContacto(contact, bloque, paradaRef)
                                         }
-                                        className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[1px_1px_0px_#323232]"
+                                        className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[1px_1px_0px_#323232] cursor-pointer"
                                       >
-                                        <span>✏️ Cambiar Planificación (Día / Hora / Lugar)</span>
+                                        <span>✏️ Cambiar Día/Hora/Lugar</span>
                                       </button>
                                       <button
                                         type="button"
                                         onClick={() => handleQuitarConfirmacionPlanificador(contact)}
-                                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#FF2C00] hover:bg-[#F5817F]/20"
+                                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-xs font-bold text-[#FF2C00] hover:bg-[#F5817F]/20 cursor-pointer"
                                         title="Quitar de la Hoja de Ruta en Terreno"
                                       >
-                                        <span>↺ Quitar confirmación</span>
+                                        <span>↺ Quitar</span>
                                       </button>
                                     </div>
                                   </div>
@@ -1670,10 +1723,14 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                         target="_blank"
                                         rel="noreferrer"
                                         className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#29B8FF] px-3 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#1aa8f0] shadow-[2px_2px_0px_#323232]"
-                                        title="Abrir indicaciones paso a paso en Google Maps desde la parada anterior"
+                                        title={
+                                          idx === 0
+                                            ? 'Abrir indicaciones en Google Maps desde tu Punto de Partida'
+                                            : 'Abrir indicaciones en Google Maps desde tu ubicación actual (GPS)'
+                                        }
                                       >
                                         <MapPin className="h-3.5 w-3.5" />
-                                        <span>Abrir Tramo en Maps</span>
+                                        <span>Ir a Maps</span>
                                       </a>
 
                                       {!estaConfirmado ? (
@@ -1690,16 +1747,16 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                             }));
                                           }}
                                           className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1.5 text-xs font-bold font-display text-[#323232]"
-                                          title="La visita aún no figura confirmada 1-a-1. Tocá para confirmar/desbloquear 'Estoy en camino'."
+                                          title="Tocá para desbloquear 'Estoy en camino'."
                                         >
                                           <Lock className="h-3.5 w-3.5 text-[#FF2C00]" />
-                                          <span>Sin confirmar (Desbloquear En Camino)</span>
+                                          <span>Desbloquear En Camino</span>
                                         </button>
                                       ) : (
                                         <>
                                           <span className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold text-emerald-950">
                                             <Unlock className="h-3.5 w-3.5 text-emerald-700" />
-                                            <span>Cita Confirmada</span>
+                                            <span>Confirmado</span>
                                           </span>
                                           <button
                                             type="button"
@@ -1711,12 +1768,12 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                                   }))
                                                 : abrirEdicionPlanContacto(c, bloque, parada)
                                             }
-                                            className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[2px_2px_0px_#323232]"
+                                            className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[2px_2px_0px_#323232] cursor-pointer"
                                           >
                                             <span>
                                               {editingConfirmedIds[c.id]
-                                                ? '✕ Cerrar Edición'
-                                                : '✏️ Cambiar Plan / Horario'}
+                                                ? '✕ Cerrar'
+                                                : '✏️ Cambiar Plan'}
                                             </span>
                                           </button>
                                         </>
@@ -1992,34 +2049,53 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                               `🎉 ¡${c.primerNombre || c.nombre} marcado como Ya Firmó!`
                                             );
                                           }}
-                                          className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-3 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200 shadow-[2px_2px_0px_#323232]"
+                                          className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200 shadow-[2px_2px_0px_#323232] cursor-pointer"
                                         >
                                           <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
                                           <span>✓ Firmó</span>
                                         </button>
 
-                                        {([1, 2, 3] as const).map((cant) => (
+                                        {fichasPickerParadaId === c.id ? (
+                                          <div className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#DFF4FF] px-2 py-1 text-[11px] font-bold font-display text-[#323232]">
+                                            <span className="text-[10px] font-black">Fichas:</span>
+                                            {([1, 2, 3, 4, 5] as const).map((cant) => (
+                                              <button
+                                                key={cant}
+                                                type="button"
+                                                onClick={() => handleMarkFichasParada(c, cant)}
+                                                className="rounded border border-[#323232] bg-white px-1.5 py-0.5 text-[11px] font-black text-[#323232] hover:bg-[#FFF06B] cursor-pointer"
+                                              >
+                                                {cant}
+                                              </button>
+                                            ))}
+                                            <button
+                                              type="button"
+                                              onClick={() => setFichasPickerParadaId(null)}
+                                              className="ml-0.5 text-[#5A5955] hover:text-[#323232] cursor-pointer"
+                                            >
+                                              ✕
+                                            </button>
+                                          </div>
+                                        ) : (
                                           <button
-                                            key={cant}
                                             type="button"
-                                            onClick={() => handleMarkFichasParada(c, cant)}
-                                            className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#DFF4FF] px-2 py-1.5 text-[11px] font-bold font-display text-[#323232] hover:bg-[#29B8FF]"
+                                            onClick={() => setFichasPickerParadaId(c.id)}
+                                            className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#DFF4FF] px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#29B8FF] cursor-pointer"
                                             title="Dejar fichas extra para retirar en 1 semana"
                                           >
-                                            <FilePlus2 className="h-3 w-3" />
-                                            <span>+X{cant} (1 sem)</span>
-                                          </button>
-                                        ))}
-
-                                        {onJumpToCandidate && (
-                                          <button
-                                            type="button"
-                                            onClick={() => onJumpToCandidate(c.id)}
-                                            className="rounded-xl border border-[#323232] bg-white px-2.5 py-1.5 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
-                                          >
-                                            Editar ficha
+                                            <FilePlus2 className="h-3.5 w-3.5" />
+                                            <span>+ Fichas</span>
                                           </button>
                                         )}
+
+                                        <button
+                                          type="button"
+                                          onClick={() => setModalContactId(c.id)}
+                                          className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B] cursor-pointer"
+                                        >
+                                          <User className="h-3.5 w-3.5" />
+                                          <span>Ficha</span>
+                                        </button>
                                       </div>
                                     </div>
                                   </div>
@@ -2037,6 +2113,74 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
           })}
         </div>
       )}
+
+      {/* Modal Flotante con la Ficha Completa del Candidato (sin salir de Planificador & Hoy) */}
+      <AnimatePresence>
+        {modalContact && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-2.5 sm:p-5 overflow-y-auto"
+            onClick={() => setModalContactId(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, y: 12 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.96, y: 12 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-2xl border-2 border-[#323232] bg-[#F5F4F0] p-3 sm:p-4 shadow-[6px_6px_0px_#323232] space-y-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-[#323232] pb-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-lg bg-[#323232] px-2 py-0.5 font-mono text-xs font-bold text-[#FFF06B]">
+                    #{modalContact.id}
+                  </span>
+                  <h3 className="text-sm sm:text-base font-bold font-display text-[#323232]">
+                    Ficha de {modalContact.nombreCompletoCorregido || modalContact.nombre}
+                  </h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  {onJumpToCandidate && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetId = modalContact.id;
+                        setModalContactId(null);
+                        onJumpToCandidate(targetId);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#323232] hover:bg-[#DFF4FF] cursor-pointer"
+                    >
+                      <span>Ir a Candidatos</span>
+                      <ArrowRight className="h-3 w-3" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setModalContactId(null)}
+                    className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    <span>Cerrar</span>
+                  </button>
+                </div>
+              </div>
+
+              <CandidateCard
+                contact={modalContact}
+                isSelected={true}
+                isExpanded={true}
+                whatsAppReady={whatsAppReady}
+                voiceProfile={voiceProfile}
+                allContacts={bloques.flatMap((b) => b.contactosIncluidos)}
+                onSelect={() => {}}
+                onUpdateContact={onUpdateContact}
+                onSendDirectWA={onSendDirectWA}
+              />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Toast de confirmación */}
       <AnimatePresence>

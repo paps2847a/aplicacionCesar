@@ -652,7 +652,9 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   // ==========================================
   return (
     <div
-      className={`rounded-2xl border-2 bg-white transition-all duration-150 ${
+      className={`relative rounded-2xl border-2 bg-white transition-all duration-150 ${
+        showStageMenu ? 'z-40' : 'z-0'
+      } ${
         contact.alertaVencido?.activa
           ? 'border-[#FF2C00] shadow-[4px_4px_0px_#FF2C00]'
           : isExpanded || isSelected
@@ -1024,29 +1026,50 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 </button>
 
                 {showStageMenu && (
-                  <div className="absolute left-0 lg:left-auto lg:right-0 top-full mt-1.5 z-40 w-72 max-w-[calc(100vw-2.5rem)] max-h-80 overflow-y-auto rounded-2xl border-2 border-[#323232] bg-white p-1.5 shadow-[4px_4px_0px_#323232]">
-                    <span className="px-2.5 py-1 text-[10px] font-bold uppercase text-[#5A5955] block font-display">
-                      Cambiar estado del contacto:
-                    </span>
-                    {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((item) => {
-                      const isCur = contact.estadoFlujo === item.value;
-                      return (
+                  <>
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowStageMenu(false);
+                      }}
+                      className="fixed inset-0 z-[65] bg-black/30 lg:bg-transparent"
+                    />
+                    <div className="fixed inset-x-3 bottom-4 lg:absolute lg:inset-auto lg:right-0 lg:top-full lg:mt-1.5 z-[70] lg:w-80 max-h-[72vh] lg:max-h-80 overflow-y-auto rounded-2xl border-2 border-[#323232] bg-white p-2 shadow-[6px_6px_0px_#323232]">
+                      <div className="flex items-center justify-between px-2.5 py-1 border-b border-[#323232]/15 mb-1">
+                        <span className="text-[10px] font-bold uppercase text-[#5A5955] font-display">
+                          Estado de #{contact.id}:
+                        </span>
                         <button
-                          key={item.value}
                           type="button"
-                          onClick={(e) => handleGranularStatusSelect(item.value, e)}
-                          className={`w-full flex items-center justify-between rounded-xl px-2.5 py-1.5 text-xs font-bold text-left transition ${
-                            isCur
-                              ? 'bg-[#FFF06B] text-[#323232]'
-                              : 'text-[#323232] hover:bg-[#F5F4F0]'
-                          }`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowStageMenu(false);
+                          }}
+                          className="text-xs font-bold text-[#323232] px-1 lg:hidden"
                         >
-                          <span className="truncate">{item.label}</span>
-                          {isCur && <Check className="h-3.5 w-3.5 shrink-0" />}
+                          ✕
                         </button>
-                      );
-                    })}
-                  </div>
+                      </div>
+                      {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((item) => {
+                        const isCur = contact.estadoFlujo === item.value;
+                        return (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={(e) => handleGranularStatusSelect(item.value, e)}
+                            className={`w-full flex items-center justify-between rounded-xl px-2.5 py-1.5 text-xs font-bold text-left transition ${
+                              isCur
+                                ? 'bg-[#FFF06B] text-[#323232]'
+                                : 'text-[#323232] hover:bg-[#F5F4F0]'
+                            }`}
+                          >
+                            <span className="truncate">{item.label}</span>
+                            {isCur && <Check className="h-3.5 w-3.5 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
               </div>
 

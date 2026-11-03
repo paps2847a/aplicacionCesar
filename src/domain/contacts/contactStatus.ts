@@ -1258,8 +1258,8 @@ export function resolverFechaObjetivoContacto(
   c: { fechasMencionadas: string[]; comentario: string },
   ahoraMs: number = Date.now()
 ): string | undefined {
-  const diasProx = [0, 1, 2, 3, 4].map((offset) => sumarDiasAFechaBA(ahoraMs, offset));
-  const diasSemanaCompleta = [0, 1, 2, 3, 4, 5, 6].map((offset) => sumarDiasAFechaBA(ahoraMs, offset));
+  const diasProx = [0, 1, 2, 3, 4, 5, 6, 7].map((offset) => sumarDiasAFechaBA(ahoraMs, offset));
+  const diasSemanaCompleta = [0, 1, 2, 3, 4, 5, 6, 7].map((offset) => sumarDiasAFechaBA(ahoraMs, offset));
   const hoyBA = diasProx[0];
   const comLow = (c.comentario || '').toLowerCase();
 

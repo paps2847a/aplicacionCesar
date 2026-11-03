@@ -141,19 +141,18 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
     descartados: false,
   });
 
-  // Si venimos redirigidos desde el Mapa, Planificador o Cierre Diario con un contacto puntual, abrirlo y expandir su carril exclusivamente
+  // Si venimos redirigidos desde el Mapa, Planificador o Cierre Diario con un contacto puntual, abrirlo y expandir los carriles
   useEffect(() => {
     if (!focusedContactId) return;
     const target = contacts.find((c) => String(c.id).trim() === String(focusedContactId).trim());
     if (target) {
-      const st = getMacroStageForContact(target);
       setExpandedStages({
-        nuevos: st === 'nuevos',
-        conversacion: st === 'conversacion',
-        agendados: st === 'agendados',
-        pausa: st === 'pausa',
-        adheridos: st === 'adheridos',
-        descartados: st === 'descartados',
+        nuevos: true,
+        conversacion: true,
+        agendados: true,
+        pausa: true,
+        adheridos: true,
+        descartados: true,
       });
       setExpandedContactId(target.id);
       setSelectedContactId(null);
@@ -513,48 +512,49 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   }[] = [
     {
       key: 'MOVIMIENTOS_HOY',
-      label: '🔥 Movimientos de hoy',
+      label: '🔥 Hoy',
       count: quickFilterCounts.MOVIMIENTOS_HOY,
     },
     {
       key: 'VENCIDOS_REPROGRAMAR',
-      label: '⚠️ Citas Vencidas / Reprogramar',
+      label: '⚠️ Citas Vencidas',
       count: quickFilterCounts.VENCIDOS_REPROGRAMAR,
       urgent: true,
     },
     {
+      key: 'RETIRO_FICHAS_1SEM',
+      label: '📦 Retiro Fichas',
+      count: quickFilterCounts.RETIRO_FICHAS_1SEM,
+      urgent: quickFilterCounts.RETIRO_FICHAS_1SEM > 0,
+    },
+    {
       key: 'SIN_RSP_48H',
-      label: '⏳ Sin Respuesta +48h',
+      label: '⏳ Sin Rsp +48h',
       count: quickFilterCounts.SIN_RSP_48H,
     },
     {
       key: 'FALTAN_DATOS',
-      label: '📍 Respondió · Faltan Datos',
+      label: '📍 Faltan Datos',
       count: quickFilterCounts.FALTAN_DATOS,
     },
     {
       key: 'POR_CONFIRMAR',
-      label: '📅 Por Confirmar Visita/Café',
+      label: '📅 Por Confirmar',
       count: quickFilterCounts.POR_CONFIRMAR,
     },
     {
       key: 'CITA_CONFIRMADA',
-      label: '✅ Cita Confirmada',
+      label: '✅ Confirmadas',
       count: quickFilterCounts.CITA_CONFIRMADA,
     },
     {
-      key: 'RETIRO_FICHAS_1SEM',
-      label: '🗂️ Retiro Fichas (1 sem)',
-      count: quickFilterCounts.RETIRO_FICHAS_1SEM,
-    },
-    {
       key: 'YA_FIRMARON_FIN',
-      label: '🎉 Ya Firmaron (Proceso terminado)',
+      label: '🎉 Ya Firmaron',
       count: quickFilterCounts.YA_FIRMARON_FIN,
     },
     {
       key: 'SIN_DNI_CABA_O_BAJA',
-      label: '🚫 Sin DNI CABA / Baja',
+      label: '🚫 Baja / Sin DNI',
       count: quickFilterCounts.SIN_DNI_CABA_O_BAJA,
     },
   ];
@@ -950,65 +950,59 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                   </div>
                 </button>
 
-                <AnimatePresence initial={false}>
-                  {isExpanded && (
-                    <motion.div
-                      key={`content-${stageKey}`}
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.2, ease: 'easeInOut' }}
-                      className="border-t-2 border-[#323232] overflow-visible"
-                    >
-                      <div className="p-2.5 sm:p-4 bg-[#F5F4F0] overflow-visible">
-                        {stageContacts.length === 0 ? (
-                          <div className="rounded-xl border-2 border-dashed border-[#323232]/30 bg-white p-6 text-center text-xs text-[#5A5955] font-medium">
-                            Sin candidatos en {def.label}
-                          </div>
-                        ) : (
-                          <div className="space-y-3">
-                            {stageContacts.map((c) => {
-                              const idxInFiltered = filteredContacts.findIndex(
-                                (item) => item.id === c.id
-                              );
-                              return (
-                                <CandidateCard
-                                  key={c.id}
-                                  contact={c}
-                                  layoutMode="horizontal"
-                                  whatsAppReady={whatsAppReady}
-                                  voiceProfile={voiceProfile}
-                                  allContacts={contacts}
-                                  calendarEvents={calendarEvents}
-                                  isSelected={selectedContactId === c.id}
-                                  isExpanded={expandedContactId === c.id}
-                                  onSelect={handleCardActivate}
-                                  onToggleExpand={handleCardActivate}
-                                  onUpdateContact={async (id, updates) => {
-                                    await onUpdateContact(id, updates);
-                                    showToast(`Contacto #${id} actualizado`);
-                                  }}
-                                  onStageChange={handleDirectStageChange}
-                                  onSendDirectWA={onSendDirectWA}
-                                  hasPrev={idxInFiltered > 0}
-                                  hasNext={
-                                    idxInFiltered >= 0 &&
-                                    idxInFiltered < filteredContacts.length - 1
-                                  }
-                                  onNavigateRelative={(dir) =>
-                                    navigateContact(c.id, dir, false)
-                                  }
-                                  canDeleteContact={canDeleteContact}
-                                  onDeleteContact={onDeleteContact}
-                                />
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {isExpanded && (
+                  <div
+                    key={`content-${stageKey}`}
+                    className="border-t-2 border-[#323232] overflow-visible rounded-b-2xl"
+                  >
+                    <div className="p-2.5 sm:p-4 bg-[#F5F4F0] overflow-visible rounded-b-2xl">
+                      {stageContacts.length === 0 ? (
+                        <div className="rounded-xl border-2 border-dashed border-[#323232]/30 bg-white p-6 text-center text-xs text-[#5A5955] font-medium">
+                          Sin candidatos en {def.label}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {stageContacts.map((c) => {
+                            const idxInFiltered = filteredContacts.findIndex(
+                              (item) => item.id === c.id
+                            );
+                            return (
+                              <CandidateCard
+                                key={c.id}
+                                contact={c}
+                                layoutMode="horizontal"
+                                whatsAppReady={whatsAppReady}
+                                voiceProfile={voiceProfile}
+                                allContacts={contacts}
+                                calendarEvents={calendarEvents}
+                                isSelected={selectedContactId === c.id}
+                                isExpanded={expandedContactId === c.id}
+                                onSelect={handleCardActivate}
+                                onToggleExpand={handleCardActivate}
+                                onUpdateContact={async (id, updates) => {
+                                  await onUpdateContact(id, updates);
+                                  showToast(`Contacto #${id} actualizado`);
+                                }}
+                                onStageChange={handleDirectStageChange}
+                                onSendDirectWA={onSendDirectWA}
+                                hasPrev={idxInFiltered > 0}
+                                hasNext={
+                                  idxInFiltered >= 0 &&
+                                  idxInFiltered < filteredContacts.length - 1
+                                }
+                                onNavigateRelative={(dir) =>
+                                  navigateContact(c.id, dir, false)
+                                }
+                                canDeleteContact={canDeleteContact}
+                                onDeleteContact={onDeleteContact}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

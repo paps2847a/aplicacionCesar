@@ -862,15 +862,12 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-black tracking-tight text-[#323232] font-display">
-                  WhatsApp Web &amp; Campañas Automáticas Anti-Bloqueo
+                  WhatsApp Web &amp; Campañas Anti-Bloqueo
                 </h2>
-                <span className="rounded-lg bg-emerald-100 border border-[#323232] px-2.5 py-0.5 text-[11px] font-bold text-emerald-950">
-                  Tope seguro &lt; 45 msjs/día
+                <span className="rounded-lg bg-emerald-100 border border-[#323232] px-2 py-0.5 text-[11px] font-bold text-emerald-950">
+                  &lt; 45 msjs/día
                 </span>
               </div>
-              <p className="text-xs text-[#5A5955] font-medium">
-                Centro unificado: Configuración de Campaña (Etapas 1 a 5) · Cola de Envío · Consola QR WhatsApp Web en Vivo · Auditoría
-              </p>
             </div>
           </div>
 
@@ -885,112 +882,57 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
           )}
         </div>
 
-        {/* Selector de Etapa de la Campaña */}
-        <div className="border-b border-slate-200/80 bg-[#F5F4F0] px-3 sm:px-6 py-2.5 flex flex-wrap lg:flex-nowrap items-center gap-1.5 overflow-x-auto">
-          <span className="text-[11px] font-black uppercase tracking-wider text-[#5A5955] mr-1 shrink-0">
-            Etapa:
-          </span>
-          {(
-            [
-              {
-                id: 'PRIMER_CONTACTO',
-                label: '1. Primeros Mensajes (<45/d)',
-              },
-              {
-                id: 'RECORDATORIO_MANIANA_HOY',
-                label: '2. Recordatorios de Encuentro',
-              },
-              {
-                id: 'SEGUIMIENTO_24H_48H_BAJA',
-                label: '3. Seguimientos 24h / 48h',
-              },
-              {
-                id: 'AGRADECIMIENTO_POST_FIRMA',
-                label: '4. Agradecimientos Post-Firma',
-              },
-              {
-                id: 'DISENADOR_PERSONALIZADO',
-                label: '5. 🎨 Campaña Libre',
-              },
-            ] as { id: ModoColaAutomatizacionWA; label: string }[]
-          ).map((m) => {
-            const isSelected = (config.modoCola || 'PRIMER_CONTACTO') === m.id;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => handleRegenerarCola({ modoCola: m.id })}
-                className={`rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs font-bold whitespace-nowrap shrink-0 transition-all ${
-                  isSelected
-                    ? 'bg-slate-900 text-white shadow-xs font-black'
-                    : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200/70 hover:bg-slate-50'
-                }`}
-              >
-                {m.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Sub-navegación de Pestañas Serena */}
+        {/* Sub-navegación de Pestañas Compacta (Sin duplicación de botones) */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-3 sm:px-6 py-2">
           <div className="flex flex-wrap gap-1.5">
             <button
               onClick={() => setActiveTab('config_cola')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'config_cola'
                   ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Clock className="h-3.5 w-3.5" />
-              <span>1. Ajustes Anti-Bloqueo</span>
+              <span>1. Ajustes</span>
             </button>
 
             <button
               onClick={() => setActiveTab('vista_cola')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'vista_cola'
                   ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Users className="h-3.5 w-3.5" />
-              <span>2. Cola de Contactos ({campaign.items.length})</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('whatsapp_web_directo')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
-                activeTab === 'whatsapp_web_directo'
-                  ? 'bg-emerald-100 text-emerald-950 border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
-                  : 'text-slate-600 hover:text-emerald-800'
-              }`}
-            >
-              <Smartphone className="h-3.5 w-3.5 text-emerald-700" />
-              <span>3. ⚡ Consola QR &amp; WhatsApp Web Directo</span>
+              <span>2. Cola ({campaign.items.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('monitor_resultados')}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3.5 py-2 text-xs font-bold transition-all ${
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'monitor_resultados'
                   ? 'bg-[#FFF06B] text-[#323232] border border-[#323232] font-black shadow-[2px_2px_0px_#323232]'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-              <span>4. Auditoría ({stats.enviadosOk} OK)</span>
+              <span>3. Auditoría ({stats.enviadosOk} OK)</span>
             </button>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => setActiveTab('whatsapp_web_directo')}
-              className="inline-flex items-center gap-2 rounded-xl border-2 border-[#323232] bg-emerald-500 px-3.5 py-1.5 text-xs font-black text-white shadow-[2px_2px_0px_#323232] hover:bg-emerald-600 transition"
+              className={`inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-black transition cursor-pointer ${
+                activeTab === 'whatsapp_web_directo'
+                  ? 'bg-[#323232] text-[#FFF06B] shadow-[2px_2px_0px_#29B8FF]'
+                  : 'bg-emerald-500 text-white shadow-[2px_2px_0px_#323232] hover:bg-emerald-600'
+              }`}
             >
               <Smartphone className="h-3.5 w-3.5" />
-              <span>Abrir Consola QR / Enviar</span>
+              <span>⚡ Consola QR / Enviar</span>
             </button>
           </div>
         </div>
@@ -1270,42 +1212,33 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
           {/* TAB 1: AJUSTES DE CAMPAÑA Y ANTI-BLOQUEO */}
           {activeTab === 'config_cola' && (
             <div className="space-y-5">
-              {/* Banner de Bloqueo por Bucle Automático 24h o Cupo Diario Completado */}
-              {(isLoopLocked || cupoDiarioAlcanzadoHoy) && (
-                <div className="rounded-2xl border-2 border-[#323232] bg-[#FFF06B] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[3px_3px_0px_#323232]">
-                  <div className="space-y-1">
+              {/* Banner de Bloqueo por Bucle Automático 24h */}
+              {isLoopLocked && (
+                <div className="rounded-2xl border-2 border-[#323232] bg-[#FFF06B] p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[3px_3px_0px_#323232]">
+                  <div className="space-y-0.5">
                     <div className="flex items-center gap-2 text-xs sm:text-sm font-black text-[#323232]">
                       <span>🔒</span>
-                      <span>
-                        {isLoopLocked
-                          ? 'Bucle Automático Diario (24 hs) Activo — Parámetros Protegidos'
-                          : `Bloqueo Anti-Ban Activo Hoy: Ya se enviaron ${enviadosHoyCount}/${cupoDiarioEfectivo} mensajes (Día #${dailyQuotaAudit?.currentWarmupDayNumber ?? 1} de Warm-up)`}
-                      </span>
+                      <span>Bucle Automático 24h Activo — Parámetros Protegidos</span>
                     </div>
                     <p className="text-[11px] font-bold text-[#323232]/85">
-                      {isLoopLocked
-                        ? 'Para evitar duplicar campañas mientras corre el bucle de 24 hs, los ajustes están bloqueados. Si querés modificarlos, desactivá el Bucle 24h.'
-                        : dailyQuotaAudit?.quotaLockReason ||
-                          'Ya se alcanzó la cuota diaria segura vinculada al día de Warm-up actual. El servidor bloqueará nuevos envíos masivos hasta mañana para evitar bloqueos de WhatsApp.'}
+                      Para modificar los ajustes, desactivá temporalmente el Bucle 24h.
                     </p>
                   </div>
-                  {isLoopLocked && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await fetch('/api/whatsapp/queue/autoloop', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ autoLoop24h: false }),
-                        }).catch(() => {});
-                        setWaServerLock((prev) => ({ ...prev, autoLoop24h: false, waitingNextDay: false }));
-                        setStatusNotice('🔓 Bucle Automático 24h desactivado. Ya podés editar los parámetros de la campaña.');
-                      }}
-                      className="rounded-xl border-2 border-[#323232] bg-white px-3.5 py-2 text-xs font-black text-[#323232] hover:bg-[#ECEAE2] shrink-0 shadow-[2px_2px_0px_#323232]"
-                    >
-                      🔓 Desactivar Bucle 24h para Editar
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch('/api/whatsapp/queue/autoloop', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ autoLoop24h: false }),
+                      }).catch(() => {});
+                      setWaServerLock((prev) => ({ ...prev, autoLoop24h: false, waitingNextDay: false }));
+                      setStatusNotice('🔓 Bucle Automático 24h desactivado. Ya podés editar los parámetros.');
+                    }}
+                    className="rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-black text-[#323232] hover:bg-[#ECEAE2] shrink-0 shadow-[2px_2px_0px_#323232] cursor-pointer"
+                  >
+                    🔓 Desactivar Bucle 24h
+                  </button>
                 </div>
               )}
 

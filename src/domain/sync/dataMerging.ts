@@ -1141,7 +1141,7 @@ export function actualizarDatosContactoEnApp(
  */
 export function marcarEntregaFichasExtra(
   raw: RawContactRow,
-  cantidad: 'X1' | 'X2' | 'X3' = 'X2',
+  cantidad: 'X1' | 'X2' | 'X3' | 'X4' | 'X5' = 'X2',
   ahoraMs: number = Date.now()
 ): RawContactRow {
   const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);

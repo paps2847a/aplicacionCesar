@@ -225,12 +225,16 @@ export function calcularHojaDeRuta(
         bonusPuntual = esConfirmado1a1 ? -2500 : -500; // Prioridad estricta a quien pactó o confirmó una hora puntual exacta
       } else if (disp.minInicioVentana !== undefined && disp.minFinVentana !== undefined) {
         refMinutos = Math.round(disp.minInicioVentana * 0.45 + disp.minFinVentana * 0.55);
+        // Priorizar ventanas numéricas explícitas (ej. "entre las 15:30 y las 19:00" o "de 15 a 19") sobre "a la tarde" genérico
+        if (/\b(?:entre\s+(?:las\s+)?\d|de\s+(?:las\s+)?\d{1,2}\s+a\s+\d)/i.test(cand.comentario || '')) {
+          bonusPuntual -= 320;
+        }
       } else if (cand.franjaHoraria === 'Mañana') {
         refMinutos = 10 * 60 + 30;
       } else if (cand.franjaHoraria === 'Mediodía') {
         refMinutos = 13 * 60;
       } else if (cand.franjaHoraria === 'Vespertino') {
-        refMinutos = 18 * 60;
+        refMinutos = 18 * 60 + 15;
       }
       const score = refMinutos * 2.5 + bonusPuntual + d * 0.04;
       if (score < menorScore) {
@@ -798,10 +802,23 @@ export function calcularHojaDeRuta(
     );
   }
 
-  return paradasOrdenadasPorHora.map((p, idx) => ({
-    ...p,
-    orden: idx + 1,
-  }));
+  return paradasOrdenadasPorHora.map((p, idx) => {
+    const ubiDest = obtenerUbicacionEncuentroContacto(p.contact);
+    // Regla operativa en terreno:
+    // Parada #1 (idx === 0) parte del punto de partida configurado (ej. Godoy Cruz 3268).
+    // Paradas #2+ (idx > 0) abren Google Maps sin origin fijo para navegar desde la ubicación GPS actual del teléfono.
+    const urlMapsOptimizada =
+      idx === 0
+        ? p.urlGoogleMapsTramo
+        : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+            ubiDest.destinoDireccionMaps
+          )}&travelmode=${p.modoTraslado.toLowerCase()}`;
+    return {
+      ...p,
+      orden: idx + 1,
+      urlGoogleMapsTramo: urlMapsOptimizada,
+    };
+  });
 }
 
 /**
@@ -931,6 +948,7 @@ export function generarCorteEstrategicoLocal(
   const dia4BA = sumarDiasAFechaBA(ahoraMs, 4);
   const dia5BA = sumarDiasAFechaBA(ahoraMs, 5);
   const dia6BA = sumarDiasAFechaBA(ahoraMs, 6);
+  const dia7BA = sumarDiasAFechaBA(ahoraMs, 7);
 
   // Recalcular alertas vencidas y diagnóstico +48h tomando exactamente `ahoraMs`
   const contacts: Contact[] = contactsInput.map((c): Contact => {
@@ -969,9 +987,24 @@ export function generarCorteEstrategicoLocal(
       c.situacion !== 'YA_ADHIRIO'
   );
 
-  const elegiblesAgendaConLugar = noAdheridosTotales.filter(
-    (c) => c.tienePuntoEncuentroDeterminado
-  );
+  const elegiblesAgendaConLugar = noAdheridosTotales.filter((c) => {
+    if (!c.tienePuntoEncuentroDeterminado) return false;
+    // Si el contacto fue puesto explícitamente en "3. Respondió · Falta calle/esquina o día" (o etapas previas sin datos completos),
+    // no incluirlo en el Planificador de Ruta hasta que pase a "4. Pasó dirección/horario" o superior.
+    if (
+      (c.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+        c.estadoFlujo === 'PIDIO_MAS_INFO_ENVIADA' ||
+        c.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+        c.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
+        c.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+        c.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+        c.estadoFlujo === 'POSTERGO_SALUD_O_VIAJE') &&
+      !esContactoConfirmadoEnLista1a1(c)
+    ) {
+      return false;
+    }
+    return true;
+  });
 
   // Detectar todas las personas con visitas/encuentros pendientes vencidos o sin confirmar
   const alertasPendientesVencidos = elegiblesAgendaConLugar.filter((c) =>
@@ -1071,6 +1104,12 @@ export function generarCorteEstrategicoLocal(
       esHoy: false,
       eventos: filtrarEventosCalendarParaDia(eventosCalendar, dia6BA),
     },
+    {
+      diaBA: dia7BA,
+      prefijo: dia7BA.nombreDia.toUpperCase(),
+      esHoy: false,
+      eventos: filtrarEventosCalendarParaDia(eventosCalendar, dia7BA),
+    },
   ];
 
   // Buscador inteligente de ventana horaria DIURNA REALISTA (09:30 a 20:00 hs, jamás de madrugada ni cruzando medianoche)
@@ -1156,14 +1195,20 @@ export function generarCorteEstrategicoLocal(
       if (!horaPuntualPreferida && ventanaColumnaG) {
         const aEnVentana =
           a + trasladoDesdeBase >= ventanaColumnaG.minIni &&
-          a + duracionMin <= ventanaColumnaG.minFin + 20
+          a + duracionMin <= ventanaColumnaG.minFin
             ? 0
-            : 1;
+            : a + trasladoDesdeBase >= ventanaColumnaG.minIni &&
+              a + duracionMin <= ventanaColumnaG.minFin + 20
+            ? 1
+            : 2;
         const bEnVentana =
           b + trasladoDesdeBase >= ventanaColumnaG.minIni &&
-          b + duracionMin <= ventanaColumnaG.minFin + 20
+          b + duracionMin <= ventanaColumnaG.minFin
             ? 0
-            : 1;
+            : b + trasladoDesdeBase >= ventanaColumnaG.minIni &&
+              b + duracionMin <= ventanaColumnaG.minFin + 20
+            ? 1
+            : 2;
         if (aEnVentana !== bEnVentana) return aEnVentana - bEnVentana;
       }
       return Math.abs(a - horaBasePreferidaMin) - Math.abs(b - horaBasePreferidaMin);
@@ -1750,19 +1795,25 @@ export function generarCorteEstrategicoLocal(
           horaPuntual = disp.horaPuntualPactada;
         }
       } else if (disp.minInicioVentana !== undefined && disp.minFinVentana !== undefined) {
-        minIniComun =
-          minIniComun === undefined
-            ? disp.minInicioVentana
-            : Math.max(minIniComun, disp.minInicioVentana);
-        minFinComun =
-          minFinComun === undefined
-            ? disp.minFinVentana
-            : Math.min(minFinComun, disp.minFinVentana);
+        if (minIniComun === undefined || minFinComun === undefined) {
+          minIniComun = disp.minInicioVentana;
+          minFinComun = disp.minFinVentana;
+        } else {
+          const nextIni = Math.max(minIniComun, disp.minInicioVentana);
+          const nextFin = Math.min(minFinComun, disp.minFinVentana);
+          if (nextIni < nextFin) {
+            minIniComun = nextIni;
+            minFinComun = nextFin;
+          } else {
+            // Si un integrante tiene ventana posterior disjunta, preservar la ventana más temprana del grupo
+            // para no postergar a quienes cierran su ventana antes (ej. 15:30 a 19:00 hs).
+            if (disp.minFinVentana < minFinComun) {
+              minIniComun = disp.minInicioVentana;
+              minFinComun = disp.minFinVentana;
+            }
+          }
+        }
       }
-    }
-    if (minIniComun !== undefined && minFinComun !== undefined && minIniComun >= minFinComun) {
-      minIniComun = undefined;
-      minFinComun = undefined;
     }
 
     let franjaDom: FranjaHoraria =
@@ -1886,9 +1937,19 @@ export function generarCorteEstrategicoLocal(
       );
 
     const grupoCafeCandidato = [...pidieronCafeHub, ...sinPreferenciaForzada];
+    // Regla estricta: quien está en "3c. Prefiere Punto / Café / Sede" (pidieronCafeHub) NUNCA se mezcla en una ruta Puerta a Puerta
+    if (pidieronCafeHub.length > 0 && pidieronPuertaAPuerta.length > 0) {
+      const grupoPap = [...pidieronPuertaAPuerta, ...sinPreferenciaForzada];
+      return [
+        armarSubCircuito(`${clusterIdBase}-pap`, grupoPap, 'PUERTA_A_PUERTA'),
+        armarSubCircuito(`${clusterIdBase}-cafe`, pidieronCafeHub, 'CAFE_HUB'),
+      ];
+    }
+
     if (
       pidieronPuertaAPuerta.length > 0 &&
-      (pidieronCafeHub.length > 0 || (grupoCafeCandidato.length >= 2 && sinPreferenciaForzada.length >= 3))
+      grupoCafeCandidato.length >= 2 &&
+      sinPreferenciaForzada.length >= 3
     ) {
       return [
         armarSubCircuito(`${clusterIdBase}-cafe`, grupoCafeCandidato, 'CAFE_HUB'),
@@ -1966,6 +2027,10 @@ export function generarCorteEstrategicoLocal(
       }
 
       const modEx = ex.modalidadAdaptadaPorConfirmacion || (ex.convieneCafeHub ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
+      const tienePreferenciaExplicitaDistinta =
+        Boolean(circ.modalidadAdaptadaPorConfirmacion || ex.modalidadAdaptadaPorConfirmacion) &&
+        modEx !== modCirc;
+      if (tienePreferenciaExplicitaDistinta) return false;
       const esRemanenteIndividual = circ.miembros.length === 1 || ex.miembros.length === 1;
       if (modEx !== modCirc && !esRemanenteIndividual) return false;
 

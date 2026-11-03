@@ -16,10 +16,14 @@ if (!fs.existsSync(cloudflaredExe)) {
 
 console.log('\n🚀 Iniciando Túnel Seguro Cloudflare hacia http://localhost:3000...\n');
 
-const child = spawn(cloudflaredExe, ['tunnel', '--url', 'http://localhost:3000'], {
-  stdio: ['ignore', 'pipe', 'pipe'],
-  windowsHide: true,
-});
+const child = spawn(
+  cloudflaredExe,
+  ['tunnel', '--protocol', 'http2', '--url', 'http://localhost:3000'],
+  {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  }
+);
 
 let tunnelFound = false;
 

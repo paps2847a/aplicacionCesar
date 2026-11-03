@@ -108,8 +108,8 @@
     "contactId": "10",
     "last8": "30707614",
     "phone": "5491130707614",
-    "nombre": "Juan Facundo Martinez",
-    "sentAtISO": "2026-11-03T03:25:06.360Z"
+    "nombre": "Juan Facundo",
+    "sentAtISO": "2026-11-03T20:22:04.077Z"
   },
   {
     "contactId": "172",
@@ -446,5 +446,12 @@
     "phone": "5491130132801",
     "nombre": "",
     "sentAtISO": "2026-11-03T14:29:40.732Z"
+  },
+  {
+    "contactId": "3",
+    "last8": "35574816",
+    "phone": "5492235574816",
+    "nombre": "Ana Laura",
+    "sentAtISO": "2026-11-03T18:42:16.292Z"
   }
 ]

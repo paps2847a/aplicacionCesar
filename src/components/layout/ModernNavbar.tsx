@@ -15,6 +15,9 @@ import {
   LogOut,
   ImagePlus,
   Trash2,
+  Globe,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PopurriBrandLogo } from './PopurriBrandLogo';
@@ -76,12 +79,55 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
   const [isScrolledCompact, setIsScrolledCompact] = useState(false);
   const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
+  const [tunnelRunning, setTunnelRunning] = useState<boolean>(false);
+  const [isRestartingTunnel, setIsRestartingTunnel] = useState<boolean>(false);
+  const [copiedTunnel, setCopiedTunnel] = useState<boolean>(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const compactUserMenuRef = useRef<HTMLDivElement>(null);
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
+
+  const fetchTunnelStatus = async () => {
+    try {
+      const res = await fetch('/api/tunnel/status');
+      if (res.ok) {
+        const data = await res.json();
+        setTunnelUrl(data.url || null);
+        setTunnelRunning(Boolean(data.running));
+      }
+    } catch {
+      // Ignore network errors
+    }
+  };
+
+  const handleRestartTunnel = async () => {
+    setIsRestartingTunnel(true);
+    try {
+      const res = await fetch('/api/tunnel/restart', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setTunnelUrl(data.url || null);
+        setTunnelRunning(Boolean(data.running));
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setIsRestartingTunnel(false);
+    }
+  };
+
+  useEffect(() => {
+    if (userMenuOpen) {
+      fetchTunnelStatus();
+    }
+  }, [userMenuOpen]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const inMain = userMenuRef.current && userMenuRef.current.contains(target);
+      const inCompact = compactUserMenuRef.current && compactUserMenuRef.current.contains(target);
+      if (!inMain && !inCompact) {
         setUserMenuOpen(false);
       }
     };
@@ -192,16 +238,232 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
       icon: Smartphone,
       isWA: true,
     },
-    {
-      id: 'configuracion' as ModernTabType,
-      label: 'Configuración',
-      shortLabel: 'Ajustes',
-      icon: Settings,
-    },
   ];
 
   const isAdminRole =
     String(currentUser?.role || '').toLowerCase() === 'admin' || activeTab === 'admin';
+
+  const renderUserDropdown = () => (
+    <AnimatePresence>
+      {userMenuOpen && (
+        <motion.div
+          initial={{ opacity: 0, y: 6, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 6, scale: 0.96 }}
+          transition={{ duration: 0.14 }}
+          className="absolute right-0 top-full mt-2 w-72 sm:w-80 rounded-2xl border-2 border-[#323232] bg-white p-3 shadow-[4px_4px_0px_#323232] z-50 space-y-2"
+        >
+          {/* Encabezado de Perfil y Personalización de Foto */}
+          <div className="flex items-center gap-3 rounded-xl border border-[#323232]/20 bg-[#F5F4F0] p-2.5">
+            <div
+              onClick={() => avatarFileInputRef.current?.click()}
+              className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 border-[#323232] bg-[#FFF06B] overflow-hidden cursor-pointer group"
+              title="Subir o cambiar foto de perfil"
+            >
+              {userAvatarUrl ? (
+                <img
+                  src={userAvatarUrl}
+                  alt={displayUserName}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <User className="h-5 w-5 text-[#323232] stroke-[2.25]" />
+              )}
+              <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                <ImagePlus className="h-3.5 w-3.5 text-white" />
+              </div>
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-black text-[#323232] truncate font-display">
+                {displayUserName}
+              </p>
+              <p className="text-[10px] font-bold text-[#5A5955] truncate">
+                {isAdminRole ? '🛡️ Coordinación & Admin' : '🙌 Voluntario CABA'}
+              </p>
+              <div className="mt-1 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => avatarFileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1 rounded-md border border-[#323232] bg-white px-2 py-0.5 text-[10px] font-black text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+                >
+                  <ImagePlus className="h-2.5 w-2.5" />
+                  <span>{userAvatarUrl ? 'Cambiar foto' : 'Subir foto'}</span>
+                </button>
+                {userAvatarUrl && onUpdateAvatarUrl && (
+                  <button
+                    type="button"
+                    onClick={() => onUpdateAvatarUrl('')}
+                    className="inline-flex items-center gap-0.5 rounded-md border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 hover:bg-rose-100 transition cursor-pointer"
+                    title="Quitar foto"
+                  >
+                    <Trash2 className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Opciones del Menú */}
+          <div className="space-y-1">
+            <button
+              type="button"
+              onClick={() => {
+                onTabChange('configuracion');
+                setUserMenuOpen(false);
+              }}
+              className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold transition cursor-pointer ${
+                activeTab === 'configuracion'
+                  ? 'bg-[#FFF06B] text-[#323232] border border-[#323232]'
+                  : 'text-[#323232] hover:bg-[#FFF06B]'
+              }`}
+            >
+              <Settings className="h-4 w-4 shrink-0 text-[#323232]" />
+              <div>
+                <span className="block font-black">Perfil y Ajustes</span>
+                <span className="block text-[10px] text-[#5A5955]">
+                  Punto de partida, Sheets, Calendar y SQLite
+                </span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                onTabChange(activeTab === 'admin' ? 'pipeline' : 'admin');
+                setUserMenuOpen(false);
+              }}
+              className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-xs font-bold transition cursor-pointer ${
+                activeTab === 'admin'
+                  ? 'bg-[#323232] text-[#FFF06B]'
+                  : 'text-[#323232] hover:bg-[#DFF4FF]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Shield className="h-4 w-4 shrink-0" />
+                <div>
+                  <span className="block font-black">
+                    {activeTab === 'admin'
+                      ? 'Volver a Candidatos'
+                      : 'Panel Coordinación & Admin'}
+                  </span>
+                  <span
+                    className={`block text-[10px] ${
+                      activeTab === 'admin' ? 'text-[#FFF06B]/80' : 'text-[#5A5955]'
+                    }`}
+                  >
+                    Zonas y seguimiento de voluntarios
+                  </span>
+                </div>
+              </div>
+              {staleAlertsCount > 0 && (
+                <span className="rounded-md bg-[#FF2C00] px-1.5 py-0.5 text-[10px] font-black text-white border border-[#323232]">
+                  {staleAlertsCount}
+                </span>
+              )}
+            </button>
+
+            {handleCierre && (
+              <button
+                type="button"
+                onClick={() => {
+                  handleCierre();
+                  setUserMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#ECEAE2] transition cursor-pointer"
+              >
+                <ClipboardCheck className="h-4 w-4 shrink-0 text-[#323232]" />
+                <span>Cierre Diario (Forms)</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                onSyncSheets();
+                setUserMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#ECEAE2] transition cursor-pointer"
+            >
+              <RefreshCw
+                className={`h-4 w-4 shrink-0 text-[#323232] ${
+                  isSyncingSheets ? 'animate-spin text-[#29B8FF]' : ''
+                }`}
+              />
+              <span>{isSyncingSheets ? 'Sincronizando Sheets...' : 'Sincronizar Google Sheets'}</span>
+            </button>
+          </div>
+
+          {/* Acceso Móvil 4G/5G (Túnel Cloudflare) */}
+          <div className="rounded-xl border border-[#323232]/25 bg-[#DFF4FF]/60 p-2.5 space-y-1.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase text-[#323232]">
+                <Globe className="h-3.5 w-3.5 text-[#323232]" />
+                Túnel Móvil 4G/5G
+              </span>
+              <button
+                type="button"
+                disabled={isRestartingTunnel}
+                onClick={handleRestartTunnel}
+                className="inline-flex items-center gap-1 rounded-md border border-[#323232] bg-white px-2 py-0.5 text-[10px] font-bold text-[#323232] hover:bg-[#FFF06B] disabled:opacity-50 cursor-pointer"
+                title="Generar o reiniciar túnel público 4G/5G"
+              >
+                <RefreshCw className={`h-2.5 w-2.5 ${isRestartingTunnel ? 'animate-spin' : ''}`} />
+                <span>{isRestartingTunnel ? 'Conectando...' : tunnelUrl ? 'Renovar' : 'Activar'}</span>
+              </button>
+            </div>
+            {tunnelUrl ? (
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  readOnly
+                  value={tunnelUrl}
+                  className="min-w-0 flex-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-[10px] font-mono font-bold text-[#323232]"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(tunnelUrl);
+                    setCopiedTunnel(true);
+                    setTimeout(() => setCopiedTunnel(false), 2000);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#FFF06B] px-2 py-1 text-[10px] font-black text-[#323232] hover:bg-[#ffe838] shrink-0 cursor-pointer"
+                  title="Copiar enlace 4G/5G"
+                >
+                  {copiedTunnel ? <Check className="h-3 w-3 text-emerald-700" /> : <Copy className="h-3 w-3" />}
+                  <span>{copiedTunnel ? 'Listo' : 'Copiar'}</span>
+                </button>
+              </div>
+            ) : (
+              <p className="text-[10px] text-[#5A5955]">
+                {tunnelRunning
+                  ? '⏳ Generando enlace trycloudflare.com...'
+                  : 'Tocá "Activar" para abrir la app desde el celular con datos móviles.'}
+              </p>
+            )}
+          </div>
+
+          {/* Separador + Cerrar Sesión / Cambiar Usuario */}
+          <div className="border-t border-[#323232]/15 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setUserMenuOpen(false);
+                if (onLogout) {
+                  onLogout();
+                } else if (onOpenLoginModal) {
+                  onOpenLoginModal();
+                }
+              }}
+              className="flex w-full items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-left text-xs font-black text-rose-800 hover:bg-rose-100 transition cursor-pointer"
+            >
+              <LogOut className="h-4 w-4 shrink-0 text-rose-700" />
+              <span>Cambiar Usuario / Cerrar Sesión</span>
+            </button>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 
   return (
     <>
@@ -301,43 +563,18 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
         </nav>
 
         {/* Action Buttons + Circular User Silhouette/Photo Button with Dropdown */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {onOpenScannerModal && (
             <button
               onClick={onOpenScannerModal}
-              className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1.5 text-[11px] font-bold text-[#323232] hover:bg-[#ffe838] transition shadow-[2px_2px_0px_#323232] whitespace-nowrap font-display"
+              className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-2.5 sm:px-3 py-1.5 text-[11px] font-bold text-[#323232] hover:bg-[#ffe838] transition shadow-[2px_2px_0px_#323232] whitespace-nowrap font-display cursor-pointer"
               title="Escanear ficha física con IA y abrir Formulario de Carga de Adhesiones"
             >
               <Camera className="h-3.5 w-3.5 text-[#323232] shrink-0" />
-              <span className="hidden 2xl:inline">Escanear Ficha</span>
-              <span className="2xl:hidden">Ficha</span>
+              <span className="hidden sm:inline">Escanear Ficha</span>
+              <span className="sm:hidden">Ficha</span>
             </button>
           )}
-          {handleCierre && (
-            <button
-              onClick={handleCierre}
-              className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#DFF4FF] px-2.5 py-1.5 text-[11px] font-bold text-[#323232] hover:bg-[#29B8FF] transition shadow-[2px_2px_0px_#323232] whitespace-nowrap font-display"
-              title="Ver resumen diario de actividad para Google Forms"
-            >
-              <ClipboardCheck className="h-3.5 w-3.5 text-[#323232] shrink-0" />
-              <span className="hidden 2xl:inline">Cierre Forms</span>
-              <span className="2xl:hidden">Cierre</span>
-            </button>
-          )}
-
-          <button
-            onClick={onSyncSheets}
-            disabled={isSyncingSheets}
-            className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232] disabled:opacity-60 whitespace-nowrap font-display"
-            title="Sincronizar padrón en vivo desde Google Sheets (Pestaña Control)"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 text-[#323232] shrink-0 ${
-                isSyncingSheets ? 'animate-spin text-[#29B8FF]' : ''
-              }`}
-            />
-            <span>{isSyncingSheets ? 'Sync...' : 'Sheets'}</span>
-          </button>
 
           {/* Ícono Circular de Usuario (Silueta o Foto Personalizada) con Menú Desplegable */}
           <div className="relative shrink-0" ref={userMenuRef}>
@@ -352,11 +589,11 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
               type="button"
               onClick={() => setUserMenuOpen((prev) => !prev)}
               className={`relative flex h-9 w-9 items-center justify-center rounded-full border-2 border-[#323232] transition shadow-[2px_2px_0px_#323232] cursor-pointer overflow-hidden ${
-                activeTab === 'admin' || userMenuOpen
+                activeTab === 'admin' || activeTab === 'configuracion' || userMenuOpen
                   ? 'bg-[#323232] text-[#FFF06B] ring-2 ring-[#FFF06B]'
                   : 'bg-[#FFF06B] text-[#323232] hover:bg-[#29B8FF]'
               }`}
-              title={`Menú de Usuario (${displayUserName}): Gestionar perfil, foto, panel admin y cerrar sesión`}
+              title={`Menú de Usuario (${displayUserName}): Perfil, ajustes, Cierre Forms, Sheets y cerrar sesión`}
               aria-label="Menú de usuario"
             >
               {userAvatarUrl ? (
@@ -375,192 +612,13 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
               )}
             </button>
 
-            <AnimatePresence>
-              {userMenuOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 6, scale: 0.96 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 6, scale: 0.96 }}
-                  transition={{ duration: 0.14 }}
-                  className="absolute right-0 top-full mt-2 w-72 rounded-2xl border-2 border-[#323232] bg-white p-3 shadow-[4px_4px_0px_#323232] z-50 space-y-2.5"
-                >
-                  {/* Encabezado de Perfil y Personalización de Foto */}
-                  <div className="flex items-center gap-3 rounded-xl border border-[#323232]/20 bg-[#F5F4F0] p-2.5">
-                    <div
-                      onClick={() => avatarFileInputRef.current?.click()}
-                      className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 border-[#323232] bg-[#FFF06B] overflow-hidden cursor-pointer group"
-                      title="Hacé clic para subir o cambiar tu foto de perfil"
-                    >
-                      {userAvatarUrl ? (
-                        <img
-                          src={userAvatarUrl}
-                          alt={displayUserName}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <User className="h-6 w-6 text-[#323232] stroke-[2.25]" />
-                      )}
-                      <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                        <ImagePlus className="h-4 w-4 text-white" />
-                      </div>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-black text-[#323232] truncate font-display">
-                        {displayUserName}
-                      </p>
-                      <p className="text-[10px] font-bold text-[#5A5955] truncate">
-                        {isAdminRole ? '🛡️ Coordinación & Admin' : '🙌 Voluntario en Terreno'}
-                      </p>
-                      <div className="mt-1 flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => avatarFileInputRef.current?.click()}
-                          className="inline-flex items-center gap-1 rounded-md border border-[#323232] bg-white px-2 py-0.5 text-[10px] font-black text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
-                        >
-                          <ImagePlus className="h-2.5 w-2.5" />
-                          <span>{userAvatarUrl ? 'Cambiar foto' : 'Subir foto'}</span>
-                        </button>
-                        {userAvatarUrl && onUpdateAvatarUrl && (
-                          <button
-                            type="button"
-                            onClick={() => onUpdateAvatarUrl('')}
-                            className="inline-flex items-center gap-0.5 rounded-md border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 hover:bg-rose-100 transition cursor-pointer"
-                            title="Quitar foto y volver a la silueta"
-                          >
-                            <Trash2 className="h-2.5 w-2.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Opciones del Menú */}
-                  <div className="space-y-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onTabChange('configuracion');
-                        setUserMenuOpen(false);
-                      }}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
-                    >
-                      <Settings className="h-4 w-4 shrink-0 text-[#323232]" />
-                      <div>
-                        <span className="block font-black">Gestionar Perfil y Ajustes</span>
-                        <span className="block text-[10px] text-[#5A5955]">
-                          Punto de partida, estilo de voz y conexiones
-                        </span>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onTabChange(activeTab === 'admin' ? 'pipeline' : 'admin');
-                        setUserMenuOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-xs font-bold transition cursor-pointer ${
-                        activeTab === 'admin'
-                          ? 'bg-[#323232] text-[#FFF06B]'
-                          : 'text-[#323232] hover:bg-[#DFF4FF]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Shield className="h-4 w-4 shrink-0" />
-                        <div>
-                          <span className="block font-black">
-                            {activeTab === 'admin'
-                              ? 'Volver a Vista Candidatos'
-                              : 'Panel de Coordinación & Admin'}
-                          </span>
-                          <span
-                            className={`block text-[10px] ${
-                              activeTab === 'admin' ? 'text-[#FFF06B]/80' : 'text-[#5A5955]'
-                            }`}
-                          >
-                            Asignación por zonas y seguimiento de equipo
-                          </span>
-                        </div>
-                      </div>
-                      {staleAlertsCount > 0 && (
-                        <span className="rounded-md bg-[#FF2C00] px-1.5 py-0.5 text-[10px] font-black text-white border border-[#323232]">
-                          {staleAlertsCount}
-                        </span>
-                      )}
-                    </button>
-
-                    {onOpenScannerModal && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onOpenScannerModal();
-                          setUserMenuOpen(false);
-                        }}
-                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#ECEAE2] transition cursor-pointer"
-                      >
-                        <Camera className="h-4 w-4 shrink-0 text-[#323232]" />
-                        <span>Escanear Ficha Física con IA</span>
-                      </button>
-                    )}
-
-                    {handleCierre && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleCierre();
-                          setUserMenuOpen(false);
-                        }}
-                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#ECEAE2] transition cursor-pointer"
-                      >
-                        <ClipboardCheck className="h-4 w-4 shrink-0 text-[#323232]" />
-                        <span>Cierre Diario de Actividad (Forms)</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onSyncSheets();
-                        setUserMenuOpen(false);
-                      }}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#ECEAE2] transition cursor-pointer"
-                    >
-                      <RefreshCw
-                        className={`h-4 w-4 shrink-0 text-[#323232] ${
-                          isSyncingSheets ? 'animate-spin text-[#29B8FF]' : ''
-                        }`}
-                      />
-                      <span>Sincronizar Google Sheets ahora</span>
-                    </button>
-                  </div>
-
-                  {/* Separador + Cerrar Sesión / Cambiar Usuario */}
-                  <div className="border-t border-[#323232]/15 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUserMenuOpen(false);
-                        if (onLogout) {
-                          onLogout();
-                        } else if (onOpenLoginModal) {
-                          onOpenLoginModal();
-                        }
-                      }}
-                      className="flex w-full items-center gap-2.5 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-left text-xs font-black text-rose-800 hover:bg-rose-100 transition cursor-pointer"
-                    >
-                      <LogOut className="h-4 w-4 shrink-0 text-rose-700" />
-                      <span>Cambiar de Usuario / Cerrar Sesión</span>
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {!isScrolledCompact && renderUserDropdown()}
           </div>
         </div>
       </div>
 
-      {/* Mobile / Tablet Tab Bar (100% visible 5-column layout without horizontal overflow) */}
-      <div className="grid grid-cols-5 xl:hidden border-t-2 border-[#323232] bg-[#ECEAE2] px-1.5 py-1 gap-1 w-full max-w-full">
+      {/* Mobile / Tablet Tab Bar (100% visible 4-column layout without horizontal overflow) */}
+      <div className="grid grid-cols-4 xl:hidden border-t-2 border-[#323232] bg-[#ECEAE2] px-1.5 py-1 gap-1 w-full max-w-full">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -600,7 +658,7 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
       </div>
     </header>
 
-    {/* Barra Superior Compacta al Hacer Scroll (Fuera del header con backdrop-blur para que position: fixed funcione siempre) */}
+    {/* Barra Superior Compacta al Hacer Scroll */}
     <AnimatePresence>
       {isScrolledCompact && (
         <motion.div
@@ -625,7 +683,7 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
               </span>
             </div>
 
-            {/* Selector compacto de los 5 paneles */}
+            {/* Selector compacto de los 4 paneles */}
             <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
               {tabs.map((tab) => {
                 const Icon = tab.icon;
@@ -635,15 +693,15 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
                     key={`compact-${tab.id}`}
                     type="button"
                     onClick={() => onTabChange(tab.id)}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold font-display whitespace-nowrap transition ${
+                    className={`inline-flex items-center gap-1 rounded-lg px-2 sm:px-2.5 py-1 text-[10px] sm:text-[11px] font-bold font-display whitespace-nowrap transition ${
                       isActive
                         ? 'bg-[#FFF06B] text-[#323232] border-2 border-[#323232] shadow-[1px_1px_0px_#323232]'
                         : 'bg-[#ECEAE2]/80 text-[#5A5955] hover:text-[#323232] border border-transparent'
                     }`}
                   >
                     <Icon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="hidden sm:inline">{tab.label}</span>
-                    <span className="sm:hidden">{tab.shortLabel}</span>
+                    <span className="hidden md:inline">{tab.label}</span>
+                    <span className="md:hidden">{tab.shortLabel}</span>
                     {tab.alertBadge !== undefined && (
                       <span className="rounded bg-[#FF2C00] px-1 text-[9px] font-bold text-white">
                         {tab.alertBadge}
@@ -654,40 +712,53 @@ export const ModernNavbar: React.FC<ModernNavbarProps> = ({
               })}
             </div>
 
-            {/* Acciones rápidas en la barra compacta */}
+            {/* Acciones rápidas en la barra compacta + Botón Circular de Usuario */}
             <div className="flex items-center gap-1.5 shrink-0">
-              {handleCierre && (
+              {onOpenScannerModal && (
                 <button
                   type="button"
-                  onClick={handleCierre}
-                  className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#DFF4FF] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#29B8FF]"
-                  title="Abrir Cierre Forms"
+                  onClick={onOpenScannerModal}
+                  className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#ffe838] cursor-pointer"
+                  title="Escanear Ficha Física"
                 >
-                  <ClipboardCheck className="h-3 w-3" />
-                  <span className="hidden md:inline">Cierre</span>
+                  <Camera className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Ficha</span>
                 </button>
               )}
               <button
                 type="button"
-                onClick={onSyncSheets}
-                disabled={isSyncingSheets}
-                className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-white px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#ECEAE2]"
-                title="Sincronizar con Google Sheets"
-              >
-                <RefreshCw
-                  className={`h-3 w-3 ${isSyncingSheets ? 'animate-spin text-[#29B8FF]' : ''}`}
-                />
-                <span className="hidden sm:inline">Sheets</span>
-              </button>
-              <button
-                type="button"
                 onClick={scrollToTop}
-                className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#29B8FF] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#1aa8f0]"
+                className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#29B8FF] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#1aa8f0] cursor-pointer"
                 title="Subir al inicio de la página"
               >
-                <ArrowUp className="h-3 w-3" />
-                <span className="hidden md:inline">Arriba</span>
+                <ArrowUp className="h-3.5 w-3.5" />
               </button>
+
+              {/* Ícono Circular de Usuario en la barra compacta */}
+              <div className="relative shrink-0" ref={compactUserMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setUserMenuOpen((prev) => !prev)}
+                  className={`relative flex h-8 w-8 items-center justify-center rounded-full border-2 border-[#323232] transition shadow-[1px_1px_0px_#323232] cursor-pointer overflow-hidden ${
+                    activeTab === 'admin' || activeTab === 'configuracion' || userMenuOpen
+                      ? 'bg-[#323232] text-[#FFF06B]'
+                      : 'bg-[#FFF06B] text-[#323232] hover:bg-[#29B8FF]'
+                  }`}
+                  title={`Menú de Usuario (${displayUserName})`}
+                  aria-label="Menú de usuario"
+                >
+                  {userAvatarUrl ? (
+                    <img
+                      src={userAvatarUrl}
+                      alt={displayUserName}
+                      className="h-full w-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <User className="h-4 w-4 stroke-[2.4]" />
+                  )}
+                </button>
+                {renderUserDropdown()}
+              </div>
             </div>
           </div>
         </motion.div>

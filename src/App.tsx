@@ -247,6 +247,11 @@ export default function App() {
   const [isSubmittingForms, setIsSubmittingForms] = useState<boolean>(false);
   const [showScannerModal, setShowScannerModal] = useState<boolean>(false);
   const [isScanningFicha, setIsScanningFicha] = useState<boolean>(false);
+  const [scanPreviewUrl, setScanPreviewUrl] = useState<string | null>(null);
+  const [scanModalFeedback, setScanModalFeedback] = useState<{
+    type: 'ok' | 'info' | 'warn';
+    text: string;
+  } | null>(null);
   const [scannedRows, setScannedRows] = useState<FichaEscaneadaRow[]>(() => [
     createEmptyFichaRow(1),
   ]);
@@ -1606,60 +1611,107 @@ export default function App() {
     };
   }, [handleApplyAutoBatchResults, pushUpdateToGoogleSheets]);
 
-  // Subir foto de ficha física (Formulario 01) para OCR con Gemini
+  // Subir o tomar foto de ficha física (Formulario 01) con compresión en Canvas para OCR rápido
   const handleUploadFichaImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setIsScanningFicha(true);
+    setScanModalFeedback({
+      type: 'info',
+      text: '⏳ Procesando imagen y leyendo campos del Formulario 01...',
+    });
     try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64Full = String(reader.result || '');
-        const base64Data = base64Full.includes(',') ? base64Full.split(',')[1] : base64Full;
-        try {
-          const res = await fetch('/api/gemini/scan-ficha', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              imageBase64: base64Data,
-              mimeType: file.type || 'image/jpeg',
-            }),
-          });
-          const data = await res.json();
-          if (data?.ok && Array.isArray(data.rows) && data.rows.length > 0) {
-            const enrichedRows: FichaEscaneadaRow[] = data.rows.map((r: FichaEscaneadaRow) => {
-              const matched = buscarCandidatoDeFichaEnPadron(r, rawContacts);
-              const fallbackBarrio = r.barrio || matched?.barrio || 'Palermo';
-              const barrioInferido =
-                inferirBarrioDesdeTextoCABA(r.domicilio, fallbackBarrio) || fallbackBarrio;
-              return {
-                ...r,
-                barrio: barrioInferido,
-                telefono: r.telefono || matched?.telRaw || '',
-                partido: r.partido || 'Regeneración',
-              };
-            });
-            setScannedRows(enrichedRows);
-            showNotice(
-              `📷 Formulario 01 escaneado: se extrajeron los datos de ${enrichedRows.length} ficha(s).`,
-              'ok'
-            );
-          } else {
-            showNotice(
-              '⚠️ Podés completar o corregir manualmente los datos del Formulario 01 abajo.',
-              'info'
-            );
-          }
-        } catch {
-          showNotice('⚠️ Completá los datos del Formulario 01 manualmente abajo.', 'info');
-        } finally {
-          setIsScanningFicha(false);
-        }
-      };
-      reader.readAsDataURL(file);
+      const compressImageToBase64 = (inputFile: File): Promise<{ dataUrl: string; base64: string; mimeType: string }> =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+          reader.onload = () => {
+            const rawDataUrl = String(reader.result || '');
+            const img = new Image();
+            img.onerror = () => {
+              const base64 = rawDataUrl.includes(',') ? rawDataUrl.split(',')[1] : rawDataUrl;
+              resolve({ dataUrl: rawDataUrl, base64, mimeType: inputFile.type || 'image/jpeg' });
+            };
+            img.onload = () => {
+              try {
+                const maxDim = 1600;
+                let width = img.naturalWidth || img.width;
+                let height = img.naturalHeight || img.height;
+                if (width > maxDim || height > maxDim) {
+                  if (width >= height) {
+                    height = Math.round((height * maxDim) / width);
+                    width = maxDim;
+                  } else {
+                    width = Math.round((width * maxDim) / height);
+                    height = maxDim;
+                  }
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                  const base64 = rawDataUrl.includes(',') ? rawDataUrl.split(',')[1] : rawDataUrl;
+                  resolve({ dataUrl: rawDataUrl, base64, mimeType: inputFile.type || 'image/jpeg' });
+                  return;
+                }
+                ctx.drawImage(img, 0, 0, width, height);
+                const compressedUrl = canvas.toDataURL('image/jpeg', 0.85);
+                const base64 = compressedUrl.split(',')[1] || '';
+                resolve({ dataUrl: compressedUrl, base64, mimeType: 'image/jpeg' });
+              } catch {
+                const base64 = rawDataUrl.includes(',') ? rawDataUrl.split(',')[1] : rawDataUrl;
+                resolve({ dataUrl: rawDataUrl, base64, mimeType: inputFile.type || 'image/jpeg' });
+              }
+            };
+            img.src = rawDataUrl;
+          };
+          reader.readAsDataURL(inputFile);
+        });
+
+      const { dataUrl, base64: base64Data, mimeType } = await compressImageToBase64(file);
+      setScanPreviewUrl(dataUrl);
+
+      const res = await fetch('/api/gemini/scan-ficha', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          mimeType,
+        }),
+      });
+      const data = await res.json();
+      if (data?.ok && Array.isArray(data.rows) && data.rows.length > 0) {
+        const enrichedRows: FichaEscaneadaRow[] = data.rows.map((r: FichaEscaneadaRow) => {
+          const matched = buscarCandidatoDeFichaEnPadron(r, rawContacts);
+          const fallbackBarrio = r.barrio || matched?.barrio || 'Palermo';
+          const barrioInferido =
+            inferirBarrioDesdeTextoCABA(r.domicilio, fallbackBarrio) || fallbackBarrio;
+          return {
+            ...r,
+            barrio: barrioInferido,
+            telefono: r.telefono || matched?.telRaw || '',
+            partido: r.partido || 'Regeneración',
+          };
+        });
+        setScannedRows(enrichedRows);
+        const engineLabel = data.engine === 'windows-ocr' ? 'OCR Local' : 'IA Vision';
+        const msg = `✅ Formulario 01 leído (${engineLabel}): se detectaron ${enrichedRows.length} ficha(s). Revisá y confirmá abajo.`;
+        setScanModalFeedback({ type: 'ok', text: msg });
+        showNotice(msg, 'ok');
+      } else {
+        const warnMsg =
+          data?.message ||
+          '⚠️ No se detectó texto nítido automáticamente. Podés completar o corregir los campos abajo.';
+        setScanModalFeedback({ type: 'warn', text: warnMsg });
+        showNotice(warnMsg, 'info');
+      }
     } catch {
-      setIsScanningFicha(false);
+      const warnMsg = '⚠️ Error al procesar la foto. Podés completar los datos manualmente abajo.';
+      setScanModalFeedback({ type: 'warn', text: warnMsg });
+      showNotice(warnMsg, 'info');
     } finally {
+      setIsScanningFicha(false);
       e.target.value = '';
     }
   };
@@ -2663,30 +2715,68 @@ export default function App() {
             </div>
 
             <div className="p-4 sm:p-5 space-y-4 max-h-[82vh] overflow-y-auto">
-              <div className="p-4 rounded-xl border-2 border-dashed border-[#323232] bg-[#F5F4F0] flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="p-3.5 rounded-xl border-2 border-dashed border-[#323232] bg-[#F5F4F0] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                 <div className="text-xs text-[#323232]">
                   <p className="font-black">
-                    📷 Subir foto del Formulario 01 en papel (IA Gemini Vision)
+                    📷 Capturar o subir foto del Formulario 01
                   </p>
                   <p className="text-[11px] text-[#323232]/75">
-                    Lee Apellido y Nombre, Padre, Madre, Matrícula (DNI), Domicilio, Lugar y Fecha + cruza automáticamente con el padrón.
+                    Extrae Apellido y Nombre, Padre, Madre, Matrícula (DNI), Domicilio y cruza con el padrón.
                   </p>
                 </div>
-                <label className="px-4 py-2 rounded-xl bg-[#323232] text-[#FFF06B] text-xs font-black cursor-pointer inline-flex items-center gap-1.5 shrink-0">
-                  {isScanningFicha ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <label className="flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-xl bg-[#323232] text-[#FFF06B] text-xs font-black cursor-pointer inline-flex items-center gap-1.5 shadow-[2px_2px_0px_#323232]">
+                    {isScanningFicha ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Camera className="w-4 h-4" />
+                    )}
+                    <span>{isScanningFicha ? 'Leyendo...' : 'Tomar Foto'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleUploadFichaImage}
+                      disabled={isScanningFicha}
+                      className="hidden"
+                    />
+                  </label>
+                  <label className="flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-xl bg-white border-2 border-[#323232] text-[#323232] text-xs font-black cursor-pointer inline-flex items-center gap-1.5 shadow-[2px_2px_0px_#323232]">
                     <Upload className="w-4 h-4" />
-                  )}
-                  <span>{isScanningFicha ? 'Leyendo Formulario 01...' : 'Seleccionar Foto'}</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleUploadFichaImage}
-                    className="hidden"
-                  />
-                </label>
+                    <span>Elegir Imagen</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleUploadFichaImage}
+                      disabled={isScanningFicha}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
               </div>
+
+              {(scanModalFeedback || scanPreviewUrl) && (
+                <div
+                  className={`p-3 rounded-xl border-2 border-[#323232] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                    scanModalFeedback?.type === 'ok'
+                      ? 'bg-[#D6F5E3]'
+                      : scanModalFeedback?.type === 'warn'
+                      ? 'bg-[#FFF06B]/60'
+                      : 'bg-[#E5F2FF]'
+                  }`}
+                >
+                  <div className="text-xs font-black text-[#323232]">
+                    {scanModalFeedback?.text || 'Foto cargada'}
+                  </div>
+                  {scanPreviewUrl && (
+                    <img
+                      src={scanPreviewUrl}
+                      alt="Vista previa Formulario 01"
+                      className="h-16 w-auto rounded-lg border border-[#323232] object-cover shrink-0 bg-white"
+                    />
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between">

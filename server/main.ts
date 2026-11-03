@@ -4,7 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
-import { execSync } from 'child_process';
+import { execSync, spawn, type ChildProcess } from 'child_process';
+import QRCode from 'qrcode';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 import type {
@@ -205,8 +206,22 @@ function saveSharedState(snapshot: SharedAppStateSnapshot): void {
   saveSharedStateToDiskBackup(snapshot);
 }
 
-function getAiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getAiClient(customKey?: string) {
+  const savedKey = (() => {
+    try {
+      const k = getSetting('geminiApiKey');
+      return typeof k === 'string' ? k.trim() : '';
+    } catch {
+      return '';
+    }
+  })();
+  const apiKey = (
+    customKey ||
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    savedKey ||
+    ''
+  ).trim();
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY no configurada en el entorno del servidor.');
   }
@@ -218,6 +233,150 @@ function getAiClient() {
       },
     },
   });
+}
+
+function runWindowsLocalOcrOnBase64Image(cleanBase64: string): string {
+  if (process.platform !== 'win32') return '';
+  const tmpImg = path.join(os.tmpdir(), `popurri_ficha_${Date.now()}.jpg`);
+  const tmpPs1 = path.join(os.tmpdir(), `popurri_ocr_${Date.now()}.ps1`);
+  try {
+    fs.writeFileSync(tmpImg, Buffer.from(cleanBase64, 'base64'));
+    const psScript = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder,Windows.Foundation,ContentType=WindowsRuntime]
+
+function Await($WinRtTask, $ResultType) {
+  $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+  $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+  $netTask = $asTask.Invoke($null, @($WinRtTask))
+  $netTask.Wait(-1) | Out-Null
+  return $netTask.Result
+}
+
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('${tmpImg.replace(/'/g, "''")}')) ([Windows.Storage.StorageFile])
+$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+foreach ($line in $result.Lines) {
+  Write-Output $line.Text
+}
+$stream.Dispose()
+`;
+    fs.writeFileSync(tmpPs1, psScript, 'utf8');
+    const out = execSync(
+      `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpPs1}"`,
+      { encoding: 'utf8', timeout: 12000 }
+    );
+    return String(out || '').trim();
+  } catch {
+    return '';
+  } finally {
+    try {
+      if (fs.existsSync(tmpImg)) fs.unlinkSync(tmpImg);
+    } catch {}
+    try {
+      if (fs.existsSync(tmpPs1)) fs.unlinkSync(tmpPs1);
+    } catch {}
+  }
+}
+
+function parseFormulario01FromOcrText(ocrText: string) {
+  const lines = ocrText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  let apellidoYNombre = '';
+  let nombrePadre = '';
+  let nombreMadre = '';
+  let dni = '';
+  let domicilio = '';
+  let lugarYFecha = '';
+
+  const extractAfterLabel = (line: string, regexLabel: RegExp): string => {
+    const m = line.match(regexLabel);
+    if (!m) return '';
+    return line
+      .slice((m.index || 0) + m[0].length)
+      .replace(/^[:.\-\s]+/, '')
+      .trim();
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const nextLine = lines[i + 1] || '';
+
+    if (!lugarYFecha && /lugar\s+y\s+fecha/i.test(line)) {
+      lugarYFecha = extractAfterLabel(line, /lugar\s+y\s+fecha[:.]?/i) || nextLine;
+    }
+    if (!apellidoYNombre && /apellido\s+y\s+nombre/i.test(line)) {
+      const val = extractAfterLabel(line, /apellido\s+y\s+nombre[:.]?/i);
+      apellidoYNombre = val.length >= 3 ? val : !/nombre\s+del\s+padre/i.test(nextLine) ? nextLine : '';
+    }
+    if (!nombrePadre && /nombre\s+del\s+padre/i.test(line)) {
+      const val = extractAfterLabel(line, /nombre\s+del\s+padre[:.]?/i);
+      nombrePadre = val.length >= 3 ? val : !/nombre\s+de\s+la\s+madre/i.test(nextLine) ? nextLine : '';
+    }
+    if (!nombreMadre && /nombre\s+de\s+la\s+madre/i.test(line)) {
+      const val = extractAfterLabel(line, /nombre\s+de\s+la\s+madre[:.]?/i);
+      nombreMadre = val.length >= 3 ? val : !/matr[ií]cula|domicilio/i.test(nextLine) ? nextLine : '';
+    }
+    if (!dni && /matr[ií]cula|d\.?n\.?i\.?/i.test(line) && !/23\.?298/i.test(line)) {
+      const digits = line.replace(/\D/g, '');
+      if (digits.length >= 7 && digits.length <= 8) {
+        dni = digits;
+      } else {
+        const nextDigits = nextLine.replace(/\D/g, '');
+        if (nextDigits.length >= 7 && nextDigits.length <= 8) dni = nextDigits;
+      }
+    }
+    if (!domicilio && /domicilio/i.test(line)) {
+      const val = extractAfterLabel(line, /domicilio[:.]?/i);
+      domicilio = val.length >= 4 ? val : nextLine;
+    }
+  }
+
+  // Fallback DNI (buscar número de 7 u 8 dígitos que no sea ley 23298)
+  if (!dni) {
+    const allMatches = ocrText.match(/\b\d{1,2}\.?\d{3}\.?\d{3}\b/g) || [];
+    for (const m of allMatches) {
+      const clean = m.replace(/\D/g, '');
+      if (clean.length >= 7 && clean.length <= 8) {
+        dni = clean;
+        break;
+      }
+    }
+  }
+
+  const barrioInferido =
+    inferirBarrioDesdeTextoCABA(domicilio, 'Palermo') || 'Palermo';
+
+  return [
+    {
+      id: `scan-${Date.now()}-1`,
+      apellidoYNombre,
+      nombrePadre,
+      nombreMadre,
+      dni,
+      matriculaTipo: 'DNI',
+      domicilio,
+      lugarYFecha: lugarYFecha || `${new Date().toLocaleDateString('es-AR')} - CABA`,
+      partido: 'Regeneración',
+      tieneFirma: true,
+      barrio: barrioInferido,
+      fechaNacimiento: '',
+      profesionUOficio: '',
+      telefono: '',
+      observaciones: ocrText
+        ? `OCR Local: ${lines.slice(0, 6).join(' / ').slice(0, 140)}`
+        : 'Completar datos del Formulario 01',
+    },
+  ];
 }
 
 export async function startServer() {
@@ -482,15 +641,17 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
     }
   });
 
-  // 3c. Ruta de Escaneo OCR de Fichas Físicas en Papel (Formulario 01 - Ley Nº 23.298 Art. 7 inc. a) con IA Gemini Vision
+  // 3c. Ruta de Escaneo OCR de Fichas Físicas en Papel (Formulario 01 - Ley Nº 23.298 Art. 7 inc. a) con IA Gemini Vision + Fallback OCR Local Windows
   app.post('/api/gemini/scan-ficha', async (req, res) => {
     try {
-      const { imageBase64, mimeType } = req.body || {};
+      const { imageBase64, mimeType, apiKey } = req.body || {};
+      if (typeof apiKey === 'string' && apiKey.trim().length > 10) {
+        setSetting('geminiApiKey', apiKey.trim());
+      }
       if (!imageBase64) {
         return res.status(400).json({ ok: false, error: 'Subí o capturá una imagen de la ficha física.' });
       }
       const cleanBase64 = String(imageBase64).replace(/^data:[^;]+;base64,/, '');
-      const ai = getAiClient();
 
       const prompt = `Analizá esta fotografía de la ficha física electoral argentina en papel: "Formulario 01 (Ley Nº 23.298 Art. 7 inc. a) — Formulario de adhesión para la constitución de un partido político" de la Ciudad Autónoma de Buenos Aires (Partido: Regeneración).
 
@@ -523,56 +684,87 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
   }
 ]`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: mimeType || 'image/jpeg',
-                  data: cleanBase64,
+      let parsedRowsFromAi: any[] | null = null;
+      try {
+        const ai = getAiClient(apiKey);
+        const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.8-flash'];
+        for (const modelName of modelsToTry) {
+          try {
+            const response = await ai.models.generateContent({
+              model: modelName,
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: mimeType || 'image/jpeg',
+                        data: cleanBase64,
+                      },
+                    },
+                    { text: prompt },
+                  ],
                 },
-              },
-              { text: prompt },
-            ],
-          },
-        ],
-      });
+              ],
+            });
+            const rawText = (response.text || '[]').trim();
+            const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+            const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              parsedRowsFromAi = parsed;
+              break;
+            }
+          } catch {
+            // Probar siguiente modelo Gemini disponible
+          }
+        }
+      } catch {
+        // Sin GEMINI_API_KEY o error de red -> usar OCR local Windows
+      }
 
-      const rawText = (response.text || '[]').trim();
-      const jsonMatch = rawText.match(/\[[\s\S]*\]/);
-      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-      const rows = (Array.isArray(parsed) ? parsed : []).map((r: any, idx: number) => {
-        const domicilioStr = String(r.domicilio || '').trim();
-        const barrioGemini = String(r.barrio || '').trim();
-        const barrioInferido =
-          inferirBarrioDesdeTextoCABA(domicilioStr, barrioGemini || 'Palermo') ||
-          barrioGemini ||
-          'Palermo';
-        return {
-          id: `scan-${Date.now()}-${idx + 1}`,
-          apellidoYNombre: String(r.apellidoYNombre || '').trim(),
-          nombrePadre: String(r.nombrePadre || '').trim(),
-          nombreMadre: String(r.nombreMadre || '').trim(),
-          dni: String(r.dni || '').replace(/[^\d]/g, ''),
-          matriculaTipo: String(r.matriculaTipo || 'DNI').trim(),
-          domicilio: domicilioStr,
-          lugarYFecha: String(r.lugarYFecha || '').trim(),
-          partido: String(r.partido || 'Regeneración').trim(),
-          tieneFirma: r.tieneFirma !== false,
-          barrio: barrioInferido !== 'CABA' ? barrioInferido : barrioGemini,
-          fechaNacimiento: String(r.fechaNacimiento || '').trim(),
-          profesionUOficio: String(r.profesionUOficio || '').trim(),
-          telefono: String(r.telefono || '').trim(),
-          observaciones: String(r.observaciones || 'Formulario 01 escaneado').trim(),
-        };
-      });
+      if (parsedRowsFromAi && parsedRowsFromAi.length > 0) {
+        const rows = parsedRowsFromAi.map((r: any, idx: number) => {
+          const domicilioStr = String(r.domicilio || '').trim();
+          const barrioGemini = String(r.barrio || '').trim();
+          const barrioInferido =
+            inferirBarrioDesdeTextoCABA(domicilioStr, barrioGemini || 'Palermo') ||
+            barrioGemini ||
+            'Palermo';
+          return {
+            id: `scan-${Date.now()}-${idx + 1}`,
+            apellidoYNombre: String(r.apellidoYNombre || '').trim(),
+            nombrePadre: String(r.nombrePadre || '').trim(),
+            nombreMadre: String(r.nombreMadre || '').trim(),
+            dni: String(r.dni || '').replace(/[^\d]/g, ''),
+            matriculaTipo: String(r.matriculaTipo || 'DNI').trim(),
+            domicilio: domicilioStr,
+            lugarYFecha: String(r.lugarYFecha || '').trim(),
+            partido: String(r.partido || 'Regeneración').trim(),
+            tieneFirma: r.tieneFirma !== false,
+            barrio: barrioInferido !== 'CABA' ? barrioInferido : barrioGemini,
+            fechaNacimiento: String(r.fechaNacimiento || '').trim(),
+            profesionUOficio: String(r.profesionUOficio || '').trim(),
+            telefono: String(r.telefono || '').trim(),
+            observaciones: String(r.observaciones || 'Formulario 01 escaneado con IA').trim(),
+          };
+        });
+        return res.json({ ok: true, mode: 'gemini', rows });
+      }
 
-      res.json({ ok: true, rows });
+      // Fallback automático: Motor OCR Nativo de Windows + Parser de Formulario 01
+      const ocrText = runWindowsLocalOcrOnBase64Image(cleanBase64);
+      const localRows = parseFormulario01FromOcrText(ocrText);
+      return res.json({
+        ok: true,
+        mode: 'local_ocr',
+        ocrRawText: ocrText,
+        needsGeminiKeyForHandwriting: !Boolean(
+          process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || getSetting('geminiApiKey')
+        ),
+        rows: localRows,
+      });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Error al escanear ficha con IA';
+      const msg = error instanceof Error ? error.message : 'Error al escanear ficha';
       res.status(500).json({ ok: false, error: msg });
     }
   });
@@ -1675,6 +1867,87 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     }
   });
 
+  // 9. Gestión integrada de Túnel Cloudflare para uso móvil fuera de casa (4G/5G/LTE)
+  let tunnelProcess: ChildProcess | null = null;
+  let currentTunnelUrl: string | null = null;
+  let currentTunnelQrDataUrl: string | null = null;
+  let tunnelStarting = false;
+
+  const startOrEnsureCloudflareTunnel = () => {
+    if (process.env.DISABLE_TUNNEL === 'true') return;
+    if (tunnelProcess || tunnelStarting) return;
+    const cloudflaredExe = path.join(ROOT_DIR, 'bin', 'cloudflared.exe');
+    if (!fs.existsSync(cloudflaredExe)) return;
+
+    tunnelStarting = true;
+    try {
+      const child = spawn(
+        cloudflaredExe,
+        ['tunnel', '--protocol', 'http2', '--url', `http://localhost:${PORT}`],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        }
+      );
+      tunnelProcess = child;
+      tunnelStarting = false;
+
+      const onData = (chunk: Buffer) => {
+        const text = chunk.toString();
+        const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+        if (match && match[0] !== currentTunnelUrl) {
+          currentTunnelUrl = match[0];
+          console.log(`\n🌐 [Túnel Móvil 4G/5G Activo] -> ${currentTunnelUrl}\n`);
+          QRCode.toDataURL(currentTunnelUrl, { margin: 1, width: 220 })
+            .then((qr) => {
+              currentTunnelQrDataUrl = qr;
+            })
+            .catch(() => {});
+        }
+      };
+
+      child.stdout?.on('data', onData);
+      child.stderr?.on('data', onData);
+      child.on('close', () => {
+        tunnelProcess = null;
+        tunnelStarting = false;
+        currentTunnelUrl = null;
+        currentTunnelQrDataUrl = null;
+        // Reintentar automáticamente tras 5s si se cae la conexión
+        setTimeout(() => startOrEnsureCloudflareTunnel(), 5000);
+      });
+    } catch {
+      tunnelStarting = false;
+    }
+  };
+
+  app.get('/api/tunnel/status', (_req, res) => {
+    if (!currentTunnelUrl && !tunnelProcess) {
+      startOrEnsureCloudflareTunnel();
+    }
+    res.json({
+      ok: true,
+      active: Boolean(currentTunnelUrl),
+      url: currentTunnelUrl,
+      qrDataUrl: currentTunnelQrDataUrl,
+    });
+  });
+
+  app.post('/api/tunnel/restart', (_req, res) => {
+    try {
+      if (tunnelProcess) {
+        tunnelProcess.kill();
+        tunnelProcess = null;
+      }
+      currentTunnelUrl = null;
+      currentTunnelQrDataUrl = null;
+      startOrEnsureCloudflareTunnel();
+      res.json({ ok: true, message: 'Reiniciando túnel seguro Cloudflare...' });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'Error reiniciando túnel' });
+    }
+  });
+
   const distPath = path.join(ROOT_DIR, 'dist');
   const isDev =
     process.env.npm_lifecycle_event === 'dev' ||
@@ -1743,7 +2016,8 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: true,
+        allowedHosts: true,
+        hmr: process.env.ENABLE_HMR === 'true',
         watch: {
           ignored: [
             '**/data/**',
@@ -1768,6 +2042,7 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
   const tryListen = (attempt = 1) => {
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`Rutas POPURRÍ server running on http://0.0.0.0:${PORT}`);
+      startOrEnsureCloudflareTunnel();
     });
     server.on('error', (err: any) => {
       if (err?.code === 'EADDRINUSE' && attempt <= 2) {
