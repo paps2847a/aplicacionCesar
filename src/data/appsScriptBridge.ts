@@ -240,6 +240,39 @@ function doGet(e) {
 
 function doPost(e) {
   var body = JSON.parse(e.postData.contents);
+  if (body.action === 'syncRouteCalendarEvents' && Array.isArray(body.events)) {
+    var cal = CalendarApp.getDefaultCalendar();
+    var createdIds = [];
+    for (var k = 0; k < body.events.length; k++) {
+      var ev = body.events[k];
+      if (!ev || !ev.startIso || !ev.endIso) continue;
+      var startDt = new Date(ev.startIso);
+      var endDt = new Date(ev.endIso);
+      var title = String(ev.summary || 'Recorrido Puerta a Puerta POPURRÍ');
+      var existing = cal.getEvents(new Date(startDt.getTime() - 60000), new Date(endDt.getTime() + 60000));
+      var matched = null;
+      for (var m = 0; m < existing.length; m++) {
+        if (existing[m].getTitle() === title) {
+          matched = existing[m];
+          break;
+        }
+      }
+      if (matched) {
+        matched.setTime(startDt, endDt);
+        if (ev.location) matched.setLocation(ev.location);
+        if (ev.description) matched.setDescription(ev.description);
+        createdIds.push(matched.getId());
+      } else {
+        var created = cal.createEvent(title, startDt, endDt, {
+          location: ev.location || '',
+          description: ev.description || ''
+        });
+        createdIds.push(created.getId());
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'syncRouteCalendarEvents', createdCount: createdIds.length, eventIds: createdIds }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
   var sheet = getTargetSheet(body.sheetId || body.sheetUrlOrId);
   if (body.action === 'syncEstadosChips') {
     var totalActualizados = instalarChipsEstadoPopurri(sheet, body.estadosPorId || {});

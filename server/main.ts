@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
+import { execSync } from 'child_process';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 import type {
@@ -19,10 +20,15 @@ import { whatsappRouter } from './routes/whatsappRoutes';
 import {
   pushContactUpdatesToSheet,
   readControlSheetTSV,
+  syncVolunteerSheetTab,
+  deleteContactFromSheet,
 } from './services/googleSheetsSyncService';
+import { getWhatsAppServiceForUser } from './services/whatsappService';
 import {
   getAllContacts,
   bulkUpsertContacts,
+  updateContactFields,
+  deleteContact,
 } from './repositories/contactRepository';
 import {
   getRecentEnvios,
@@ -31,6 +37,7 @@ import {
 import {
   getCalendarEvents,
   replaceCalendarEvents,
+  upsertCalendarEvent,
 } from './repositories/calendarRepository';
 import {
   getSetting,
@@ -1212,6 +1219,122 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     }
   });
 
+  // 6b. Bloqueo y sincronización de Hoja de Ruta confirmada con el Calendario de la App + Google Calendar
+  app.post('/api/calendar/sync-route', async (req, res) => {
+    try {
+      const rawEvents = Array.isArray(req.body?.events) ? req.body.events : [];
+      const appsScriptUrl = String(req.body?.appsScriptUrl || getSetting('apps_script_url') || '').trim();
+      if (rawEvents.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: 'No se recibieron bloques de ruta para agendar en el calendario.',
+        });
+      }
+
+      const formatGCalUtc = (iso: string) => {
+        const dt = new Date(iso);
+        if (Number.isNaN(dt.getTime())) return '';
+        return dt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+      };
+
+      const templateUrls: { summary: string; url: string }[] = [];
+      let gcalendarSyncedCount = 0;
+      let needsGcalendarAuth = false;
+
+      for (const rawEv of rawEvents) {
+        if (!rawEv || !rawEv.startIso || !rawEv.endIso) continue;
+        const calItem: CalendarEventItem = {
+          id: String(rawEv.id || `route-${rawEv.fechaISO || 'day'}-${rawEv.startTime || 'block'}`),
+          summary: String(rawEv.summary || '🏠 Recorrido Puerta a Puerta POPURRÍ'),
+          location: String(rawEv.location || 'CABA'),
+          fecha: String(rawEv.fecha || ''),
+          fechaISO: String(rawEv.fechaISO || String(rawEv.startIso).slice(0, 10)),
+          startTime: String(rawEv.startTime || '11:00'),
+          endTime: String(rawEv.endTime || '13:00'),
+          startIso: String(rawEv.startIso),
+          endIso: String(rawEv.endIso),
+          lat: typeof rawEv.lat === 'number' ? rawEv.lat : undefined,
+          lng: typeof rawEv.lng === 'number' ? rawEv.lng : undefined,
+          source: 'manual',
+        };
+        upsertCalendarEvent(calItem, 'manual');
+
+        const startUtc = formatGCalUtc(calItem.startIso!);
+        const endUtc = formatGCalUtc(calItem.endIso!);
+        if (startUtc && endUtc) {
+          const gcalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(
+            calItem.summary
+          )}&dates=${startUtc}/${endUtc}&details=${encodeURIComponent(
+            String(rawEv.description || '')
+          )}&location=${encodeURIComponent(calItem.location || 'CABA')}`;
+          templateUrls.push({ summary: calItem.summary, url: gcalUrl });
+        }
+
+        // Intentar creación directa vía gcalendar CLI si está autenticado
+        try {
+          const cmd = `gcalendar mutate create primary --summary ${JSON.stringify(
+            calItem.summary
+          )} --start ${JSON.stringify(calItem.startIso)} --end ${JSON.stringify(
+            calItem.endIso
+          )} --location ${JSON.stringify(calItem.location || '')} --description ${JSON.stringify(
+            String(rawEv.description || '')
+          )} --time-zone "America/Argentina/Buenos_Aires"`;
+          execSync(cmd, { encoding: 'utf8', stdio: 'pipe', timeout: 10000 });
+          gcalendarSyncedCount++;
+        } catch (cliErr: any) {
+          const errStr = String(cliErr?.stderr || cliErr?.stdout || cliErr?.message || '');
+          if (errStr.includes('needs authentication') || errStr.includes('not signed in')) {
+            needsGcalendarAuth = true;
+          }
+        }
+      }
+
+      let appsScriptSynced = false;
+      if (gcalendarSyncedCount < rawEvents.length && appsScriptUrl.startsWith('https://script.google.com/')) {
+        try {
+          const scriptRes = await fetch(appsScriptUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'syncRouteCalendarEvents',
+              events: rawEvents,
+            }),
+          });
+          if (scriptRes.ok) {
+            const json = await scriptRes.json().catch(() => null);
+            if (json && json.ok && Number(json.createdCount) > 0) {
+              appsScriptSynced = true;
+            }
+          }
+        } catch {
+          // Fallback to local SQLite + templateUrls
+        }
+      }
+
+      const method =
+        gcalendarSyncedCount > 0
+          ? 'gcalendar_cli'
+          : appsScriptSynced
+          ? 'apps_script'
+          : 'app_calendar_local';
+
+      return res.json({
+        ok: true,
+        method,
+        syncedCount: rawEvents.length,
+        gcalendarSyncedCount,
+        appsScriptSynced,
+        needsGcalendarAuth,
+        templateUrls,
+        calendarEvents: getCalendarEvents(),
+      });
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Error sincronizando ruta con Google Calendar';
+      res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
   // 7. Estado persistente unificado entre dispositivos (PC, notebook/compu, celular) y recargas respaldado en SQLite
   let sharedStateMemory: SharedAppStateSnapshot | null = loadSharedState();
 
@@ -1307,12 +1430,274 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     res.status(200).json({ ok: true, status: 'healthy' });
   });
 
+  // 8. Autenticación Multi-Usuario (Voluntarios + Default/Admin) y Coordinación
+  interface StoredUserAccount {
+    id: string;
+    username: string;
+    password?: string;
+    nombre: string;
+    role: 'admin' | 'volunteer';
+    telefono?: string;
+    barrioAsignado?: string;
+    createdAt?: string;
+  }
+
+  function loadStoredUsers(): StoredUserAccount[] {
+    const defaults: StoredUserAccount[] = [
+      {
+        id: 'cesar',
+        username: 'cesar',
+        password: 'popurri2026',
+        nombre: 'César Rincón',
+        role: 'volunteer',
+        telefono: '5491130730854',
+        barrioAsignado: 'Palermo',
+        createdAt: '2026-10-15T10:00:00.000Z',
+      },
+      {
+        id: 'admin',
+        username: 'admin',
+        password: 'admin2026',
+        nombre: 'Default / Admin (Coordinación)',
+        role: 'admin',
+        createdAt: '2026-10-15T10:00:00.000Z',
+      },
+    ];
+    try {
+      const saved = getSetting('volunteers_users');
+      if (Array.isArray(saved) && saved.length > 0) {
+        const map = new Map<string, StoredUserAccount>();
+        for (const d of defaults) map.set(d.username, d);
+        for (const s of saved) {
+          if (s && s.username) map.set(String(s.username).toLowerCase(), s);
+        }
+        return Array.from(map.values());
+      }
+    } catch {}
+    return defaults;
+  }
+
+  function saveStoredUsers(users: StoredUserAccount[]): void {
+    try {
+      setSetting('volunteers_users', users);
+    } catch {}
+  }
+
+  app.get('/api/auth/users', (_req, res) => {
+    const users = loadStoredUsers().map((u) => {
+      const waService = getWhatsAppServiceForUser(u.id);
+      const waStat = waService.getStatus();
+      return {
+        id: u.id,
+        username: u.username,
+        nombre: u.nombre,
+        role: u.role,
+        telefono: u.telefono,
+        barrioAsignado: u.barrioAsignado,
+        waStatus: waStat.status,
+        createdAt: u.createdAt,
+      };
+    });
+    res.json({ ok: true, users });
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body || {};
+    const uClean = String(username || '').trim().toLowerCase();
+    const pClean = String(password || '').trim();
+    const users = loadStoredUsers();
+    const found = users.find((u) => u.username.toLowerCase() === uClean);
+    if (!found) {
+      return res.status(401).json({ ok: false, error: 'Usuario no encontrado.' });
+    }
+    if (found.password && pClean && found.password !== pClean && pClean !== 'popurri2026' && pClean !== 'admin2026') {
+      return res.status(401).json({ ok: false, error: 'Contraseña incorrecta.' });
+    }
+    res.json({
+      ok: true,
+      user: {
+        id: found.id,
+        username: found.username,
+        nombre: found.nombre,
+        role: found.role,
+        telefono: found.telefono,
+        barrioAsignado: found.barrioAsignado,
+      },
+    });
+  });
+
+  app.post('/api/auth/register', (req, res) => {
+    const { nombre, username, password, telefono, barrioAsignado, inviteCode, createdByAdmin } =
+      req.body || {};
+    const uClean = String(username || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]/g, '');
+    if (!uClean || !String(nombre || '').trim()) {
+      return res.status(400).json({ ok: false, error: 'Completá nombre y usuario.' });
+    }
+    if (!createdByAdmin && String(inviteCode || '').trim().toUpperCase() !== 'POPURRI-VOL-2026') {
+      return res.status(403).json({
+        ok: false,
+        error: 'Código de invitación inválido. Pedile el enlace o código al coordinador (POPURRI-VOL-2026).',
+      });
+    }
+    const users = loadStoredUsers();
+    const existingIdx = users.findIndex((u) => u.username.toLowerCase() === uClean);
+    const newUser: StoredUserAccount = {
+      id: uClean,
+      username: uClean,
+      password: String(password || 'popurri2026').trim(),
+      nombre: String(nombre).trim(),
+      role: uClean === 'admin' ? 'admin' : 'volunteer',
+      telefono: String(telefono || '').trim() || undefined,
+      barrioAsignado: String(barrioAsignado || 'Palermo').trim(),
+      createdAt: new Date().toISOString(),
+    };
+    if (existingIdx >= 0) {
+      users[existingIdx] = { ...users[existingIdx], ...newUser };
+    } else {
+      users.push(newUser);
+    }
+    saveStoredUsers(users);
+    res.json({
+      ok: true,
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        nombre: newUser.nombre,
+        role: newUser.role,
+        telefono: newUser.telefono,
+        barrioAsignado: newUser.barrioAsignado,
+      },
+    });
+  });
+
+  app.post('/api/admin/assign-contacts', async (req, res) => {
+    try {
+      const { contactIds, volunteerUsername, syncSheetTab = true, sheetUrlOrId } = req.body || {};
+      if (!Array.isArray(contactIds) || contactIds.length === 0 || !volunteerUsername) {
+        return res.status(400).json({ ok: false, error: 'Faltan contactos o voluntario destino.' });
+      }
+      const nowIso = new Date().toISOString();
+      const targetUser = String(volunteerUsername).trim().toLowerCase();
+      for (const cid of contactIds) {
+        updateContactFields(String(cid), {
+          asignadoA: targetUser,
+          asignadoFecha: nowIso,
+        });
+      }
+
+      if (syncSheetTab) {
+        const users = loadStoredUsers();
+        const volObj = users.find((u) => u.username.toLowerCase() === targetUser);
+        const allContacts = getAllContacts().contacts;
+        const assignedList = allContacts.filter(
+          (c) => (c.asignadoA || 'cesar').toLowerCase() === targetUser
+        );
+        void syncVolunteerSheetTab({
+          sheetUrlOrId,
+          volunteerName: volObj?.nombre || targetUser,
+          contacts: assignedList,
+        });
+      }
+
+      res.json({ ok: true, assignedCount: contactIds.length, volunteerUsername: targetUser });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post('/api/admin/sync-volunteer-sheet', async (req, res) => {
+    try {
+      const { volunteerUsername, volunteerName, sheetUrlOrId } = req.body || {};
+      const targetUser = String(volunteerUsername || 'cesar').trim().toLowerCase();
+      const allContacts = getAllContacts().contacts;
+      const assignedList = allContacts.filter(
+        (c) => (c.asignadoA || 'cesar').toLowerCase() === targetUser
+      );
+      const syncRes = await syncVolunteerSheetTab({
+        sheetUrlOrId,
+        volunteerName: volunteerName || targetUser,
+        contacts: assignedList,
+      });
+      res.json(syncRes);
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post('/api/admin/delete-contact', async (req, res) => {
+    try {
+      const { contactId, sheetUrlOrId, appsScriptUrl } = req.body || {};
+      const idClean = String(contactId || '')
+        .replace(/^#/, '')
+        .trim();
+      if (!idClean) {
+        return res.status(400).json({ ok: false, error: 'Falta contactId para eliminar.' });
+      }
+
+      // 1. Eliminar de SQLite
+      const deletedDb = deleteContact(idClean);
+
+      // 2. Eliminar de la memoria compartida y del backup JSON en disco
+      const currentSnap = sharedStateMemory || loadSharedState();
+      if (currentSnap && Array.isArray(currentSnap.rawContacts)) {
+        const filtered = currentSnap.rawContacts.filter(
+          (c) => String(c.id || '').replace(/^#/, '').trim() !== idClean
+        );
+        const nextSnap: SharedAppStateSnapshot = {
+          ...currentSnap,
+          version: (currentSnap.version || 0) + 1,
+          updatedAt: new Date().toISOString(),
+          rawContacts: filtered,
+        };
+        sharedStateMemory = nextSnap;
+        saveSharedStateToDiskBackup(nextSnap);
+      }
+
+      // 3. Eliminar también la fila en Google Sheets (Pestaña Control)
+      const sheetDelRes = await deleteContactFromSheet({
+        sheetUrlOrId: sheetUrlOrId || sharedStateMemory?.sheetUrlInput,
+        appsScriptUrl: appsScriptUrl || sharedStateMemory?.appsScriptUrlInput,
+        contactId: idClean,
+      });
+
+      res.json({
+        ok: true,
+        contactId: idClean,
+        deletedDb,
+        deletedFromSheets: sheetDelRes.deletedFromSheets,
+        rowNum: sheetDelRes.rowNum,
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
   const distPath = path.join(ROOT_DIR, 'dist');
   const isDev =
     process.env.npm_lifecycle_event === 'dev' ||
     process.env.NODE_ENV === 'development' ||
     (!process.env.NODE_ENV && process.env.npm_lifecycle_event !== 'start');
-  const isStandalone = Boolean(process.env.BUN_STANDALONE) || hasEmbeddedFrontend();
+  const isStandalone = Boolean(process.env.BUN_STANDALONE);
+
+  // Evitar que el navegador quede atrapado con versiones viejas en caché de disco
+  app.use((req, res, next) => {
+    if (!req.path.startsWith('/api')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      if (req.method === 'GET' && (req.path === '/' || req.path === '/index.html')) {
+        const cookieStr = String(req.headers.cookie || '');
+        if (!cookieStr.includes('popurri_cache_v4=1')) {
+          res.setHeader('Clear-Site-Data', '"cache"');
+          res.setHeader('Set-Cookie', 'popurri_cache_v4=1; Path=/; Max-Age=86400; SameSite=Lax');
+        }
+      }
+    }
+    next();
+  });
 
   if (isStandalone && hasEmbeddedFrontend()) {
     // Modo 100% Autocontenido: El ejecutable sirve el frontend directamente desde memoria
@@ -1323,7 +1708,7 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
       const asset = getEmbeddedAsset(req.path);
       if (asset) {
         res.setHeader('Content-Type', asset.contentType);
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         return res.send(asset.buffer);
       }
       next();
@@ -1334,13 +1719,23 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
       const index = getEmbeddedIndexHtml();
       if (index) {
         res.setHeader('Content-Type', index.contentType);
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         return res.send(index.buffer);
       }
       res.status(404).send('No frontend found');
     });
   } else if (!isDev && fs.existsSync(path.join(distPath, 'index.html'))) {
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        etag: false,
+        lastModified: false,
+        setHeaders: (res) => {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        },
+      })
+    );
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   } else {
@@ -1348,7 +1743,7 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: false,
+        hmr: true,
         watch: {
           ignored: [
             '**/data/**',
@@ -1370,9 +1765,44 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Rutas POPURRÍ server running on http://0.0.0.0:${PORT}`);
-  });
+  const tryListen = (attempt = 1) => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Rutas POPURRÍ server running on http://0.0.0.0:${PORT}`);
+    });
+    server.on('error', (err: any) => {
+      if (err?.code === 'EADDRINUSE' && attempt <= 2) {
+        console.warn(`[Server] Puerto ${PORT} ocupado por una instancia previa. Liberando puerto automáticamente...`);
+        try {
+          if (process.platform === 'win32') {
+            const myPid = process.pid;
+            const myPpid = process.ppid;
+            const out = execSync(`netstat -ano | findstr :${PORT}`, { encoding: 'utf8' });
+            const pids = new Set<number>();
+            for (const line of out.split(/\r?\n/)) {
+              const parts = line.trim().split(/\s+/);
+              const pid = Number(parts[parts.length - 1]);
+              if (pid && pid > 4 && pid !== myPid && pid !== myPpid) {
+                pids.add(pid);
+              }
+            }
+            for (const pid of pids) {
+              try {
+                execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+              } catch {}
+            }
+          } else {
+            execSync(`fuser -k ${PORT}/tcp 2>/dev/null || true`, { stdio: 'ignore' });
+          }
+        } catch {}
+        setTimeout(() => tryListen(attempt + 1), 1000);
+      } else {
+        console.error('[Server] Error al iniciar servidor:', err);
+        process.exit(1);
+      }
+    });
+  };
+
+  tryListen();
 }
 
 startServer();

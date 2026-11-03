@@ -18,8 +18,20 @@ export function normalizarTextoBusqueda(str: string | undefined | null): string 
  * Búsqueda universal insensible a tildes/mayúsculas en todos los campos de un contacto.
  */
 export function coincideBusquedaUniversal(c: Contact, queryRaw: string): boolean {
-  const q = normalizarTextoBusqueda(queryRaw);
+  const rawTrimmed = String(queryRaw || '').trim();
+  const q = normalizarTextoBusqueda(rawTrimmed);
   if (!q) return true;
+
+  const idNorm = normalizarTextoBusqueda(String(c.id || '').replace(/^#/, ''));
+
+  // Si la consulta comienza con '#' y es un único token (ej: "#152", "#494"),
+  // buscar EXCLUSIVAMENTE coincidencia exacta de ID de contacto (sin coincidencias parciales en teléfonos ni comentarios).
+  if (rawTrimmed.startsWith('#') && !/\s/.test(rawTrimmed)) {
+    const targetId = normalizarTextoBusqueda(rawTrimmed.replace(/^#+/, ''));
+    if (!targetId) return true;
+    return idNorm === targetId;
+  }
+
   const qSinHash = q.replace(/^#/, '').trim();
   const qDigits = q.replace(/\D+/g, '');
 
@@ -66,11 +78,15 @@ export function coincideBusquedaUniversal(c: Contact, queryRaw: string): boolean
     }
   }
 
-  // Búsqueda multi-palabra (ej: "laura palermo", "quintela 28", "felipe caballito")
-  const tokens = qSinHash.split(/\s+/).filter(Boolean);
-  if (tokens.length > 1) {
-    const todosCoinciden = tokens.every((tok) => {
-      const tokClean = tok.replace(/^#/, '');
+  // Búsqueda multi-palabra (ej: "laura palermo", "quintela 28", "felipe caballito", "#152 denise")
+  const rawTokens = rawTrimmed.split(/\s+/).filter(Boolean);
+  if (rawTokens.length > 1) {
+    const todosCoinciden = rawTokens.every((rawTok) => {
+      if (rawTok.startsWith('#')) {
+        const tokId = normalizarTextoBusqueda(rawTok.replace(/^#+/, ''));
+        return Boolean(tokId) && idNorm === tokId;
+      }
+      const tokClean = normalizarTextoBusqueda(rawTok);
       if (!tokClean) return true;
       if (textoCombinado.includes(tokClean)) return true;
       const tokDigits = tokClean.replace(/\D+/g, '');

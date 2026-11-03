@@ -20,6 +20,7 @@ import {
   UserX,
   UserCheck,
   Wand2,
+  Trash2,
 } from 'lucide-react';
 import type {
   CalendarEventItem,
@@ -43,6 +44,57 @@ import { validarDireccionYHorarioContacto } from '../../domain/routing/routingEn
 import { inferirBarrioDesdeDireccionOComentario } from '../../domain/geo/cabaLocations';
 import { marcarEntregaFichasExtra } from '../../domain/sync/dataMerging';
 import { DEFAULT_VOICE_PROFILE } from '../../data/estatusPopurriData';
+
+function formatTimestampSutil(isoOrDate?: string): string {
+  if (!isoOrDate || isoOrDate === '2025-05-14') return '';
+  try {
+    const d = new Date(isoOrDate);
+    if (isNaN(d.getTime())) return String(isoOrDate);
+    const ahora = new Date();
+    const hoyIso = ahora.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const fechaIso = d.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const hora = d.toLocaleTimeString('es-AR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'America/Argentina/Buenos_Aires',
+    });
+    if (fechaIso === hoyIso) {
+      return `Hoy a las ${hora} hs`;
+    }
+    const ayer = new Date(ahora.getTime() - 24 * 3600 * 1000);
+    const ayerIso = ayer.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
+    if (fechaIso === ayerIso) {
+      return `Ayer a las ${hora} hs`;
+    }
+    const ddmm = d.toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      timeZone: 'America/Argentina/Buenos_Aires',
+    });
+    return `${ddmm} a las ${hora} hs`;
+  } catch {
+    return String(isoOrDate);
+  }
+}
+
+function obtenerMarcaTemporalUltimoEnvioApp(contact: Contact): string | null {
+  if (contact.ultimoMensajeCorteEnviadoAt) {
+    const fmt = formatTimestampSutil(contact.ultimoMensajeCorteEnviadoAt);
+    if (fmt) return fmt;
+  }
+  if (contact.comentario) {
+    const mAuto = contact.comentario.match(/\[1er msj auto enviado el ([^\]]+)\]/i);
+    if (mAuto) return `${mAuto[1]} hs`;
+    const mEnv = contact.comentario.match(/\[(?:Msj|Mensaje) enviado el ([^\]]+)\]/i);
+    if (mEnv) return mEnv[1];
+  }
+  if (contact.ultimoContacto && contact.ultimoContacto !== '2025-05-14') {
+    const fmt = formatTimestampSutil(contact.ultimoContacto);
+    if (fmt) return fmt;
+  }
+  return null;
+}
 
 export const LISTA_PLANTILLAS_WA_COMPLETA: { value: TipoPlantillaWA; label: string }[] = [
   { value: 'auto', label: '✨ Automático según contexto del contacto' },
@@ -198,6 +250,8 @@ interface CandidateCardProps {
   onNavigateRelative?: (direction: 'prev' | 'next') => void;
   hasPrev?: boolean;
   hasNext?: boolean;
+  canDeleteContact?: boolean;
+  onDeleteContact?: (contactId: string) => Promise<void> | void;
 }
 
 export function formatAuditDate(contact: Contact): string | null {
@@ -235,11 +289,15 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   onNavigateRelative,
   hasPrev = false,
   hasNext = false,
+  canDeleteContact = false,
+  onDeleteContact,
 }) => {
   const stageKey = getMacroStageForContact(contact);
   const stageDef = MACRO_STAGES[stageKey];
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [showStageMenu, setShowStageMenu] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Estado de edición inline directa en la tarjeta
   const [isEditingInline, setIsEditingInline] = useState(false);
@@ -258,6 +316,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     contact.estadoFlujo || 'SIN_CONTACTAR_1ER_MSJ'
   );
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [savedBadgeVisible, setSavedBadgeVisible] = useState(false);
 
   // Input rápido para completar Nombre y Apellido cuando Columna B está vacía
   const [quickFullName, setQuickFullName] = useState(contact.nombre || '');
@@ -338,6 +397,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     .trim();
 
   const auditDate = formatAuditDate(contact);
+  const lastSentAppDate = obtenerMarcaTemporalUltimoEnvioApp(contact);
   const phone = contact.tel || contact.telRaw || contact.telWA || '';
   const hasValidPhone = Boolean(phone && phone !== 'N/A' && phone.replace(/\D/g, '').length >= 6);
   const fullName =
@@ -381,6 +441,8 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
         primerContactoEnviado: !esRevertidoANuevo,
       });
       setIsEditingInline(false);
+      setSavedBadgeVisible(true);
+      setTimeout(() => setSavedBadgeVisible(false), 3500);
     } finally {
       setIsSavingEdit(false);
     }
@@ -492,6 +554,8 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
       adhirio: def ? def.adhirio : contact.adhirio,
       primerContactoEnviado: !esNuevo,
     });
+    setSavedBadgeVisible(true);
+    setTimeout(() => setSavedBadgeVisible(false), 3500);
   };
 
   const waLink = crearEnlaceWhatsApp(phone, messageText || contact.mensajeSugerido || '');
@@ -565,6 +629,13 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
             📍 {contact.calleOCruce}
           </p>
         )}
+
+        <p className="mt-1 flex items-center gap-1 text-[10px] font-medium text-[#5A5955]">
+          <Send className="h-2.5 w-2.5 shrink-0 text-[#29B8FF]" />
+          <span className="truncate">
+            {lastSentAppDate ? `Último msj app: ${lastSentAppDate}` : 'Sin msj enviado desde la app'}
+          </span>
+        </p>
 
         {contact.alertaVencido?.activa && (
           <div className="mt-2 flex items-center gap-1 text-[10px] font-bold text-white bg-[#FF2C00] px-2 py-0.5 rounded">
@@ -684,13 +755,15 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-[#5A5955] mb-0.5 font-display">
                   Comentario (Día, horario o dirección):
                 </label>
-                <textarea
-                  rows={3}
-                  value={editComentario}
-                  onChange={(e) => setEditComentario(e.target.value)}
-                  placeholder="Ej. Visita 23/10 entre 15 y 18 (Charcas 3702)"
-                  className="w-full rounded-xl border-2 border-[#323232] bg-[#F5F4F0] focus:bg-white p-2 text-xs font-semibold text-[#323232] leading-relaxed resize-y"
-                />
+                <div className="rounded-xl border-2 border-[#323232] bg-[#F5F4F0] focus-within:bg-white overflow-hidden">
+                  <textarea
+                    rows={3}
+                    value={editComentario}
+                    onChange={(e) => setEditComentario(e.target.value)}
+                    placeholder="Ej. Visita 23/10 entre 15 y 18 (Charcas 3702)"
+                    className="w-full border-0 bg-transparent p-2 text-xs font-semibold text-[#323232] leading-relaxed resize-y focus:outline-hidden block"
+                  />
+                </div>
               </div>
 
               {/* 4. Selector de Estado Operativo + Guardar / Cancelar en la misma columna derecha */}
@@ -713,9 +786,52 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  {canDeleteContact && onDeleteContact && (
+                    confirmingDelete ? (
+                      <div className="inline-flex items-center gap-1 rounded-xl border-2 border-[#FF2C00] bg-[#F5817F]/20 px-2 py-1">
+                        <span className="text-[10px] font-bold text-[#FF2C00]">¿Borrar #{contact.id}?</span>
+                        <button
+                          type="button"
+                          disabled={isDeleting}
+                          onClick={async () => {
+                            setIsDeleting(true);
+                            try {
+                              await onDeleteContact(contact.id);
+                            } finally {
+                              setIsDeleting(false);
+                              setConfirmingDelete(false);
+                            }
+                          }}
+                          className="rounded-lg bg-[#FF2C00] px-2 py-0.5 text-[10px] font-bold text-white hover:bg-red-700"
+                        >
+                          {isDeleting ? '...' : 'Sí, borrar'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingDelete(false)}
+                          className="rounded-lg bg-white border border-[#323232] px-1.5 py-0.5 text-[10px] font-bold text-[#323232]"
+                        >
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingDelete(true)}
+                        className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#F5817F]/30 px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#F5817F] transition shadow-[2px_2px_0px_#323232]"
+                        title="Eliminar contacto (Solo Admin)"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-[#FF2C00]" />
+                        <span>Eliminar</span>
+                      </button>
+                    )
+                  )}
                   <button
                     type="button"
-                    onClick={() => setIsEditingInline(false)}
+                    onClick={() => {
+                      setConfirmingDelete(false);
+                      setIsEditingInline(false);
+                    }}
                     className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232]"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -776,6 +892,12 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                     Vocativo: {contact.primerNombre}
                   </span>
                 )}
+                {savedBadgeVisible && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-[#323232] bg-emerald-200 px-2 py-0.5 text-[10px] font-black text-emerald-950 shadow-[1px_1px_0px_#323232]">
+                    <CheckCircle2 className="h-3 w-3 text-emerald-700" />
+                    ✓ Guardado en App y Sheets
+                  </span>
+                )}
               </div>
 
               {phone ? (
@@ -802,6 +924,13 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
               ) : (
                 <p className="text-xs font-bold text-[#FF2C00]">Sin teléfono válido en planilla</p>
               )}
+
+              <div className="flex items-center gap-1.5 text-[11px] text-[#5A5955] font-medium">
+                <Send className={`h-3 w-3 shrink-0 ${lastSentAppDate ? 'text-[#29B8FF]' : 'text-[#5A5955]/70'}`} />
+                <span className={`truncate ${lastSentAppDate ? 'font-semibold text-[#323232]' : ''}`}>
+                  {lastSentAppDate ? `Último msj app: ${lastSentAppDate}` : 'Sin msj enviado desde la app'}
+                </span>
+              </div>
 
               <div className="flex items-center gap-1.5 text-[11px] text-[#5A5955] font-medium">
                 <Clock className="h-3 w-3 shrink-0" />
@@ -923,6 +1052,45 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
 
               {/* Botones de Acción Directa en la Tarjeta */}
               <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                {canDeleteContact && onDeleteContact && (
+                  confirmingDelete ? (
+                    <div className="inline-flex items-center gap-1 rounded-xl border-2 border-[#FF2C00] bg-[#F5817F]/20 px-2 py-1 shadow-[2px_2px_0px_#323232]">
+                      <span className="text-[10px] font-bold text-[#FF2C00]">¿Borrar #{contact.id}?</span>
+                      <button
+                        type="button"
+                        disabled={isDeleting}
+                        onClick={async () => {
+                          setIsDeleting(true);
+                          try {
+                            await onDeleteContact(contact.id);
+                          } finally {
+                            setIsDeleting(false);
+                            setConfirmingDelete(false);
+                          }
+                        }}
+                        className="rounded-lg bg-[#FF2C00] px-2 py-0.5 text-[10px] font-bold text-white hover:bg-red-700"
+                      >
+                        {isDeleting ? '...' : 'Sí'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingDelete(false)}
+                        className="rounded-lg bg-white border border-[#323232] px-1.5 py-0.5 text-[10px] font-bold text-[#323232]"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingDelete(true)}
+                      className="inline-flex items-center justify-center rounded-xl border-2 border-[#323232] bg-white px-2 py-1.5 text-xs font-bold font-display text-[#FF2C00] hover:bg-[#F5817F]/30 transition shadow-[2px_2px_0px_#323232]"
+                      title="Eliminar contacto de la App y Google Sheets (Solo Admin)"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )
+                )}
                 <button
                   type="button"
                   onClick={() => setIsEditingInline(true)}
@@ -1131,12 +1299,12 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
           </div>
 
           {/* Textarea editable del mensaje */}
-          <div>
+          <div className="rounded-xl border-2 border-[#323232] bg-white overflow-hidden">
             <textarea
               rows={4}
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              className="w-full rounded-xl border-2 border-[#323232] bg-white p-3 text-xs text-[#323232] leading-relaxed font-medium focus:outline-hidden"
+              className="w-full border-0 bg-transparent p-3 text-xs text-[#323232] leading-relaxed font-medium focus:outline-hidden block"
             />
           </div>
 

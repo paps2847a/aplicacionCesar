@@ -128,11 +128,14 @@ apiRouter.delete('/contacts/:id', (req: Request, res: Response) => {
 // Carga masiva / sincronización de contactos
 apiRouter.post('/contacts/bulk', (req: Request, res: Response) => {
   try {
-    const { contacts } = req.body as { contacts: RawContactRow[] };
+    const { contacts, replaceAll } = req.body as {
+      contacts: RawContactRow[];
+      replaceAll?: boolean;
+    };
     if (!Array.isArray(contacts)) {
       return res.status(400).json({ ok: false, error: 'Se esperaba un array de contactos' });
     }
-    const count = bulkUpsertContacts(contacts);
+    const count = bulkUpsertContacts(contacts, Boolean(replaceAll));
     res.json({ ok: true, count });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });

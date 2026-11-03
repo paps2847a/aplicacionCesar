@@ -6,6 +6,7 @@ import pkg from 'whatsapp-web.js';
 import qrcode from 'qrcode';
 import { updateContactFields, getContactById, getAllContacts } from '../repositories/contactRepository';
 import { recordEnvio } from '../repositories/controlEnvioRepository';
+import { getDatabase } from '../db';
 import { pushContactUpdatesToSheet } from './googleSheetsSyncService';
 import { obtenerEtiquetaEstadoFlujo } from '../../src/domain/contacts/pipelineStages';
 import { procesarContacto } from '../../src/domain/contacts/contactStatus';
@@ -33,8 +34,26 @@ function resolveSystemBrowserExecutable(): string | undefined {
   return getSystemBrowserExecutable();
 }
 
-function getWhatsAppSessionDir(): string {
-  return path.resolve(getDataDirectory(), 'wa_session');
+function getWhatsAppSessionDir(sessionKey: string = 'default'): string {
+  const cleanKey = String(sessionKey || 'default')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '');
+  if (!cleanKey || cleanKey === 'default' || cleanKey === 'cesar' || cleanKey === 'admin') {
+    return path.resolve(getDataDirectory(), 'wa_session');
+  }
+  return path.resolve(getDataDirectory(), `wa_session_${cleanKey}`);
+}
+
+function getSentRegistryPath(): string {
+  return path.resolve(getDataDirectory(), 'wa_sent_registry.json');
+}
+
+interface SentRegistryRecord {
+  contactId?: string;
+  last8: string;
+  phone: string;
+  nombre?: string;
+  sentAtISO: string;
 }
 
 function resolverEstadoPorEnvioBackend(
@@ -212,9 +231,372 @@ class WhatsAppService {
 
   // Rate limiting tracker (rolling 60 min)
   private sentTimestamps: number[] = [];
+  private sessionKey: string = 'default';
+  private sentRegistryByLast8: Map<string, SentRegistryRecord> = new Map();
+  private sentRegistryById: Set<string> = new Set();
 
-  constructor() {
-    this.addLog('info', 'Servicio WhatsApp Web.js inicializado en el servidor.');
+  constructor(sessionKey: string = 'default') {
+    this.sessionKey = sessionKey || 'default';
+    this.loadSentRegistry();
+    this.addLog('info', `Servicio WhatsApp Web.js inicializado en el servidor (${this.sessionKey}).`);
+  }
+
+  private loadSentRegistry(): void {
+    try {
+      const regPath = getSentRegistryPath();
+      if (fs.existsSync(regPath)) {
+        const raw = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+        if (Array.isArray(raw)) {
+          for (const item of raw) {
+            if (item && item.last8) {
+              this.sentRegistryByLast8.set(String(item.last8), item);
+            }
+            if (item && item.contactId) {
+              this.sentRegistryById.add(String(item.contactId));
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+
+  public recordInSentRegistry(contactId: string | undefined, rawPhone: string, nombre?: string): void {
+    const digits = String(rawPhone || '').replace(/\D/g, '');
+    const last8 = digits.slice(-8);
+    if (last8.length < 8 && !contactId) return;
+    if (contactId) this.sentRegistryById.add(String(contactId));
+    if (last8.length === 8) {
+      this.sentRegistryByLast8.set(last8, {
+        contactId: contactId ? String(contactId) : undefined,
+        last8,
+        phone: digits,
+        nombre,
+        sentAtISO: new Date().toISOString(),
+      });
+    }
+    try {
+      const regPath = getSentRegistryPath();
+      const dir = path.dirname(regPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        regPath,
+        JSON.stringify(Array.from(this.sentRegistryByLast8.values()), null, 2),
+        'utf8'
+      );
+    } catch {
+      // ignore write errors
+    }
+  }
+
+  public isAlreadyInSentRegistry(contactId?: string, last8?: string): boolean {
+    this.loadSentRegistry();
+    if (contactId && this.sentRegistryById.has(String(contactId))) return true;
+    if (last8 && last8.length === 8 && this.sentRegistryByLast8.has(last8)) return true;
+    return false;
+  }
+
+  public setAutoLoop24h(enabled: boolean): { ok: boolean; autoLoop24h: boolean } {
+    this.queueProgress.autoLoop24h = Boolean(enabled);
+    if (!enabled && this.queueProgress.nextBatchScheduledAtISO) {
+      this.queueProgress.nextBatchScheduledAtISO = undefined;
+      this.stopQueue('Bucle Automático 24h desactivado por el usuario');
+    }
+    return { ok: true, autoLoop24h: this.queueProgress.autoLoop24h };
+  }
+
+  public getPersistentAuditAndQuotaSummary() {
+    this.loadSentRegistry();
+    const db = getDatabase();
+    const nowMs = Date.now();
+    const hoyBA = obtenerPartesFechaHoraBA(nowMs);
+    const todayDateBA = hoyBA.isoDate;
+    const todayDisplayBA = hoyBA.ddmm;
+
+    const toDateBA = (isoStr?: string | null): string | null => {
+      if (!isoStr || !/^\d{4}-\d{2}-\d{2}/.test(isoStr)) return null;
+      const ms = Date.parse(isoStr);
+      if (!Number.isFinite(ms)) return isoStr.slice(0, 10);
+      return new Date(ms).toLocaleDateString('en-CA', {
+        timeZone: 'America/Argentina/Buenos_Aires',
+      });
+    };
+
+    const enviosRows = db
+      .prepare(
+        'SELECT id_registro, contact_id, nombre, barrio, telefono, tipo_accion, fecha_hora_iso, created_at FROM control_envios ORDER BY fecha_hora_iso DESC'
+      )
+      .all() as Array<{
+      id_registro: string;
+      contact_id: string;
+      nombre: string;
+      barrio: string;
+      telefono: string;
+      tipo_accion: string;
+      fecha_hora_iso: string;
+      created_at: string;
+    }>;
+
+    const { contacts: allContacts } = getAllContacts();
+    const contactsById = new Map<string, RawContactRow>();
+    const contactsByLast8 = new Map<string, RawContactRow>();
+    for (const c of allContacts) {
+      if (c.id) contactsById.set(String(c.id).trim(), c);
+      const d = String(c.telRaw || '').replace(/\D/g, '');
+      if (d.length >= 8) contactsByLast8.set(d.slice(-8), c);
+    }
+
+    const autoContactsToday = new Set<string>();
+    const directContactsToday = new Set<string>();
+    const allContactsToday = new Set<string>();
+    const lastHourContacts = new Set<string>();
+    const activeAutoDaysMap = new Map<string, Set<string>>();
+
+    interface FirstContactRecipient {
+      contactId: string;
+      nombre: string;
+      barrio: string;
+      phone: string;
+      tel: string;
+      sentAtISO: string;
+      fechaHoraISO: string;
+      dateBA: string;
+      dayDateBA: string;
+      estadoActual: string;
+      comentario: string;
+    }
+    const firstContactRecipientsMap = new Map<string, FirstContactRecipient>();
+
+    const registerRecipient = (
+      cidRaw: string | undefined,
+      phoneRaw: string | undefined,
+      nombreRaw: string | undefined,
+      barrioRaw: string | undefined,
+      isoStr: string,
+      isAutoFirst: boolean,
+      isDirect: boolean,
+      onlyIfNotRegistered = false
+    ) => {
+      const digits = String(phoneRaw || '').replace(/\D/g, '');
+      const last8 = digits.slice(-8);
+      const matchedContact =
+        (cidRaw && contactsById.get(String(cidRaw).trim())) ||
+        (last8.length === 8 ? contactsByLast8.get(last8) : undefined);
+      const key = matchedContact?.id
+        ? `id:${matchedContact.id}`
+        : cidRaw
+        ? `id:${cidRaw}`
+        : last8.length === 8
+        ? `tel:${last8}`
+        : `raw:${nombreRaw || isoStr}`;
+
+      if (onlyIfNotRegistered && firstContactRecipientsMap.has(key)) {
+        return;
+      }
+
+      const dateBA = toDateBA(isoStr) || todayDateBA;
+      const ms = Date.parse(isoStr);
+      if (Number.isFinite(ms) && nowMs - ms <= 3600 * 1000) {
+        lastHourContacts.add(key);
+      }
+
+      if (dateBA === todayDateBA) {
+        allContactsToday.add(key);
+        if (isAutoFirst) autoContactsToday.add(key);
+        if (isDirect) directContactsToday.add(key);
+      }
+
+      if (isAutoFirst) {
+        if (!activeAutoDaysMap.has(dateBA)) {
+          activeAutoDaysMap.set(dateBA, new Set<string>());
+        }
+        activeAutoDaysMap.get(dateBA)!.add(key);
+
+        if (!firstContactRecipientsMap.has(key)) {
+          const telStr = matchedContact?.telRaw || phoneRaw || '';
+          firstContactRecipientsMap.set(key, {
+            contactId: String(matchedContact?.id || cidRaw || ''),
+            nombre: matchedContact?.nombre || nombreRaw || 'Vecino sin nombre',
+            barrio: matchedContact?.barrio || barrioRaw || 'CABA',
+            phone: telStr,
+            tel: telStr,
+            sentAtISO: isoStr,
+            fechaHoraISO: isoStr,
+            dateBA,
+            dayDateBA: dateBA,
+            estadoActual:
+              matchedContact?.estadoFlujoEtiqueta ||
+              (matchedContact?.estadoFlujo
+                ? obtenerEtiquetaEstadoFlujo(matchedContact.estadoFlujo)
+                : '2. 1er Msj Enviado · Sin respuesta'),
+            comentario: matchedContact?.comentario || '',
+          });
+        }
+      }
+    };
+
+    for (const r of enviosRows) {
+      let iso = String(r.fecha_hora_iso || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}/.test(iso)) {
+        const mMs = String(r.id_registro || '').match(/(\d{13})/);
+        if (mMs) iso = new Date(Number(mMs[1])).toISOString();
+        else if (r.created_at) iso = `${r.created_at.replace(' ', 'T')}Z`;
+      }
+      if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) continue;
+
+      const accion = String(r.tipo_accion || '').toLowerCase();
+      if (accion.includes('fallo') || accion.includes('inexistente')) continue;
+
+      const isDirect = accion.includes('directo');
+      const isAutoFirst = !isDirect;
+      registerRecipient(
+        r.contact_id,
+        r.telefono,
+        r.nombre,
+        r.barrio,
+        iso,
+        isAutoFirst,
+        isDirect,
+        false
+      );
+    }
+
+    // Incorporar contactos marcados en SQLite con [1er msj auto enviado ...] que no estuvieran en control_envios
+    for (const c of allContacts) {
+      if (c.primerContactoEnviado && /\[1er msj auto enviado/i.test(c.comentario || '')) {
+        const mDate = (c.comentario || '').match(/\[1er msj auto enviado el (\d{2})\/(\d{2})/i);
+        const isoFromComment = mDate
+          ? `${hoyBA.year}-${mDate[2]}-${mDate[1]}T14:00:00.000Z`
+          : '';
+        const iso =
+          isoFromComment ||
+          c.ultimoMensajeCorteEnviadoAt ||
+          (c.fechaPrimerContacto ? `${c.fechaPrimerContacto}T12:00:00.000Z` : '') ||
+          c.actualizadoEnAppAt ||
+          '';
+        if (iso) {
+          registerRecipient(c.id, c.telRaw, c.nombre, c.barrio, iso, true, false, true);
+        }
+      }
+    }
+
+    // Consultar campañas persistidas en wa_campaigns
+    const campRows = db
+      .prepare('SELECT * FROM wa_campaigns ORDER BY started_at_iso DESC')
+      .all() as Array<{
+      id: string;
+      day_date_ba: string;
+      warmup_day_number: number;
+      warmup_level: string;
+      daily_quota_limit: number;
+      modo_cola: string;
+      barrio_filtro: string;
+      started_at_iso: string;
+      finished_at_iso: string | null;
+      target_count: number;
+      sent_ok_count: number;
+      invalid_count: number;
+      failed_count: number;
+      status: string;
+      contact_ids_json: string;
+    }>;
+
+    // Determinar días de campaña reales (>= 2 envíos automáticos en el día o campaña registrada)
+    const campaignDaysSet = new Set<string>();
+    for (const [day, setIds] of activeAutoDaysMap.entries()) {
+      if (setIds.size >= 2) campaignDaysSet.add(day);
+    }
+    for (const cr of campRows) {
+      if (cr.day_date_ba && cr.sent_ok_count >= 1) campaignDaysSet.add(cr.day_date_ba);
+    }
+    const activeDaysHistory = Array.from(campaignDaysSet).sort((a, b) => a.localeCompare(b));
+
+    const idxToday = activeDaysHistory.indexOf(todayDateBA);
+    const currentWarmupDayNumber =
+      idxToday >= 0 ? idxToday + 1 : Math.max(1, activeDaysHistory.length + 1);
+
+    const resolveWarmupLevelAndLimit = (
+      dayNum: number
+    ): { level: NivelWarmupWA; limit: number } => {
+      if (dayNum <= 1) return { level: 'DIA_1_MAX_10', limit: 12 };
+      if (dayNum === 2) return { level: 'DIA_2_MAX_15', limit: 18 };
+      if (dayNum === 3) return { level: 'DIA_3_MAX_25', limit: 24 };
+      if (dayNum === 4) return { level: 'DIA_4_MAX_35', limit: 32 };
+      return { level: 'DIA_5_MADURO_MENOS_45', limit: 40 };
+    };
+
+    const { level: currentWarmupLevel, limit: dailyQuotaLimit } =
+      resolveWarmupLevelAndLimit(currentWarmupDayNumber);
+
+    const sentTodayAutoCount = autoContactsToday.size;
+    const sentTodayDirectCount = directContactsToday.size;
+    const sentTodayTotalCount = allContactsToday.size;
+    const sentLastHourCount = Math.max(this.sentTimestamps.length, lastHourContacts.size);
+    const remainingDailyQuota = Math.max(0, dailyQuotaLimit - sentTodayAutoCount);
+    const isDailyQuotaLocked = sentTodayAutoCount >= dailyQuotaLimit;
+
+    const quotaLockReason = isDailyQuotaLocked
+      ? `🛑 Bloqueo Anti-Ban Activo (Día #${currentWarmupDayNumber} de Warm-up): Ya se enviaron ${sentTodayAutoCount} de ${dailyQuotaLimit} primeros mensajes automatizados permitidos hoy (${todayDisplayBA}). El envío masivo está bloqueado hasta mañana para proteger tu número.`
+      : null;
+
+    const firstContactedRecipients = Array.from(firstContactRecipientsMap.values()).sort((a, b) =>
+      b.sentAtISO.localeCompare(a.sentAtISO)
+    );
+
+    const campaignsHistory = campRows.map((cr) => {
+      let parsedIds: string[] = [];
+      try {
+        parsedIds = JSON.parse(cr.contact_ids_json || '[]');
+      } catch {
+        parsedIds = [];
+      }
+      return {
+        id: cr.id,
+        dayDateBA: cr.day_date_ba,
+        warmupDayNumber: cr.warmup_day_number,
+        warmupLevel: cr.warmup_level as NivelWarmupWA,
+        dailyQuotaLimit: cr.daily_quota_limit,
+        modoCola: cr.modo_cola,
+        barrioFiltro: cr.barrio_filtro,
+        startedAtISO: cr.started_at_iso,
+        finishedAtISO: cr.finished_at_iso,
+        targetCount: cr.target_count,
+        sentOkCount: cr.sent_ok_count,
+        invalidCount: cr.invalid_count,
+        failedCount: cr.failed_count,
+        status: cr.status,
+        contactIds: parsedIds,
+      };
+    });
+
+    const chronologicallySortedCamps = [...campaignsHistory].sort((a, b) =>
+      a.startedAtISO.localeCompare(b.startedAtISO)
+    );
+
+    return {
+      todayDateBA,
+      todayDisplayBA,
+      sentTodayAutoCount,
+      sentTodayDirectCount,
+      sentTodayTotalCount,
+      sentLastHourCount,
+      currentWarmupDayNumber,
+      currentWarmupLevel,
+      dailyQuotaLimit,
+      remainingDailyQuota,
+      isDailyQuotaLocked,
+      quotaLockReason,
+      totalCampaignsCount: campaignsHistory.length,
+      activeDaysHistory,
+      firstCampaignStartedAtISO: chronologicallySortedCamps[0]?.startedAtISO || null,
+      lastCampaignFinishedAtISO:
+        campaignsHistory[0]?.finishedAtISO || campaignsHistory[0]?.startedAtISO || null,
+      campaignsHistory,
+      firstContactedTotalCount: firstContactedRecipients.length,
+      firstContactedTodayCount: sentTodayAutoCount,
+      firstContactedRecipients: firstContactedRecipients.slice(0, 150),
+    };
   }
 
   public getStatus() {
@@ -222,18 +604,24 @@ class WhatsAppService {
     const now = Date.now();
     this.sentTimestamps = this.sentTimestamps.filter((t) => now - t < 3600 * 1000);
 
+    const freshUpdated = Array.from(this.updatedContacts.values());
+    this.updatedContacts.clear();
+
+    const dailyQuotaAudit = this.getPersistentAuditAndQuotaSummary();
+
     return {
       status: this.status,
       hasQr: Boolean(this.qrCodeDataUrl),
       qrCodeDataUrl: this.qrCodeDataUrl,
       clientInfo: this.clientInfo,
       queue: this.queueProgress,
-      rollingLastHourCount: this.sentTimestamps.length,
+      rollingLastHourCount: dailyQuotaAudit.sentLastHourCount,
       maxHourlyLimit: 40,
+      dailyQuotaAudit,
       recentLogs: this.logs.slice(-50),
       itemResults: Array.from(this.itemResults.values()),
       compensatedItems: this.compensatedItems,
-      updatedContacts: Array.from(this.updatedContacts.values()),
+      updatedContacts: freshUpdated,
     };
   }
 
@@ -325,7 +713,7 @@ class WhatsAppService {
             lastMsgTimestampMs: number;
           }[] = [];
 
-          for (const c of chats.slice(0, 120)) {
+          for (const c of chats.slice(0, 600)) {
             try {
               if (!c || c.isGroup) continue;
               const rawId = String(c.id?._serialized || '');
@@ -340,8 +728,15 @@ class WhatsAppService {
               if (c.id?.server !== 'lid') {
                 phoneDigits = String(c.id?.user || '').replace(/\D/g, '');
               }
-              if (phoneDigits.length < 8 && c.contact?.phoneNumber?.user) {
-                phoneDigits = String(c.contact.phoneNumber.user).replace(/\D/g, '');
+              const contactModel =
+                c.contact || (collections?.Contact?.get ? collections.Contact.get(c.id) : null);
+              if (phoneDigits.length < 8 && contactModel) {
+                const pn = contactModel.phoneNumber || contactModel.__x_phoneNumber;
+                if (pn?.user) {
+                  phoneDigits = String(pn.user).replace(/\D/g, '');
+                } else if (typeof pn === 'string') {
+                  phoneDigits = pn.replace(/\D/g, '');
+                }
               }
               if (phoneDigits.length < 8 && apiContact?.getPhoneNumber) {
                 try {
@@ -351,27 +746,44 @@ class WhatsAppService {
                   }
                 } catch {}
               }
-              if (phoneDigits.length < 8 && c.formattedTitle) {
-                const titleDigits = String(c.formattedTitle).replace(/\D/g, '');
+              if (phoneDigits.length < 8 && (c.formattedTitle || c.name)) {
+                const titleDigits = String(c.formattedTitle || c.name).replace(/\D/g, '');
                 if (titleDigits.length >= 8) {
                   phoneDigits = titleDigits;
                 }
               }
               if (phoneDigits.length < 8) continue;
               const msgs = c.msgs?.getModelsArray ? c.msgs.getModelsArray() : [];
-              if (!msgs || msgs.length === 0) continue;
-              const hasIncoming = msgs.some((m: any) => m && m.id && m.id.fromMe === false);
-              const hasOutgoing = msgs.some((m: any) => m && m.id && m.id.fromMe === true);
+              const lastKey = c.lastReceivedKey || c.__x_lastReceivedKey;
+              const hasIncoming =
+                msgs.some((m: any) => m && m.id && m.id.fromMe === false) ||
+                Boolean(lastKey && lastKey.fromMe === false);
+              const hasOutgoing =
+                msgs.some((m: any) => m && m.id && m.id.fromMe === true) ||
+                Boolean(lastKey && lastKey.fromMe === true);
               if (!hasIncoming && !hasOutgoing) continue;
-              const lastMsg = msgs[msgs.length - 1];
-              const lastMsgTimestampMs =
-                typeof lastMsg?.t === 'number' && lastMsg.t > 0 ? lastMsg.t * 1000 : 0;
+              const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+              const incomingMsgs = msgs
+                .filter(
+                  (m: any) =>
+                    m && m.id && m.id.fromMe === false && String(m.body || '').trim().length > 0
+                )
+                .slice(-3)
+                .map((m: any) => String(m.body || '').trim());
+              const lastIncomingBody = incomingMsgs.join(' / ').slice(0, 180);
+              const rawT =
+                typeof lastMsg?.t === 'number' && lastMsg.t > 0
+                  ? lastMsg.t
+                  : typeof c.t === 'number' && c.t > 0
+                    ? c.t
+                    : 0;
+              const lastMsgTimestampMs = rawT > 0 ? rawT * 1000 : 0;
               out.push({
                 phoneDigits,
                 last8: phoneDigits.slice(-8),
                 hasIncoming,
                 hasOutgoing,
-                lastBody: String(lastMsg?.body || '').slice(0, 100),
+                lastBody: lastIncomingBody || String(lastMsg?.body || '').slice(0, 140),
                 lastMsgTimestampMs,
               });
             } catch {
@@ -408,12 +820,20 @@ class WhatsAppService {
               String(r.telefonoNorm || '').replace(/\D/g, '').slice(-8) === summary.last8
           );
 
-        // Solo reconciliar actividad reciente del día (últimas 18 hs) o contactos con envío registrado en la sesión actual,
-        // preservando 1:1 las curaciones históricas hechas manualmente en Google Sheets sobre chats antiguos.
+        // Reconciliar actividad reciente del día (últimas 18 hs), contactos con envío registrado en la sesión actual,
+        // o cualquier contacto #167+ que aún figure erróneamente como SIN_CONTACTAR_1ER_MSJ / FALTA_NOMBRE_Y_APELLIDO / 1ER_MSJ_ENVIADO_SIN_RSP.
+        const numIdMatch = Number(String(match.id).replace(/\D/g, '')) || 0;
+        const estActual = match.estadoFlujo || 'SIN_CONTACTAR_1ER_MSJ';
+        const requiereCuracion167 =
+          numIdMatch >= 167 &&
+          (estActual === 'SIN_CONTACTAR_1ER_MSJ' ||
+            estActual === 'FALTA_NOMBRE_Y_APELLIDO' ||
+            (summary.hasIncoming && estActual === '1ER_MSJ_ENVIADO_SIN_RSP'));
         const isRecentActivity =
           (summary.lastMsgTimestampMs > 0 &&
             Date.now() - summary.lastMsgTimestampMs <= 18 * 3600 * 1000) ||
-          Boolean(existingItemRes);
+          Boolean(existingItemRes) ||
+          requiereCuracion167;
         if (!isRecentActivity) {
           continue;
         }
@@ -422,6 +842,10 @@ class WhatsAppService {
         const digitsNorm =
           this.buildPhoneCandidates(match.telRaw)[0] ||
           String(match.telRaw || '').replace(/\D/g, '');
+
+        if (summary.hasOutgoing || summary.hasIncoming) {
+          this.recordInSentRegistry(String(match.id), digitsNorm, match.nombre);
+        }
 
         // Caso A: El candidato respondió en WhatsApp y su ficha aún estaba en etapa 1 o 2 (Sin respuesta)
         if (
@@ -460,12 +884,25 @@ class WhatsAppService {
             : 'RESPONDIO_FALTA_DNI_O_ZONA';
           const etiqueta = obtenerEtiquetaEstadoFlujo(nuevoEstado);
 
-          if (match.estadoFlujo !== nuevoEstado || match.rsp !== 'Sí') {
+          const comPrev = (match.comentario || '').trim();
+          const cleanBody = String(summary.lastBody || '').trim();
+          const yaIncluyeRespuesta =
+            !cleanBody ||
+            comPrev.toLowerCase().includes(cleanBody.slice(0, 25).toLowerCase()) ||
+            comPrev.toLowerCase().includes('respondió en wa:');
+          const baseSinSello = comPrev.replace(/^\[1er msj auto enviado[^\]]*\]\s*·?\s*/i, '').trim();
+          const nuevoCom =
+            !yaIncluyeRespuesta && cleanBody
+              ? `${baseSinSello ? baseSinSello + ' · ' : ''}Respondió en WA: "${cleanBody}"`
+              : comPrev;
+
+          if (match.estadoFlujo !== nuevoEstado || match.rsp !== 'Sí' || nuevoCom !== comPrev) {
             const updated = updateContactFields(String(match.id), {
               rsp: 'Sí',
               primerContactoEnviado: true,
               fechaPrimerContacto: match.fechaPrimerContacto || hoyIso,
               ultimoContacto: hoyIso,
+              comentario: nuevoCom,
               estadoFlujo: nuevoEstado,
               estadoFlujoEtiqueta: etiqueta,
               actualizadoEnAppAt: nowIso,
@@ -630,7 +1067,7 @@ class WhatsAppService {
       this.qrCodeDataUrl = null;
       this.addLog('info', 'Iniciando navegador Chromium para WhatsApp Web...');
 
-      const sessionDir = getWhatsAppSessionDir();
+      const sessionDir = getWhatsAppSessionDir(this.sessionKey);
       if (!fs.existsSync(sessionDir)) {
         fs.mkdirSync(sessionDir, { recursive: true });
       }
@@ -824,12 +1261,28 @@ class WhatsAppService {
               : 'RESPONDIO_FALTA_DNI_O_ZONA';
             const etiqueta = obtenerEtiquetaEstadoFlujo(nuevoEstado);
 
-            if (matchedContact.estadoFlujo !== nuevoEstado || matchedContact.rsp !== 'Sí') {
+            const incomingBody = String(msg.body || '').trim().slice(0, 180);
+            const comPrev = (matchedContact.comentario || '').trim();
+            const baseSinSello = comPrev.replace(/^\[1er msj auto enviado[^\]]*\]\s*·?\s*/i, '').trim();
+            const yaTieneBody =
+              !incomingBody ||
+              comPrev.toLowerCase().includes(incomingBody.slice(0, 25).toLowerCase());
+            const nuevoCom =
+              !yaTieneBody && incomingBody
+                ? `${baseSinSello ? baseSinSello + ' · ' : ''}Respondió en WA: "${incomingBody}"`
+                : comPrev;
+
+            if (
+              matchedContact.estadoFlujo !== nuevoEstado ||
+              matchedContact.rsp !== 'Sí' ||
+              nuevoCom !== comPrev
+            ) {
               const updated = updateContactFields(String(matchedContact.id), {
                 rsp: 'Sí',
                 primerContactoEnviado: true,
                 fechaPrimerContacto: matchedContact.fechaPrimerContacto || hoyIso,
                 ultimoContacto: hoyIso,
+                comentario: nuevoCom,
                 estadoFlujo: nuevoEstado,
                 estadoFlujoEtiqueta: etiqueta,
                 actualizadoEnAppAt: nowIso,
@@ -924,7 +1377,7 @@ class WhatsAppService {
 
       if (isLockError) {
         this.addLog('warn', 'Detectado bloqueo de navegador previo. Liberando Chromium y limpiando locks de sesión...');
-        const sessionDir = getWhatsAppSessionDir();
+        const sessionDir = getWhatsAppSessionDir(this.sessionKey);
         this.terminateZombieBrowsers(sessionDir);
         this.cleanStaleSessionLocks(sessionDir);
       }
@@ -955,7 +1408,7 @@ class WhatsAppService {
       this.client = null;
     }
 
-    const sessionDir = getWhatsAppSessionDir();
+    const sessionDir = getWhatsAppSessionDir(this.sessionKey);
     this.terminateZombieBrowsers(sessionDir);
     this.cleanStaleSessionLocks(sessionDir);
 
@@ -970,7 +1423,7 @@ class WhatsAppService {
   public async resetSession(): Promise<{ ok: boolean; message: string }> {
     this.addLog('info', 'Reiniciando por completo la sesión y locks de WhatsApp Web...');
     await this.disconnect();
-    const sessionDir = getWhatsAppSessionDir();
+    const sessionDir = getWhatsAppSessionDir(this.sessionKey);
     this.terminateZombieBrowsers(sessionDir);
     this.cleanStaleSessionLocks(sessionDir);
     this.status = 'DISCONNECTED';
@@ -1086,12 +1539,17 @@ class WhatsAppService {
                   const td = String(ch.formattedTitle).replace(/\D/g, '');
                   if (td.length >= 8) pn = td;
                 }
+                const hasPriorHistory =
+                  (ch.msgs?.getModelsArray && ch.msgs.getModelsArray().length > 0) ||
+                  Boolean(ch.lastReceivedKey || ch.__x_lastReceivedKey) ||
+                  (typeof ch.t === 'number' && ch.t > 0);
                 if (
-                  (u && cands.includes(u)) ||
-                  (pn && cands.includes(pn)) ||
-                  (suffix8.length === 8 &&
-                    ((u.length >= 8 && u.endsWith(suffix8)) ||
-                      (pn.length >= 8 && pn.endsWith(suffix8))))
+                  hasPriorHistory &&
+                  ((u && cands.includes(u)) ||
+                    (pn && cands.includes(pn)) ||
+                    (suffix8.length === 8 &&
+                      ((u.length >= 8 && u.endsWith(suffix8)) ||
+                        (pn.length >= 8 && pn.endsWith(suffix8)))))
                 ) {
                   const s = extractWidString(ch.id);
                   if (s) return { jid: s, verified: true };
@@ -1131,7 +1589,7 @@ class WhatsAppService {
                   if (found?.chat?.id) {
                     const serialized = extractWidString(found.chat.id);
                     if (serialized) {
-                      return { jid: serialized, verified: true };
+                      return { jid: serialized, verified: false };
                     }
                   }
                 } catch (err2: any) {
@@ -1252,6 +1710,7 @@ class WhatsAppService {
         sincronizadoSheets: true,
       };
       recordEnvio(reg);
+      this.recordInSentRegistry(effectiveContactId, params.rawPhone, effectiveNombre);
 
       if (effectiveContactId) {
         const updated = updateContactFields(effectiveContactId, {
@@ -1302,6 +1761,7 @@ class WhatsAppService {
         sincronizadoSheets: true,
       };
       recordEnvio(reg);
+      this.recordInSentRegistry(effectiveContactId, params.rawPhone, effectiveNombre);
 
       if (effectiveContactId) {
         const updated = updateContactFields(effectiveContactId, {
@@ -1330,7 +1790,9 @@ class WhatsAppService {
     // dejándolo intacto para su reintento posterior.
 
     const key = effectiveContactId || digitsNorm;
-    if (key) {
+    const isDirectUiOk =
+      params.tipoAccion === 'mensaje_directo_ui' && params.resultado === 'ENVIADO_OK';
+    if (key && !isDirectUiOk) {
       this.itemResults.set(key, {
         contactId: effectiveContactId,
         telefonoNorm: digitsNorm,
@@ -1433,16 +1895,67 @@ class WhatsAppService {
 
     const last8 = (resolution.candidates[0] || String(rawPhone || '').replace(/\D/g, '')).slice(-8);
 
+    const getActivePage = async () => {
+      if (!this.client?.pupBrowser) return this.client?.pupPage;
+      try {
+        if (this.client.pupPage && !this.client.pupPage.isClosed()) {
+          await this.client.pupPage.evaluate(() => true);
+          return this.client.pupPage;
+        }
+      } catch {
+        try {
+          const pages = await this.client.pupBrowser.pages();
+          if (pages.length > 0) {
+            this.client.pupPage = pages[pages.length - 1];
+          }
+        } catch {}
+      }
+      return this.client?.pupPage;
+    };
+
     const verifyOutgoingMessageInChat = async (
       jidToCheck: string,
-      suffix8: string
+      suffix8: string,
+      textSnippet?: string
     ): Promise<{ sent: boolean; msgId?: string }> => {
-      if (!this.client?.pupPage) return { sent: false };
+      const page = await getActivePage();
+      if (!page) return { sent: false };
       try {
-        return await this.client.pupPage.evaluate(
-          (jid: string, sfx8: string) => {
+        return await page.evaluate(
+          (jid: string, sfx8: string, snippet: string) => {
             try {
               const collections = (window as any).require('WAWebCollections');
+              const nowSec = Math.floor(Date.now() / 1000);
+
+              // 1. Verificar primero en la colección global de mensajes WAWebCollections.Msg
+              if (collections?.Msg?.getModelsArray) {
+                const allMsgs = collections.Msg.getModelsArray();
+                for (let idx = allMsgs.length - 1; idx >= 0; idx--) {
+                  const m = allMsgs[idx];
+                  if (!m || !m.id?.fromMe) continue;
+                  const t = m.t || m.__x_t || 0;
+                  if (t && Math.abs(nowSec - t) > 180) continue;
+
+                  const toStr = String(
+                    m.to?._serialized ||
+                    m.to?.user ||
+                    m.id?.remote?._serialized ||
+                    m.id?.remote?.user ||
+                    m.chat?.id?._serialized ||
+                    ''
+                  ).replace(/\D/g, '');
+
+                  const toMatches = sfx8 && sfx8.length >= 6 && toStr.endsWith(sfx8);
+                  const bodyStr = String(m.body || m.caption || m.__x_body || '');
+                  const bodyMatches = snippet && snippet.length >= 10 && bodyStr.includes(snippet.slice(0, 25));
+
+                  if (toMatches || (bodyMatches && t && Math.abs(nowSec - t) <= 90)) {
+                    return { sent: true, msgId: String(m.id?.id || m.id?._serialized || 'verified-msg') };
+                  }
+                }
+              }
+
+              // 2. Verificar en la colección de Chats
               let apiContact: any = null;
               try {
                 apiContact = (window as any).require('WAWebApiContact');
@@ -1452,7 +1965,7 @@ class WhatsAppService {
                 const chats = collections.Chat.getModelsArray();
                 chat = chats.find((ch: any) => {
                   if (!ch || ch.isGroup) return false;
-                  const u = ch.id?.server !== 'lid' ? String(ch.id?.user || '').replace(/\D/g, '') : '';
+                  const u = String(ch.id?.user || ch.__x_id?.user || '').replace(/\D/g, '');
                   let pn = String(ch.contact?.phoneNumber?.user || '').replace(/\D/g, '');
                   if (!pn && apiContact?.getPhoneNumber && ch.id) {
                     try {
@@ -1460,8 +1973,8 @@ class WhatsAppService {
                       if (pnWid?.user) pn = String(pnWid.user).replace(/\D/g, '');
                     } catch {}
                   }
-                  if (!pn && ch.formattedTitle) {
-                    const td = String(ch.formattedTitle).replace(/\D/g, '');
+                  if (!pn && (ch.formattedTitle || ch.__x_formattedTitle || ch.name)) {
+                    const td = String(ch.formattedTitle || ch.__x_formattedTitle || ch.name).replace(/\D/g, '');
                     if (td.length >= 8) pn = td;
                   }
                   return (u.length >= 8 && u.endsWith(sfx8)) || (pn.length >= 8 && pn.endsWith(sfx8));
@@ -1469,7 +1982,6 @@ class WhatsAppService {
               }
               if (!chat) return { sent: false };
               const msgs = chat.msgs?.getModelsArray ? chat.msgs.getModelsArray() : [];
-              const nowSec = Math.floor(Date.now() / 1000);
               for (let idx = msgs.length - 1; idx >= 0; idx--) {
                 const m = msgs[idx];
                 if (!m || !m.id?.fromMe) continue;
@@ -1483,17 +1995,191 @@ class WhatsAppService {
             }
           },
           jidToCheck,
-          suffix8
+          suffix8,
+          (messageText || '').slice(0, 40)
         );
       } catch {
         return { sent: false };
       }
     };
 
+    const checkExistingConversationInWhatsApp = async (
+      jidToCheck: string,
+      suffix8: string
+    ): Promise<{ hasOutgoing: boolean; hasIncoming: boolean; lastIncomingBody?: string }> => {
+      const page = await getActivePage();
+      if (!page) return { hasOutgoing: false, hasIncoming: false };
+      try {
+        return await page.evaluate(
+          (jid: string, sfx8: string) => {
+            try {
+              const collections = (window as any).require('WAWebCollections');
+              let apiContact: any = null;
+              try {
+                apiContact = (window as any).require('WAWebApiContact');
+              } catch {}
+              let chat = collections?.Chat?.get ? collections.Chat.get(jid) : null;
+              if (!chat && sfx8 && sfx8.length === 8 && collections?.Chat?.getModelsArray) {
+                const chats = collections.Chat.getModelsArray();
+                chat = chats.find((ch: any) => {
+                  if (!ch || ch.isGroup) return false;
+                  const u = String(ch.id?.user || ch.__x_id?.user || '').replace(/\D/g, '');
+                  let pn = String(ch.contact?.phoneNumber?.user || '').replace(/\D/g, '');
+                  if (!pn && apiContact?.getPhoneNumber && ch.id) {
+                    try {
+                      const pnWid = apiContact.getPhoneNumber(ch.id);
+                      if (pnWid?.user) pn = String(pnWid.user).replace(/\D/g, '');
+                    } catch {}
+                  }
+                  if (!pn && (ch.formattedTitle || ch.__x_formattedTitle || ch.name)) {
+                    const td = String(ch.formattedTitle || ch.__x_formattedTitle || ch.name).replace(/\D/g, '');
+                    if (td.length >= 8) pn = td;
+                  }
+                  return (u.length >= 8 && u.endsWith(sfx8)) || (pn.length >= 8 && pn.endsWith(sfx8));
+                });
+              }
+              if (!chat) return { hasOutgoing: false, hasIncoming: false };
+              const msgs = chat.msgs?.getModelsArray ? chat.msgs.getModelsArray() : [];
+              let hasOutgoing = false;
+              let hasIncoming = false;
+              let lastIncomingBody = '';
+              for (const m of msgs) {
+                if (!m || !m.id) continue;
+                if (m.id.fromMe === true) hasOutgoing = true;
+                if (m.id.fromMe === false) {
+                  hasIncoming = true;
+                  const b = String(m.body || m.__x_body || '').trim();
+                  if (b) lastIncomingBody = b.slice(0, 120);
+                }
+              }
+              return { hasOutgoing, hasIncoming, lastIncomingBody };
+            } catch {
+              return { hasOutgoing: false, hasIncoming: false };
+            }
+          },
+          jidToCheck,
+          suffix8
+        );
+      } catch {
+        return { hasOutgoing: false, hasIncoming: false };
+      }
+    };
+
+    // Guardia estricta anti-duplicados para campañas de Primer Contacto:
+    // Si el número ya está en el registro persistente de enviados o ya tiene mensajes en su chat de WhatsApp Web,
+    // JAMÁS enviar otro primer mensaje. Sincronizar su ficha e informar para compensar el cupo.
+    const esAccionPrimerContacto =
+      options?.tipoAccion === 'primer_contacto_auto' ||
+      options?.tipoAccion === 'primer_contacto';
+    if (esAccionPrimerContacto) {
+      const existingContactPre = this.findContactByIdOrPhone(options?.contactId, rawPhone);
+      if (
+        existingContactPre &&
+        (existingContactPre.estadoFlujo === 'DESCARTADO_O_BAJA' || existingContactPre.adhirio === 'No')
+      ) {
+        const detalleBaja = `Protección Anti-Duplicado: ${options?.nombre || rawPhone} ya figura como Baja / Número Inválido en la base (omitido y compensado).`;
+        this.addLog('warn', `🛡️ ${detalleBaja}`);
+        return {
+          ok: false,
+          resultado: 'NUMERO_INEXISTENTE',
+          detalle: detalleBaja,
+          skippedAlreadyContacted: true,
+        } as any;
+      }
+
+      const yaContactadoEnDb = Boolean(
+        existingContactPre &&
+          (existingContactPre.primerContactoEnviado ||
+            (existingContactPre.estadoFlujo &&
+              existingContactPre.estadoFlujo !== 'SIN_CONTACTAR_1ER_MSJ' &&
+              existingContactPre.estadoFlujo !== 'FALTA_NOMBRE_Y_APELLIDO'))
+      );
+      const yaEnRegistro = this.isAlreadyInSentRegistry(options?.contactId, last8) || yaContactadoEnDb;
+      const existingChat = await checkExistingConversationInWhatsApp(targetJid, last8);
+      if (yaEnRegistro || existingChat.hasOutgoing || existingChat.hasIncoming) {
+        this.recordInSentRegistry(options?.contactId, rawPhone, options?.nombre);
+        const nowIso = new Date().toISOString();
+        const hoyIso = nowIso.slice(0, 10);
+        const existingContact = existingContactPre || this.findContactByIdOrPhone(options?.contactId, rawPhone);
+        const effectiveId = options?.contactId || existingContact?.id;
+
+        if (effectiveId) {
+          const estadoActual = existingContact?.estadoFlujo;
+          const preservarEstadoAvanzado =
+            estadoActual &&
+            estadoActual !== 'SIN_CONTACTAR_1ER_MSJ' &&
+            estadoActual !== 'FALTA_NOMBRE_Y_APELLIDO' &&
+            estadoActual !== '1ER_MSJ_ENVIADO_SIN_RSP';
+          const nuevoEst: EstadoFlujo = preservarEstadoAvanzado
+            ? estadoActual!
+            : existingChat.hasIncoming || existingContact?.rsp === 'Sí'
+            ? 'RESPONDIO_FALTA_DNI_O_ZONA'
+            : '1ER_MSJ_ENVIADO_SIN_RSP';
+          const etiq = obtenerEtiquetaEstadoFlujo(nuevoEst);
+          const comPrev = (existingContact?.comentario || '').trim();
+          const nuevoCom =
+            existingChat.hasIncoming &&
+            existingChat.lastIncomingBody &&
+            (!comPrev || /^\[1er msj auto enviado[^\]]*\]$/i.test(comPrev))
+              ? `${comPrev ? comPrev + ' · ' : ''}Respondió en WA: "${existingChat.lastIncomingBody}"`
+              : comPrev;
+
+          const updated = updateContactFields(String(effectiveId), {
+            rsp: existingChat.hasIncoming || existingContact?.rsp === 'Sí' ? 'Sí' : 'No',
+            primerContactoEnviado: true,
+            fechaPrimerContacto: existingContact?.fechaPrimerContacto || hoyIso,
+            ultimoContacto: hoyIso,
+            ultimoMensajeCorteEnviadoAt: existingContact?.ultimoMensajeCorteEnviadoAt || nowIso,
+            comentario: nuevoCom,
+            estadoFlujo: nuevoEst,
+            estadoFlujoEtiqueta: etiq,
+            actualizadoEnAppAt: nowIso,
+          });
+          if (updated) {
+            this.updatedContacts.set(String(updated.id), updated);
+            this.syncContactToGoogleSheets(
+              updated,
+              existingChat.hasIncoming
+                ? 'Respondió por WhatsApp (Detectado antes de reenviar)'
+                : '1er mensaje ya enviado previamente',
+              options?.appsScriptUrl
+            );
+          }
+        }
+
+        const detalleSkip = existingChat.hasIncoming
+          ? `Protección Anti-Duplicado: ${options?.nombre || rawPhone} ya tenía conversación y respuesta en WhatsApp (ficha pasada a 3. Respondió, sin reenviar mensaje).`
+          : `Protección Anti-Duplicado: ${options?.nombre || rawPhone} ya había recibido el 1er mensaje anteriormente (ficha sincronizada a 2. 1er Msj Enviado, sin reenviar).`;
+
+        this.addLog('warn', `🛡️ ${detalleSkip}`);
+        if (effectiveId || last8) {
+          this.itemResults.set(String(effectiveId || last8), {
+            contactId: String(effectiveId || ''),
+            telefonoNorm: resolution.candidates[0] || last8,
+            nombre: options?.nombre || existingContact?.nombre || '',
+            barrio: options?.barrio || existingContact?.barrio || 'CABA',
+            resultado: 'ENVIADO_OK',
+            detalleResultado: detalleSkip,
+            fechaHoraResultadoISO: nowIso,
+            sincronizadoSheets: true,
+          });
+        }
+
+        return {
+          ok: true,
+          resultado: 'ENVIADO_OK',
+          detalle: detalleSkip,
+          messageId: `skip-already-contacted-${Date.now()}`,
+          skippedAlreadyContacted: true,
+        } as any;
+      }
+    }
+
     const tryDeliver = async (jidToTry: string, doTyping: boolean) => {
-      if (doTyping && this.client?.pupPage) {
+      const page = await getActivePage();
+      if (doTyping && page) {
         try {
-          await this.client.pupPage.evaluate(async (jid: string) => {
+          await page.evaluate(async (jid: string) => {
             try {
               if ((window as any).WWebJS?.sendChatstate) {
                 await (window as any).WWebJS.sendChatstate('typing', jid);
@@ -1502,7 +2188,7 @@ class WhatsAppService {
           }, jidToTry);
           const typingMs = Math.min(5500, Math.max(2000, messageText.length * 28));
           await new Promise((r) => setTimeout(r, typingMs));
-          await this.client.pupPage.evaluate(async (jid: string) => {
+          await page.evaluate(async (jid: string) => {
             try {
               if ((window as any).WWebJS?.sendChatstate) {
                 await (window as any).WWebJS.sendChatstate('stop', jid);
@@ -1520,7 +2206,7 @@ class WhatsAppService {
       const sentMsg = await tryDeliver(targetJid, options?.simularTipeo !== false);
       const verified = sentMsg?.id?.id
         ? { sent: true, msgId: sentMsg.id.id }
-        : await verifyOutgoingMessageInChat(targetJid, last8);
+        : await verifyOutgoingMessageInChat(targetJid, last8, messageText);
       const messageId = verified.msgId || `wweb-${Date.now()}`;
 
       this.sentTimestamps.push(Date.now());
@@ -1547,10 +2233,13 @@ class WhatsAppService {
         messageId,
       };
     } catch (firstErr: any) {
-      // Antes de reintentar, verificar si el mensaje ya quedó efectivamente enviado en el chat de WhatsApp Web
-      const alreadySentFirst = await verifyOutgoingMessageInChat(targetJid, last8);
+      const firstErrStr = String(firstErr?.message || firstErr);
+
+      // Si el error es "No LID for user" o frame detached, dar 600ms y verificar si WhatsApp Web realmente ya lo envió
+      await new Promise((r) => setTimeout(r, 600));
+      const alreadySentFirst = await verifyOutgoingMessageInChat(targetJid, last8, messageText);
       if (alreadySentFirst.sent) {
-        const messageId = alreadySentFirst.msgId || `wweb-verified-${Date.now()}`;
+        const messageId = alreadySentFirst.msgId || `wweb-lid-sent-${Date.now()}`;
         this.sentTimestamps.push(Date.now());
         this.consecutiveNullLookups = 0;
 
@@ -1565,7 +2254,7 @@ class WhatsAppService {
 
         this.addLog(
           'success',
-          `✅ Mensaje enviado con éxito a ${options?.nombre || rawPhone} (confirmado en chat)`
+          `✅ Mensaje enviado con éxito a ${options?.nombre || rawPhone} (confirmado en chat de WhatsApp)`
         );
 
         return {
@@ -1576,7 +2265,7 @@ class WhatsAppService {
         };
       }
 
-      // Reintento automático 1 vez tras breve pausa sobre el mismo JID verificado (sin degradar a variante sin 9 que carece de LID)
+      // Reintento automático 1 vez tras breve pausa sobre el mismo JID verificado
       this.addLog(
         'warn',
         `⏳ Fallo en 1er intento a ${options?.nombre || rawPhone}, reintentando automáticamente en 2.5s...`
@@ -1587,7 +2276,7 @@ class WhatsAppService {
         const retrySent = await tryDeliver(targetJid, false);
         const verifiedRetry = retrySent?.id?.id
           ? { sent: true, msgId: retrySent.id.id }
-          : await verifyOutgoingMessageInChat(targetJid, last8);
+          : await verifyOutgoingMessageInChat(targetJid, last8, messageText);
         const messageId = verifiedRetry.msgId || `wweb-retry-${Date.now()}`;
 
         this.sentTimestamps.push(Date.now());
@@ -1614,7 +2303,9 @@ class WhatsAppService {
           messageId,
         };
       } catch (retryErr: any) {
-        const alreadySentRetry = await verifyOutgoingMessageInChat(targetJid, last8);
+        const retryErrStr = String(retryErr?.message || retryErr);
+        await new Promise((r) => setTimeout(r, 600));
+        const alreadySentRetry = await verifyOutgoingMessageInChat(targetJid, last8, messageText);
         if (alreadySentRetry.sent) {
           const messageId = alreadySentRetry.msgId || `wweb-verified-retry-${Date.now()}`;
           this.sentTimestamps.push(Date.now());
@@ -1643,6 +2334,32 @@ class WhatsAppService {
         }
 
         const errStr = String(retryErr?.message || firstErr?.message || retryErr);
+        // Si falló con "No LID for user" / "not registered" / "invalid wid" y no hay ningún mensaje en el chat,
+        // significa que el número telefónico NO tiene cuenta activa en WhatsApp -> clasificar como NUMERO_INEXISTENTE
+        if (
+          /No LID for user|not registered|invalid wid|number.*not.*exist/i.test(
+            `${firstErrStr} ${retryErrStr}`
+          )
+        ) {
+          const detalleInex = `El número ${rawPhone} no está registrado en WhatsApp (No LID / cuenta inexistente · ficha actualizada a 11. Baja / Número Inválido).`;
+          this.addLog(
+            'warn',
+            `🚫 Número sin cuenta de WhatsApp (${errStr.split('\n')[0]}): ${options?.nombre || rawPhone} → pasado a 11. Baja / Número Inválido`
+          );
+          this.applyAndPersistSendOutcome({
+            rawPhone,
+            messageText,
+            resultado: 'NUMERO_INEXISTENTE',
+            detalle: detalleInex,
+            ...options,
+          });
+          return {
+            ok: false,
+            resultado: 'NUMERO_INEXISTENTE',
+            detalle: detalleInex,
+          };
+        }
+
         const detalleErr = `Fallo técnico de envío (Estatus del candidato sin cambios · Pendiente de reintento): ${errStr}`;
         this.addLog(
           'error',
@@ -1812,17 +2529,45 @@ class WhatsAppService {
       this.lastAppsScriptUrl = appsScriptUrl;
     }
 
+    const modoColaEfectivo = config?.modoCola || 'PRIMER_CONTACTO';
+    const initialAudit = this.getPersistentAuditAndQuotaSummary();
+    if (modoColaEfectivo === 'PRIMER_CONTACTO' && initialAudit.isDailyQuotaLocked) {
+      const lockMsg =
+        initialAudit.quotaLockReason ||
+        `🛑 Bloqueo Anti-Ban Activo: Ya se enviaron ${initialAudit.sentTodayAutoCount}/${initialAudit.dailyQuotaLimit} mensajes hoy (Día #${initialAudit.currentWarmupDayNumber} de Warm-up). Cupo diario bloqueado hasta mañana.`;
+      this.addLog('warn', lockMsg);
+      return {
+        ok: false,
+        quotaBlocked: true,
+        message: lockMsg,
+      } as any;
+    }
+
+    let effectiveItems = [...items];
+    if (
+      modoColaEfectivo === 'PRIMER_CONTACTO' &&
+      initialAudit.remainingDailyQuota > 0 &&
+      effectiveItems.length > initialAudit.remainingDailyQuota
+    ) {
+      effectiveItems = effectiveItems.slice(0, initialAudit.remainingDailyQuota);
+      this.addLog(
+        'info',
+        `🛡️ Ajuste automático por Cuota Diaria Persistente (Día #${initialAudit.currentWarmupDayNumber} de Warm-up): Ya se enviaron ${initialAudit.sentTodayAutoCount}/${initialAudit.dailyQuotaLimit} mensajes hoy. La tanda se acotó a los ${initialAudit.remainingDailyQuota} mensajes restantes de hoy.`
+      );
+    }
+
     this.queueAbortController = new AbortController();
     const signal = this.queueAbortController.signal;
     this.compensatedItems = [];
 
-    const initialTargetSentCount = items.length;
+    const initialTargetSentCount = effectiveItems.length;
+    const startDayCycle = initialAudit.currentWarmupDayNumber;
 
     this.queueProgress = {
       isRunning: true,
       isPaused: false,
       currentIndex: 0,
-      totalItems: items.length,
+      totalItems: effectiveItems.length,
       targetSentCount: initialTargetSentCount,
       compensatedCount: 0,
       sentCount: 0,
@@ -1830,7 +2575,7 @@ class WhatsAppService {
       invalidCount: 0,
       startedAt: new Date().toISOString(),
       autoLoop24h,
-      dayCycleNumber: 1,
+      dayCycleNumber: startDayCycle,
     };
 
     const barrioEtiqueta =
@@ -1843,22 +2588,94 @@ class WhatsAppService {
 
     this.addLog(
       'info',
-      `🚀 Iniciando campaña automatizada (Meta: ${initialTargetSentCount} envíos efectivos en Tanda Día #1${barrioEtiqueta}${horarioEtiqueta})${
+      `🚀 Iniciando campaña automatizada (Meta: ${initialTargetSentCount} envíos efectivos en Día #${startDayCycle} de Warm-up${barrioEtiqueta}${horarioEtiqueta})${
         autoLoop24h ? ' con Bucle Automático cada 24 hs y compensación automática de cupo.' : ' con compensación automática de cupo.'
       }`
     );
 
     // Run async in background
     (async () => {
-      let currentBatchItems: AutoFirstMessageQueueItem[] = [...items];
+      let currentBatchItems: AutoFirstMessageQueueItem[] = [...effectiveItems];
       let currentConfig: Partial<AutoFirstMessageConfig> = { ...(config || {}) };
-      let dayCycle = 1;
+      let dayCycle = startDayCycle;
+      let activeCampaignDbId: string | null = null;
+      const upsertCampaignRow = (params: {
+        id: string;
+        dayDateBA: string;
+        warmupDayNumber: number;
+        warmupLevel: string;
+        dailyQuotaLimit: number;
+        modoCola: string;
+        barrioFiltro: string;
+        startedAtISO: string;
+        finishedAtISO: string | null;
+        targetCount: number;
+        sentOkCount: number;
+        invalidCount: number;
+        failedCount: number;
+        status: string;
+        contactIds: string[];
+      }) => {
+        try {
+          const db = getDatabase();
+          db.prepare(
+            `INSERT OR REPLACE INTO wa_campaigns (
+              id, day_date_ba, warmup_day_number, warmup_level, daily_quota_limit,
+              modo_cola, barrio_filtro, started_at_iso, finished_at_iso,
+              target_count, sent_ok_count, invalid_count, failed_count, status, contact_ids_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            params.id,
+            params.dayDateBA,
+            params.warmupDayNumber,
+            params.warmupLevel,
+            params.dailyQuotaLimit,
+            params.modoCola,
+            params.barrioFiltro,
+            params.startedAtISO,
+            params.finishedAtISO,
+            params.targetCount,
+            params.sentOkCount,
+            params.invalidCount,
+            params.failedCount,
+            params.status,
+            JSON.stringify(params.contactIds)
+          );
+        } catch (err) {
+          console.warn('[WhatsAppService] Error guardando wa_campaigns:', err);
+        }
+      };
 
       try {
         while (!signal.aborted && this.queueProgress.isRunning && currentBatchItems.length > 0) {
           const batchStartedAtMs = Date.now();
+          const batchStartedAtISO = new Date(batchStartedAtMs).toISOString();
+          const batchAudit = this.getPersistentAuditAndQuotaSummary();
+          activeCampaignDbId = `camp-${batchStartedAtMs}`;
+          const batchSentIds: string[] = [];
+          let batchInvalidCount = 0;
+          let batchFailedCount = 0;
+
           const targetForThisBatch = currentBatchItems.length;
           let batchSentOk = 0;
+
+          upsertCampaignRow({
+            id: activeCampaignDbId,
+            dayDateBA: batchAudit.todayDateBA,
+            warmupDayNumber: dayCycle,
+            warmupLevel: currentConfig.nivelWarmup || batchAudit.currentWarmupLevel,
+            dailyQuotaLimit: batchAudit.dailyQuotaLimit,
+            modoCola: modoColaEfectivo,
+            barrioFiltro: currentConfig.barrioFiltro || 'Todos',
+            startedAtISO: batchStartedAtISO,
+            finishedAtISO: null,
+            targetCount: targetForThisBatch,
+            sentOkCount: 0,
+            invalidCount: 0,
+            failedCount: 0,
+            status: 'RUNNING',
+            contactIds: [],
+          });
 
           const triedIds = new Set<string>(
             currentBatchItems.map((it) => String(it.contactId || '')).filter(Boolean)
@@ -1884,6 +2701,18 @@ class WhatsAppService {
             // Si ya alcanzamos la meta de mensajes enviados con éxito de esta tanda, cerramos la tanda
             if (batchSentOk >= targetForThisBatch) {
               break;
+            }
+
+            // Bloqueo estricto en tiempo real por cuota diaria de Warm-up
+            if (modoColaEfectivo === 'PRIMER_CONTACTO') {
+              const liveAudit = this.getPersistentAuditAndQuotaSummary();
+              if (liveAudit.isDailyQuotaLocked) {
+                this.addLog(
+                  'warn',
+                  `🛑 Cuota diaria del Día #${liveAudit.currentWarmupDayNumber} de Warm-up alcanzada (${liveAudit.sentTodayAutoCount}/${liveAudit.dailyQuotaLimit} mensajes hoy). Deteniendo envíos por hoy.`
+                );
+                break;
+              }
             }
 
             // Paused loop
@@ -1969,18 +2798,51 @@ class WhatsAppService {
               appsScriptUrl,
             });
 
-            if (sendRes.resultado === 'ENVIADO_OK') {
+            if ((sendRes as any).skippedAlreadyContacted) {
+              // No contar como nuevo envío de la tanda de hoy, y compensar el cupo con el siguiente candidato sin contactar
+              const maxAttemptsCap = Math.min(44, targetForThisBatch * 3);
+              if (
+                batchSentOk < targetForThisBatch &&
+                currentBatchItems.length < maxAttemptsCap
+              ) {
+                const reemplazo = this.findNextReplacementCandidateItem(
+                  triedIds,
+                  triedLast8,
+                  currentConfig,
+                  currentBatchItems.length + 1
+                );
+                if (reemplazo) {
+                  triedIds.add(String(reemplazo.contactId));
+                  const remDigits = String(reemplazo.telefonoNorm || reemplazo.telRaw || '').replace(/\D/g, '');
+                  if (remDigits.length >= 8) triedLast8.add(remDigits.slice(-8));
+
+                  currentBatchItems.push(reemplazo);
+                  this.compensatedItems.push(reemplazo);
+                  this.queueProgress.totalItems = currentBatchItems.length;
+                  this.queueProgress.compensatedCount = (this.queueProgress.compensatedCount || 0) + 1;
+
+                  this.addLog(
+                    'info',
+                    `🔄 Compensando cupo por contacto ya escrito antes: se sumó a #${reemplazo.contactId} ${reemplazo.nombre} (${reemplazo.barrio}).`
+                  );
+                }
+              }
+            } else if (sendRes.resultado === 'ENVIADO_OK') {
               this.queueProgress.sentCount++;
               batchSentOk++;
+              if (item.contactId) batchSentIds.push(String(item.contactId));
             } else if (sendRes.resultado === 'SESION_RESTRINGIDA_ABORTAR') {
               this.queueProgress.failedCount++;
+              batchFailedCount++;
               this.stopQueue('Límite horario de seguridad alcanzado.');
               break;
             } else {
               if (sendRes.resultado === 'NUMERO_INEXISTENTE') {
                 this.queueProgress.invalidCount++;
+                batchInvalidCount++;
               } else {
                 this.queueProgress.failedCount++;
+                batchFailedCount++;
               }
 
               // 3. COMPENSACIÓN AUTOMÁTICA DE CUPO:
@@ -2019,6 +2881,46 @@ class WhatsAppService {
                 }
               }
             }
+
+            if (activeCampaignDbId) {
+              upsertCampaignRow({
+                id: activeCampaignDbId,
+                dayDateBA: batchAudit.todayDateBA,
+                warmupDayNumber: dayCycle,
+                warmupLevel: currentConfig.nivelWarmup || batchAudit.currentWarmupLevel,
+                dailyQuotaLimit: batchAudit.dailyQuotaLimit,
+                modoCola: modoColaEfectivo,
+                barrioFiltro: currentConfig.barrioFiltro || 'Todos',
+                startedAtISO: batchStartedAtISO,
+                finishedAtISO: null,
+                targetCount: targetForThisBatch,
+                sentOkCount: batchSentOk,
+                invalidCount: batchInvalidCount,
+                failedCount: batchFailedCount,
+                status: 'RUNNING',
+                contactIds: batchSentIds,
+              });
+            }
+          }
+
+          if (activeCampaignDbId) {
+            upsertCampaignRow({
+              id: activeCampaignDbId,
+              dayDateBA: batchAudit.todayDateBA,
+              warmupDayNumber: dayCycle,
+              warmupLevel: currentConfig.nivelWarmup || batchAudit.currentWarmupLevel,
+              dailyQuotaLimit: batchAudit.dailyQuotaLimit,
+              modoCola: modoColaEfectivo,
+              barrioFiltro: currentConfig.barrioFiltro || 'Todos',
+              startedAtISO: batchStartedAtISO,
+              finishedAtISO: new Date().toISOString(),
+              targetCount: targetForThisBatch,
+              sentOkCount: batchSentOk,
+              invalidCount: batchInvalidCount,
+              failedCount: batchFailedCount,
+              status: signal.aborted ? 'STOPPED' : 'COMPLETED',
+              contactIds: batchSentIds,
+            });
           }
 
           if (signal.aborted || !this.queueProgress.isRunning) break;
@@ -2169,4 +3071,22 @@ class WhatsAppService {
   }
 }
 
-export const whatsappService = new WhatsAppService();
+export const whatsappService = new WhatsAppService('default');
+
+const userWhatsAppServices = new Map<string, WhatsAppService>();
+userWhatsAppServices.set('default', whatsappService);
+userWhatsAppServices.set('cesar', whatsappService);
+userWhatsAppServices.set('admin', whatsappService);
+
+export function getWhatsAppServiceForUser(userId?: string): WhatsAppService {
+  const key = String(userId || 'default').toLowerCase().trim();
+  if (!key || key === 'default' || key === 'cesar' || key === 'admin') {
+    return whatsappService;
+  }
+  let svc = userWhatsAppServices.get(key);
+  if (!svc) {
+    svc = new WhatsAppService(key);
+    userWhatsAppServices.set(key, svc);
+  }
+  return svc;
+}

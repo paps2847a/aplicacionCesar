@@ -72,6 +72,8 @@ interface CandidatePipelineViewProps {
     barrio: string
   ) => Promise<boolean>;
   onOpenAutoWAModal: () => void;
+  canDeleteContact?: boolean;
+  onDeleteContact?: (contactId: string) => Promise<void> | void;
 }
 
 export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
@@ -84,10 +86,29 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   onUpdateContact,
   onCreateContact,
   onSendDirectWA,
+  canDeleteContact = false,
+  onDeleteContact,
 }) => {
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [expandedContactId, setExpandedContactId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem('popurri_pipeline_search') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const handleUpdateSearch = (q: string) => {
+    setSearchQuery(q);
+    try {
+      if (q) {
+        sessionStorage.setItem('popurri_pipeline_search', q);
+      } else {
+        sessionStorage.removeItem('popurri_pipeline_search');
+      }
+    } catch {}
+  };
   const [selectedBarrio, setSelectedBarrio] = useState<string>('Todos');
   const [activeStageFilter, setActiveStageFilter] = useState<MacroStageKey | 'TODOS'>('TODOS');
   const [quickFilter, setQuickFilter] = useState<QuickOperationalFilter>('TODOS');
@@ -120,19 +141,27 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
     descartados: false,
   });
 
-  // Si venimos redirigidos desde el Mapa, Planificador o Cierre Diario con un contacto puntual, abrirlo y expandir su carril
+  // Si venimos redirigidos desde el Mapa, Planificador o Cierre Diario con un contacto puntual, abrirlo y expandir su carril exclusivamente
   useEffect(() => {
     if (!focusedContactId) return;
-    const target = contacts.find((c) => c.id === focusedContactId);
+    const target = contacts.find((c) => String(c.id).trim() === String(focusedContactId).trim());
     if (target) {
       const st = getMacroStageForContact(target);
-      setExpandedStages((prev) => ({ ...prev, [st]: true }));
+      setExpandedStages({
+        nuevos: st === 'nuevos',
+        conversacion: st === 'conversacion',
+        agendados: st === 'agendados',
+        pausa: st === 'pausa',
+        adheridos: st === 'adheridos',
+        descartados: st === 'descartados',
+      });
       setExpandedContactId(target.id);
       setSelectedContactId(null);
       setActiveStageFilter('TODOS');
       setQuickFilter('TODOS');
       setGranularEstadoFilter('TODOS');
-      setSearchQuery('');
+      setSelectedBarrio('Todos');
+      handleUpdateSearch(`#${target.id}`);
     }
     if (onClearFocusedContact) onClearFocusedContact();
   }, [focusedContactId, contacts, onClearFocusedContact]);
@@ -357,7 +386,10 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
       }
       return next;
     });
-  }, [hasActiveSearchOrFilter, contactsByStage]);
+    if (searchQuery.trim().startsWith('#') && filteredContacts.length === 1) {
+      setExpandedContactId(filteredContacts[0].id);
+    }
+  }, [hasActiveSearchOrFilter, contactsByStage, searchQuery, filteredContacts]);
 
   const selectedContact = useMemo(
     () => contacts.find((c) => c.id === selectedContactId) || null,
@@ -665,14 +697,14 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleUpdateSearch(e.target.value)}
             placeholder="Buscar sin tildes por nombre, apellido, #ID, barrio, calle o teléfono..."
             className="w-full min-w-0 rounded-xl border-2 border-[#323232] bg-[#F5F4F0] pl-9 sm:pl-10 pr-8 py-2 text-xs font-semibold text-[#323232] placeholder-[#5A5955] focus:bg-white focus:outline-hidden transition"
           />
           {searchQuery && (
             <button
               type="button"
-              onClick={() => setSearchQuery('')}
+              onClick={() => handleUpdateSearch('')}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#5A5955] hover:text-[#323232]"
             >
               <X className="h-4 w-4" />
@@ -880,12 +912,12 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
             return (
               <div
                 key={stageKey}
-                className="rounded-2xl border-2 border-[#323232] bg-white shadow-[3px_3px_0px_#323232] overflow-hidden"
+                className="rounded-2xl border-2 border-[#323232] bg-white shadow-[3px_3px_0px_#323232] overflow-visible"
               >
                 <button
                   type="button"
                   onClick={() => toggleStage(stageKey)}
-                  className="w-full flex items-center justify-between p-4 text-left transition hover:bg-[#ECEAE2]/50 select-none"
+                  className="w-full flex items-center justify-between p-4 text-left transition hover:bg-[#ECEAE2]/50 select-none rounded-t-2xl"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <span
@@ -926,9 +958,9 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
                       transition={{ duration: 0.2, ease: 'easeInOut' }}
-                      className="overflow-hidden border-t-2 border-[#323232]"
+                      className="border-t-2 border-[#323232] overflow-visible"
                     >
-                      <div className="p-2.5 sm:p-4 bg-[#F5F4F0]">
+                      <div className="p-2.5 sm:p-4 bg-[#F5F4F0] overflow-visible">
                         {stageContacts.length === 0 ? (
                           <div className="rounded-xl border-2 border-dashed border-[#323232]/30 bg-white p-6 text-center text-xs text-[#5A5955] font-medium">
                             Sin candidatos en {def.label}
@@ -966,6 +998,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                                   onNavigateRelative={(dir) =>
                                     navigateContact(c.id, dir, false)
                                   }
+                                  canDeleteContact={canDeleteContact}
+                                  onDeleteContact={onDeleteContact}
                                 />
                               );
                             })}
@@ -1011,6 +1045,8 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
                 hasPrev={idx > 0}
                 hasNext={idx < filteredContacts.length - 1}
                 onNavigateRelative={(dir) => navigateContact(c.id, dir, false)}
+                canDeleteContact={canDeleteContact}
+                onDeleteContact={onDeleteContact}
               />
             ))
           )}

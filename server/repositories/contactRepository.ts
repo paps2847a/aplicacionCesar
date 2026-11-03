@@ -26,6 +26,8 @@ interface ContactRowDb {
   calle_o_cruce: string | null;
   vocativo_override: string | null;
   fecha_adhesion: string | null;
+  asignado_a?: string | null;
+  asignado_fecha?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +58,8 @@ function mapDbToContact(row: ContactRowDb): RawContactRow {
     referidosCabaYaEnviado: Boolean(row.referidos_caba_ya_enviado),
     ultimoMensajeCorteEnviadoAt: row.ultimo_mensaje_corte_enviado_at || undefined,
     alertaVencidoOcultaFecha: row.alerta_vencido_oculta_fecha || undefined,
+    asignadoA: row.asignado_a || 'cesar',
+    asignadoFecha: row.asignado_fecha || undefined,
   };
 }
 
@@ -87,9 +91,16 @@ export function getAllContacts(filters?: {
   }
 
   if (filters?.search && filters.search.trim()) {
-    const q = `%${filters.search.trim().toLowerCase()}%`;
-    whereClauses.push('(LOWER(nombre) LIKE ? OR LOWER(comentario) LIKE ? OR tel_raw LIKE ? OR LOWER(barrio) LIKE ?)');
-    params.push(q, q, q, q);
+    const rawSearch = filters.search.trim();
+    if (rawSearch.startsWith('#') && !/\s/.test(rawSearch)) {
+      const exactId = rawSearch.replace(/^#+/, '').trim();
+      whereClauses.push('LOWER(id) = LOWER(?)');
+      params.push(exactId);
+    } else {
+      const q = `%${rawSearch.toLowerCase()}%`;
+      whereClauses.push('(LOWER(nombre) LIKE ? OR LOWER(comentario) LIKE ? OR tel_raw LIKE ? OR LOWER(barrio) LIKE ?)');
+      params.push(q, q, q, q);
+    }
   }
 
   const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -130,14 +141,14 @@ export function upsertContact(c: RawContactRow): RawContactRow {
       fecha_primer_contacto, estado_flujo, estado_flujo_etiqueta,
       actualizado_en_app_at, referidos_caba_ya_enviado,
       ultimo_mensaje_corte_enviado_at, alerta_vencido_oculta_fecha,
-      calle_o_cruce, vocativo_override, fecha_adhesion, updated_at
+      calle_o_cruce, vocativo_override, fecha_adhesion, asignado_a, asignado_fecha, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?,
       ?, ?,
-      ?, ?, ?, datetime('now')
+      ?, ?, ?, ?, ?, datetime('now')
     )
     ON CONFLICT(id) DO UPDATE SET
       nombre = excluded.nombre,
@@ -163,6 +174,8 @@ export function upsertContact(c: RawContactRow): RawContactRow {
       calle_o_cruce = COALESCE(excluded.calle_o_cruce, contacts.calle_o_cruce),
       vocativo_override = COALESCE(excluded.vocativo_override, contacts.vocativo_override),
       fecha_adhesion = COALESCE(excluded.fecha_adhesion, contacts.fecha_adhesion),
+      asignado_a = COALESCE(excluded.asignado_a, contacts.asignado_a),
+      asignado_fecha = COALESCE(excluded.asignado_fecha, contacts.asignado_fecha),
       updated_at = datetime('now')
   `);
 
@@ -190,21 +203,29 @@ export function upsertContact(c: RawContactRow): RawContactRow {
     c.alertaVencidoOcultaFecha || null,
     c.calleOCruce ?? '',
     c.vocativoOverride ?? '',
-    c.fechaAdhesion || null
+    c.fechaAdhesion || null,
+    c.asignadoA || 'cesar',
+    c.asignadoFecha || null
   );
 
   return getContactById(id)!;
 }
 
-export function bulkUpsertContacts(contacts: RawContactRow[]): number {
+export function bulkUpsertContacts(contacts: RawContactRow[], replaceAll = false): number {
   if (!contacts || contacts.length === 0) return 0;
   const db = getDatabase();
 
   db.exec('BEGIN TRANSACTION;');
   try {
+    const validIds: string[] = [];
     for (const c of contacts) {
       if (!c.id) continue;
+      validIds.push(String(c.id).trim());
       upsertContact(c);
+    }
+    if (replaceAll && validIds.length > 0) {
+      const placeholders = validIds.map(() => '?').join(',');
+      db.prepare(`DELETE FROM contacts WHERE id NOT IN (${placeholders})`).run(...validIds);
     }
     db.exec('COMMIT;');
     return contacts.length;

@@ -124,18 +124,200 @@ function initSchema(db: DatabaseSync): void {
       value TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS wa_campaigns (
+      id TEXT PRIMARY KEY,
+      day_date_ba TEXT NOT NULL,
+      warmup_day_number INTEGER NOT NULL DEFAULT 1,
+      warmup_level TEXT NOT NULL DEFAULT 'DIA_1_MAX_10',
+      daily_quota_limit INTEGER NOT NULL DEFAULT 12,
+      modo_cola TEXT NOT NULL DEFAULT 'PRIMER_CONTACTO',
+      barrio_filtro TEXT NOT NULL DEFAULT 'Todos',
+      started_at_iso TEXT NOT NULL,
+      finished_at_iso TEXT,
+      target_count INTEGER NOT NULL DEFAULT 0,
+      sent_ok_count INTEGER NOT NULL DEFAULT 0,
+      invalid_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'COMPLETED',
+      contact_ids_json TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wa_campaigns_day ON wa_campaigns(day_date_ba);
   `);
 
   for (const colSql of [
     "ALTER TABLE contacts ADD COLUMN calle_o_cruce TEXT DEFAULT ''",
     "ALTER TABLE contacts ADD COLUMN vocativo_override TEXT DEFAULT ''",
     "ALTER TABLE contacts ADD COLUMN fecha_adhesion TEXT DEFAULT NULL",
+    "ALTER TABLE contacts ADD COLUMN asignado_a TEXT DEFAULT 'cesar'",
+    "ALTER TABLE contacts ADD COLUMN asignado_fecha TEXT DEFAULT NULL",
   ]) {
     try {
       db.exec(colSql);
     } catch {
       // Columna ya existe
     }
+  }
+
+  normalizeAndBackfillWaCampaigns(db);
+}
+
+function normalizeAndBackfillWaCampaigns(db: DatabaseSync): void {
+  try {
+    // 1. Normalizar cualquier fecha_hora_iso en control_envios que no esté en formato ISO-8601 (ej. "01:08 p. m.")
+    const enviosRows = db
+      .prepare(
+        'SELECT id_registro, contact_id, nombre, barrio, telefono, tipo_accion, fecha_hora_iso, created_at FROM control_envios'
+      )
+      .all() as Array<{
+      id_registro: string;
+      contact_id: string;
+      nombre: string;
+      barrio: string;
+      telefono: string;
+      tipo_accion: string;
+      fecha_hora_iso: string;
+      created_at: string;
+    }>;
+
+    const updateIsoStmt = db.prepare(
+      'UPDATE control_envios SET fecha_hora_iso = ?, fecha_hora_legible = ? WHERE id_registro = ?'
+    );
+
+    for (const r of enviosRows) {
+      const rawIso = String(r.fecha_hora_iso || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}T/.test(rawIso)) {
+        let resolvedIso: string | null = null;
+        const mMs = String(r.id_registro || '').match(/(\d{13})/);
+        if (mMs) {
+          resolvedIso = new Date(Number(mMs[1])).toISOString();
+        } else if (r.created_at && /^\d{4}-\d{2}-\d{2}/.test(r.created_at)) {
+          resolvedIso = r.created_at.includes('T')
+            ? r.created_at
+            : `${r.created_at.replace(' ', 'T')}Z`;
+        }
+        if (resolvedIso) {
+          updateIsoStmt.run(resolvedIso, rawIso || resolvedIso, r.id_registro);
+          r.fecha_hora_iso = resolvedIso;
+        }
+      }
+    }
+
+    // 2. Si wa_campaigns está vacía y existen envíos en control_envios, reconstruir las campañas históricas por día BA
+    const countCamp = db.prepare('SELECT COUNT(*) as cnt FROM wa_campaigns').get() as
+      | { cnt: number }
+      | undefined;
+    if (!countCamp || countCamp.cnt === 0) {
+      const byDayMap = new Map<
+        string,
+        {
+          startedAt: string;
+          finishedAt: string;
+          okContacts: Set<string>;
+          invalidContacts: Set<string>;
+          failedCount: number;
+        }
+      >();
+
+      for (const r of enviosRows) {
+        const iso = r.fecha_hora_iso;
+        if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) continue;
+        const accion = String(r.tipo_accion || '').toLowerCase();
+        // Contabilizar envíos automatizados de primer contacto para reconstruir las campañas
+        const esAuto =
+          accion.includes('primer_contacto') ||
+          accion.includes('1er_contacto') ||
+          accion.includes('auto wa web') ||
+          accion.includes('fallo wa web') ||
+          accion.includes('inexistente');
+        if (!esAuto) continue;
+
+        const dayBA = new Date(iso).toLocaleDateString('en-CA', {
+          timeZone: 'America/Argentina/Buenos_Aires',
+        });
+        if (!byDayMap.has(dayBA)) {
+          byDayMap.set(dayBA, {
+            startedAt: iso,
+            finishedAt: iso,
+            okContacts: new Set<string>(),
+            invalidContacts: new Set<string>(),
+            failedCount: 0,
+          });
+        }
+        const entry = byDayMap.get(dayBA)!;
+        if (iso < entry.startedAt) entry.startedAt = iso;
+        if (iso > entry.finishedAt) entry.finishedAt = iso;
+        const cid = String(r.contact_id || r.telefono || r.id_registro).trim();
+        if (accion.includes('inexistente')) {
+          entry.invalidContacts.add(cid);
+        } else if (accion.includes('fallo')) {
+          entry.failedCount++;
+        } else {
+          entry.okContacts.add(cid);
+        }
+      }
+
+      // Filtrar días con campañas reales (>= 2 contactos procesados) y ordenarlos cronológicamente
+      const sortedDays = Array.from(byDayMap.entries())
+        .filter(([, v]) => v.okContacts.size + v.invalidContacts.size >= 2)
+        .sort((a, b) => a[0].localeCompare(b[0]));
+
+      const insertCampStmt = db.prepare(`
+        INSERT OR REPLACE INTO wa_campaigns (
+          id, day_date_ba, warmup_day_number, warmup_level, daily_quota_limit,
+          modo_cola, barrio_filtro, started_at_iso, finished_at_iso,
+          target_count, sent_ok_count, invalid_count, failed_count, status, contact_ids_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      sortedDays.forEach(([dayBA, stats], idx) => {
+        const warmupDayNum = idx + 1;
+        const warmupLevel =
+          warmupDayNum === 1
+            ? 'DIA_1_MAX_10'
+            : warmupDayNum === 2
+            ? 'DIA_2_MAX_15'
+            : warmupDayNum === 3
+            ? 'DIA_3_MAX_25'
+            : warmupDayNum === 4
+            ? 'DIA_4_MAX_35'
+            : 'DIA_5_MADURO_MENOS_45';
+        const quotaLimit =
+          warmupDayNum === 1
+            ? 12
+            : warmupDayNum === 2
+            ? 18
+            : warmupDayNum === 3
+            ? 24
+            : warmupDayNum === 4
+            ? 32
+            : 40;
+        const sentOk = stats.okContacts.size;
+        const invalidCnt = stats.invalidContacts.size;
+        const contactIdsArr = Array.from(stats.okContacts);
+
+        insertCampStmt.run(
+          `camp-hist-${dayBA}`,
+          dayBA,
+          warmupDayNum,
+          warmupLevel,
+          quotaLimit,
+          'PRIMER_CONTACTO',
+          'Todos',
+          stats.startedAt,
+          stats.finishedAt,
+          Math.max(sentOk, quotaLimit),
+          sentOk,
+          invalidCnt,
+          stats.failedCount,
+          'COMPLETED',
+          JSON.stringify(contactIdsArr)
+        );
+      });
+    }
+  } catch (err) {
+    console.warn('[SQLite] Error en normalizeAndBackfillWaCampaigns:', err);
   }
 }
 

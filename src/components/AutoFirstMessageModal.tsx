@@ -91,15 +91,65 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
     'config_cola' | 'vista_cola' | 'whatsapp_web_directo' | 'monitor_resultados'
   >('config_cola');
 
+  // Calcular nivel de calentamiento sugerido según días previos con envíos automáticos
+  const warmupSugeridoAutomatico = useMemo((): {
+    nivel: NivelWarmupWA;
+    diasPreviosActivos: number;
+    reiniciadoPorInactividad: boolean;
+  } => {
+    const hoyBA = new Date().toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      timeZone: 'America/Argentina/Buenos_Aires',
+    });
+    const diasConEnvio = new Set<string>();
+    let ultimoTimestampMs = 0;
+
+    for (const c of contacts) {
+      const mAuto = (c.comentario || '').match(/\[1er msj auto enviado el (\d{2}\/\d{2})/i);
+      if (mAuto && mAuto[1]) {
+        if (mAuto[1] !== hoyBA) {
+          diasConEnvio.add(mAuto[1]);
+        }
+      }
+      if (c.ultimoMensajeCorteEnviadoAt) {
+        const ms = Date.parse(c.ultimoMensajeCorteEnviadoAt);
+        if (!isNaN(ms)) {
+          if (ms > ultimoTimestampMs) ultimoTimestampMs = ms;
+          const ddmm = new Date(ms).toLocaleDateString('es-AR', {
+            day: '2-digit',
+            month: '2-digit',
+            timeZone: 'America/Argentina/Buenos_Aires',
+          });
+          if (ddmm !== hoyBA) diasConEnvio.add(ddmm);
+        }
+      }
+    }
+
+    const inactivoMasDe72h =
+      ultimoTimestampMs > 0 && Date.now() - ultimoTimestampMs > 72 * 3600 * 1000;
+    if (inactivoMasDe72h) {
+      return { nivel: 'DIA_1_MAX_10', diasPreviosActivos: 0, reiniciadoPorInactividad: true };
+    }
+
+    const n = diasConEnvio.size;
+    if (n >= 4) return { nivel: 'DIA_5_MADURO_MENOS_45', diasPreviosActivos: n, reiniciadoPorInactividad: false };
+    if (n === 3) return { nivel: 'DIA_4_MAX_35', diasPreviosActivos: n, reiniciadoPorInactividad: false };
+    if (n === 2) return { nivel: 'DIA_3_MAX_25', diasPreviosActivos: n, reiniciadoPorInactividad: false };
+    if (n === 1) return { nivel: 'DIA_2_MAX_15', diasPreviosActivos: n, reiniciadoPorInactividad: false };
+    return { nivel: 'DIA_1_MAX_10', diasPreviosActivos: 0, reiniciadoPorInactividad: false };
+  }, [contacts]);
+
   const [config, setConfig] = useState<AutoFirstMessageConfig>(() => {
-    const cupoInicial = sortearCupoSeguroAntiBloqueo(7, 10);
-    return {
-      horaInicio: '10:30',
-      horaVentanaInicio: '09:30',
+    const rangoAuto = obtenerRangoWarmup(warmupSugeridoAutomatico.nivel);
+    const cupoInicial = sortearCupoSeguroAntiBloqueo(rangoAuto.minCupo, rangoAuto.maxCupo);
+    const baseCfg: AutoFirstMessageConfig = {
+      horaInicio: '07:00',
+      horaVentanaInicio: '07:00',
       horaVentanaFin: '19:00',
-      nivelWarmup: 'DIA_1_MAX_10',
-      minCupo: 7,
-      maxCupo: 10,
+      nivelWarmup: warmupSugeridoAutomatico.nivel,
+      minCupo: rangoAuto.minCupo,
+      maxCupo: rangoAuto.maxCupo,
       cupoSorteado: cupoInicial,
       minIntervaloSeg: 65,
       maxIntervaloSeg: 145,
@@ -115,9 +165,95 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
       modoCola: initialModoCola,
       estadoFiltro: 'TODOS',
       plantillaPersonalizada:
-        '¡Hola {nombre}! Soy {promotor} de Popurrí en {barrio}. Te escribo cortito para coordinar la firma de la ficha de adhesión en estos días. ¿Por qué calle o esquina de {barrio} te queda cómodo y en qué horario solés estar?',
+        '¡Hola {nombre}! Soy {promotor} de *Hacemos Popurrí* en {barrio}. Te escribo cortito para coordinar la firma de la ficha de adhesión en estos días. ¿Por qué calle o esquina de {barrio} te queda cómodo y en qué horario solés estar?',
     };
+    try {
+      const savedRaw = localStorage.getItem('popurri_auto_wa_config_v2');
+      if (savedRaw) {
+        const parsed = JSON.parse(savedRaw);
+        return {
+          ...baseCfg,
+          ...parsed,
+          horaInicio: parsed.horaInicio || '07:00',
+          horaVentanaInicio: parsed.horaVentanaInicio || '07:00',
+          horaVentanaFin: parsed.horaVentanaFin || '19:00',
+        };
+      }
+    } catch {
+      // ignore
+    }
+    return baseCfg;
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('popurri_auto_wa_config_v2', JSON.stringify(config));
+    } catch {
+      // ignore
+    }
+  }, [config]);
+
+  const [waServerLock, setWaServerLock] = useState<{
+    running: boolean;
+    waitingNextDay: boolean;
+    autoLoop24h: boolean;
+    nextDayRunAt: string | null;
+    sentCount: number;
+    targetEffectiveCount: number;
+  }>({
+    running: false,
+    waitingNextDay: false,
+    autoLoop24h: false,
+    nextDayRunAt: null,
+    sentCount: 0,
+    targetEffectiveCount: 0,
+  });
+
+  const [dailyQuotaAudit, setDailyQuotaAudit] = useState<{
+    todayDateBA: string;
+    sentTodayAutoCount: number;
+    sentTodayTotalCount: number;
+    sentLastHourCount: number;
+    hourlyLimit: number;
+    currentWarmupDayNumber: number;
+    currentWarmupLevel: NivelWarmupWA;
+    dailyQuotaLimit: number;
+    remainingDailyQuota: number;
+    isDailyQuotaLocked: boolean;
+    quotaLockReason: string | null;
+    totalCampaignsCount: number;
+    campaignsHistory: {
+      id: string;
+      dayDateBA: string;
+      warmupDayNumber: number;
+      warmupLevel: string;
+      dailyQuotaLimit: number;
+      modoCola: string;
+      barrioFiltro: string;
+      startedAtISO: string;
+      finishedAtISO: string | null;
+      targetCount: number;
+      sentOkCount: number;
+      invalidCount: number;
+      failedCount: number;
+      status: string;
+    }[];
+    firstContactedTotalCount: number;
+    firstContactedRecipients: {
+      contactId: string;
+      nombre: string;
+      barrio: string;
+      tel: string;
+      fechaHoraISO: string;
+      dayDateBA: string;
+      estadoActual: string;
+      comentario: string;
+    }[];
+  } | null>(null);
+  const [showPersistentCampaignsDetail, setShowPersistentCampaignsDetail] = useState(false);
+  const [showPersistentRecipientsDetail, setShowPersistentRecipientsDetail] = useState(false);
+  const [recipientFilterQuery, setRecipientFilterQuery] = useState('');
+  const syncedWarmupFromServerRef = useRef(false);
 
   useEffect(() => {
     if (isOpen && initialModoCola && config.modoCola !== initialModoCola) {
@@ -264,6 +400,35 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
 
         if (waRes.status === 'fulfilled' && waRes.value.ok) {
           const waData = await waRes.value.json();
+          if (waData?.dailyQuotaAudit) {
+            setDailyQuotaAudit(waData.dailyQuotaAudit);
+            if (
+              !syncedWarmupFromServerRef.current &&
+              waData.dailyQuotaAudit.currentWarmupLevel
+            ) {
+              syncedWarmupFromServerRef.current = true;
+              const srvLevel = waData.dailyQuotaAudit.currentWarmupLevel as NivelWarmupWA;
+              const srvLimit = Number(waData.dailyQuotaAudit.dailyQuotaLimit || 24);
+              const rangoSrv = obtenerRangoWarmup(srvLevel);
+              setConfig((prevCfg) => ({
+                ...prevCfg,
+                nivelWarmup: srvLevel,
+                minCupo: rangoSrv.minCupo,
+                maxCupo: rangoSrv.maxCupo,
+                cupoSorteado: Math.min(prevCfg.cupoSorteado || srvLimit, srvLimit),
+              }));
+            }
+          }
+          if (waData?.queue) {
+            setWaServerLock({
+              running: Boolean(waData.queue.running),
+              waitingNextDay: Boolean(waData.queue.waitingNextDay),
+              autoLoop24h: Boolean(waData.queue.autoLoop24h),
+              nextDayRunAt: waData.queue.nextDayRunAt || null,
+              sentCount: Number(waData.queue.sentCount || 0),
+              targetEffectiveCount: Number(waData.queue.targetEffectiveCount || 0),
+            });
+          }
           if (Array.isArray(waData?.itemResults)) {
             combinedReports.push(...waData.itemResults);
           }
@@ -623,6 +788,49 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
     return { total, enviadosOk, inexistentes, errores, pendientes, pausasCafe, ultimaHora };
   }, [campaign.items, config.horaInicio]);
 
+  const enviadosHoyCount = useMemo(() => {
+    const hoyDDMM = new Date().toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      timeZone: 'America/Argentina/Buenos_Aires',
+    });
+    const hoyISO = new Date().toLocaleDateString('sv-SE', {
+      timeZone: 'America/Argentina/Buenos_Aires',
+    });
+    const idsHoy = new Set<string>();
+    for (const c of contacts) {
+      const com = c.comentario || '';
+      if (com.includes(`[1er msj auto enviado el ${hoyDDMM}`)) {
+        idsHoy.add(String(c.id));
+      } else if (c.ultimoMensajeCorteEnviadoAt) {
+        const dIso = new Date(c.ultimoMensajeCorteEnviadoAt).toLocaleDateString('sv-SE', {
+          timeZone: 'America/Argentina/Buenos_Aires',
+        });
+        if (dIso === hoyISO) {
+          idsHoy.add(String(c.id));
+        }
+      }
+    }
+    for (const it of campaign.items) {
+      if (it.resultado === 'ENVIADO_OK') {
+        idsHoy.add(String(it.contactId));
+      }
+    }
+    return Math.max(
+      idsHoy.size,
+      stats.enviadosOk,
+      waServerLock.sentCount,
+      dailyQuotaAudit?.sentTodayAutoCount || 0
+    );
+  }, [contacts, campaign.items, stats.enviadosOk, waServerLock.sentCount, dailyQuotaAudit]);
+
+  const cupoDiarioEfectivo = dailyQuotaAudit?.dailyQuotaLimit || config.cupoSorteado;
+  const cupoDiarioAlcanzadoHoy =
+    Boolean(dailyQuotaAudit?.isDailyQuotaLocked) || enviadosHoyCount >= cupoDiarioEfectivo;
+  const isLoopLocked = Boolean(
+    waServerLock.autoLoop24h && (waServerLock.running || waServerLock.waitingNextDay)
+  );
+
   const itemsFiltrados = useMemo(() => {
     if (filtroResultado === 'TODOS') return campaign.items;
     return campaign.items.filter((i) => i.resultado === filtroResultado);
@@ -805,9 +1013,303 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
 
         {/* Contenido Principal Desplazable */}
         <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 space-y-6 bg-[#F5F4F0]/60">
+          {/* PANEL PERSISTENTE DE MEMORIA ANTI-BAN (SQLITE): CUOTA HOY, DÍA WARM-UP, CAMPAÑAS Y 1ER CONTACTO */}
+          <div className="rounded-2xl border-2 border-[#323232] bg-white p-4 shadow-[3px_3px_0px_#323232] space-y-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-emerald-700 shrink-0" />
+                <h3 className="text-xs sm:text-sm font-black text-[#323232] font-display">
+                  Memoria Persistente Anti-Bloqueo (SQLite — Se conserva al apagar servidor o reiniciar app)
+                </h3>
+              </div>
+              {dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy ? (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border-2 border-[#323232] bg-[#FF2C00] px-2.5 py-1 text-[11px] font-black text-white shadow-[1px_1px_0px_#323232]">
+                  🛑 BLOQUEO ANTI-BAN ACTIVO HOY ({enviadosHoyCount}/{cupoDiarioEfectivo} enviados)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-700 bg-emerald-100 px-2.5 py-1 text-[11px] font-black text-emerald-950">
+                  ✅ Cuota Disponible Hoy: quedan {Math.max(0, cupoDiarioEfectivo - enviadosHoyCount)} msjs
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* 1. Mensajes enviados hoy */}
+              <div className="rounded-xl border border-slate-200 bg-[#F5F4F0] p-3">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  1. Enviados Hoy ({dailyQuotaAudit?.todayDateBA?.split('-').reverse().slice(0, 2).join('/') || 'Hoy'})
+                </span>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <span className="text-xl font-black text-[#323232]">
+                    {enviadosHoyCount} <span className="text-xs font-bold text-slate-500">/ {cupoDiarioEfectivo} máx</span>
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-600">
+                    Últ. hora: {dailyQuotaAudit?.sentLastHourCount ?? 0}/{dailyQuotaAudit?.hourlyLimit ?? 38}
+                  </span>
+                </div>
+                <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                  {dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy
+                    ? 'Cupo diario alcanzado: envíos de 1er contacto bloqueados hasta mañana.'
+                    : `Total hoy (incl. directos): ${dailyQuotaAudit?.sentTodayTotalCount ?? enviadosHoyCount} msjs`}
+                </p>
+              </div>
+
+              {/* 2. Día de Warm-up y Cuota Vinculada */}
+              <div className="rounded-xl border border-slate-200 bg-[#F5F4F0] p-3">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  2. Día de Warm-up Actual
+                </span>
+                <div className="mt-1 flex items-baseline justify-between">
+                  <span className="text-xl font-black text-[#323232]">
+                    Día #{dailyQuotaAudit?.currentWarmupDayNumber ?? 1}
+                  </span>
+                  <span className="rounded-md bg-[#FFF06B] border border-[#323232] px-1.5 py-0.5 text-[10px] font-black text-[#323232]">
+                    Cuota: {cupoDiarioEfectivo}/día
+                  </span>
+                </div>
+                <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                  Etapa: {obtenerRangoWarmup(dailyQuotaAudit?.currentWarmupLevel || config.nivelWarmup).etiqueta}
+                </p>
+              </div>
+
+              {/* 3. Campañas emprendidas (inicio y fin) */}
+              <div className="rounded-xl border border-slate-200 bg-[#F5F4F0] p-3 flex flex-col justify-between">
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                    3. Campañas Emprendidas
+                  </span>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-xl font-black text-[#323232]">
+                      {dailyQuotaAudit?.totalCampaignsCount ?? 0} campañas
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowPersistentCampaignsDetail((v) => !v)}
+                      className="rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[10px] font-black text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+                    >
+                      {showPersistentCampaignsDetail ? 'Ocultar detalle ▲' : 'Ver fechas/horas ▼'}
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                  Registro de inicio, fin, día de warm-up y enviados por tanda.
+                </p>
+              </div>
+
+              {/* 4. Contactos con 1er mensaje automatizado */}
+              <div className="rounded-xl border border-slate-200 bg-[#F5F4F0] p-3 flex flex-col justify-between">
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                    4. 1er Mensaje Automatizado
+                  </span>
+                  <div className="mt-1 flex items-baseline justify-between">
+                    <span className="text-xl font-black text-[#323232]">
+                      {dailyQuotaAudit?.firstContactedTotalCount ?? 0} vecinos
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowPersistentRecipientsDetail((v) => !v)}
+                      className="rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[10px] font-black text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+                    >
+                      {showPersistentRecipientsDetail ? 'Ocultar lista ▲' : 'Ver a quiénes ▼'}
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-1 text-[10px] font-semibold text-slate-600">
+                  Nunca se les vuelve a enviar el 1er mensaje automatizado.
+                </p>
+              </div>
+            </div>
+
+            {/* Desplegable A: Historial de Campañas Emprendidas */}
+            {showPersistentCampaignsDetail && dailyQuotaAudit?.campaignsHistory && (
+              <div className="rounded-xl border-2 border-[#323232] bg-[#F5F4F0] p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-[#323232]">
+                    📅 Historial Persistente de Campañas ({dailyQuotaAudit.campaignsHistory.length})
+                  </h4>
+                  <span className="text-[10px] font-bold text-slate-600">
+                    Ordenado de la más reciente a la primera
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead>
+                      <tr className="border-b border-slate-300 text-slate-600 font-black">
+                        <th className="py-1.5 px-2">Fecha</th>
+                        <th className="py-1.5 px-2">Día Warm-up</th>
+                        <th className="py-1.5 px-2">Comenzó</th>
+                        <th className="py-1.5 px-2">Terminó</th>
+                        <th className="py-1.5 px-2">Enviados OK</th>
+                        <th className="py-1.5 px-2">Cuota del Día</th>
+                        <th className="py-1.5 px-2">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 bg-white">
+                      {dailyQuotaAudit.campaignsHistory.map((camp) => {
+                        const fmtTime = (iso: string | null) => {
+                          if (!iso) return 'En curso...';
+                          const d = new Date(iso);
+                          if (isNaN(d.getTime())) return iso;
+                          return d.toLocaleTimeString('es-AR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            timeZone: 'America/Argentina/Buenos_Aires',
+                          }) + ' hs';
+                        };
+                        const [yyyy, mm, dd] = (camp.dayDateBA || '').split('-');
+                        const fechaFmt = dd && mm ? `${dd}/${mm}/${yyyy}` : camp.dayDateBA;
+                        return (
+                          <tr key={camp.id} className="hover:bg-slate-50">
+                            <td className="py-1.5 px-2 font-black text-[#323232]">{fechaFmt}</td>
+                            <td className="py-1.5 px-2 font-bold text-amber-900">
+                              Día #{camp.warmupDayNumber} ({camp.warmupLevel})
+                            </td>
+                            <td className="py-1.5 px-2 font-mono font-bold text-slate-700">
+                              {fmtTime(camp.startedAtISO)}
+                            </td>
+                            <td className="py-1.5 px-2 font-mono font-bold text-slate-700">
+                              {fmtTime(camp.finishedAtISO)}
+                            </td>
+                            <td className="py-1.5 px-2 font-black text-emerald-800">
+                              ✅ {camp.sentOkCount} enviados
+                            </td>
+                            <td className="py-1.5 px-2 font-bold text-slate-600">
+                              Máx {camp.dailyQuotaLimit}/día
+                            </td>
+                            <td className="py-1.5 px-2">
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-black ${
+                                  camp.status === 'RUNNING'
+                                    ? 'bg-amber-100 text-amber-900'
+                                    : 'bg-emerald-100 text-emerald-900'
+                                }`}
+                              >
+                                {camp.status === 'RUNNING' ? 'EN CURSO' : 'FINALIZADA'}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Desplegable B: Registro de Contactos que ya recibieron el 1er Mensaje Automatizado */}
+            {showPersistentRecipientsDetail && dailyQuotaAudit?.firstContactedRecipients && (
+              <div className="rounded-xl border-2 border-[#323232] bg-[#F5F4F0] p-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-xs font-black text-[#323232]">
+                    👥 Contactos con 1er Mensaje Automatizado Enviado ({dailyQuotaAudit.firstContactedRecipients.length} total)
+                  </h4>
+                  <input
+                    type="text"
+                    value={recipientFilterQuery}
+                    onChange={(e) => setRecipientFilterQuery(e.target.value)}
+                    placeholder="Buscar por #ID, nombre, barrio o fecha..."
+                    className="rounded-lg border border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#323232] w-64"
+                  />
+                </div>
+                <div className="max-h-60 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                  {dailyQuotaAudit.firstContactedRecipients
+                    .filter((r) => {
+                      const q = recipientFilterQuery.trim().toLowerCase();
+                      if (!q) return true;
+                      return (
+                        r.contactId.toLowerCase().includes(q) ||
+                        r.nombre.toLowerCase().includes(q) ||
+                        r.barrio.toLowerCase().includes(q) ||
+                        r.tel.toLowerCase().includes(q) ||
+                        r.dayDateBA.toLowerCase().includes(q)
+                      );
+                    })
+                    .map((r) => {
+                      const d = new Date(r.fechaHoraISO);
+                      const fhFmt = !isNaN(d.getTime())
+                        ? d.toLocaleString('es-AR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            timeZone: 'America/Argentina/Buenos_Aires',
+                          })
+                        : r.dayDateBA;
+                      return (
+                        <div
+                          key={`first-rec-${r.contactId}`}
+                          className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 text-[11px] hover:bg-slate-50"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-[#323232] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#FFF06B]">
+                              #{r.contactId}
+                            </span>
+                            <span className="font-black text-[#323232]">{r.nombre}</span>
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-700">
+                              {r.barrio}
+                            </span>
+                            <span className="font-mono text-slate-500">{r.tel}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
+                              1er msj: {fhFmt} hs
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-600">
+                              {r.estadoActual}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* TAB 1: AJUSTES DE CAMPAÑA Y ANTI-BLOQUEO */}
           {activeTab === 'config_cola' && (
             <div className="space-y-5">
+              {/* Banner de Bloqueo por Bucle Automático 24h o Cupo Diario Completado */}
+              {(isLoopLocked || cupoDiarioAlcanzadoHoy) && (
+                <div className="rounded-2xl border-2 border-[#323232] bg-[#FFF06B] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[3px_3px_0px_#323232]">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs sm:text-sm font-black text-[#323232]">
+                      <span>🔒</span>
+                      <span>
+                        {isLoopLocked
+                          ? 'Bucle Automático Diario (24 hs) Activo — Parámetros Protegidos'
+                          : `Bloqueo Anti-Ban Activo Hoy: Ya se enviaron ${enviadosHoyCount}/${cupoDiarioEfectivo} mensajes (Día #${dailyQuotaAudit?.currentWarmupDayNumber ?? 1} de Warm-up)`}
+                      </span>
+                    </div>
+                    <p className="text-[11px] font-bold text-[#323232]/85">
+                      {isLoopLocked
+                        ? 'Para evitar duplicar campañas mientras corre el bucle de 24 hs, los ajustes están bloqueados. Si querés modificarlos, desactivá el Bucle 24h.'
+                        : dailyQuotaAudit?.quotaLockReason ||
+                          'Ya se alcanzó la cuota diaria segura vinculada al día de Warm-up actual. El servidor bloqueará nuevos envíos masivos hasta mañana para evitar bloqueos de WhatsApp.'}
+                    </p>
+                  </div>
+                  {isLoopLocked && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await fetch('/api/whatsapp/queue/autoloop', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ autoLoop24h: false }),
+                        }).catch(() => {});
+                        setWaServerLock((prev) => ({ ...prev, autoLoop24h: false, waitingNextDay: false }));
+                        setStatusNotice('🔓 Bucle Automático 24h desactivado. Ya podés editar los parámetros de la campaña.');
+                      }}
+                      className="rounded-xl border-2 border-[#323232] bg-white px-3.5 py-2 text-xs font-black text-[#323232] hover:bg-[#ECEAE2] shrink-0 shadow-[2px_2px_0px_#323232]"
+                    >
+                      🔓 Desactivar Bucle 24h para Editar
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <fieldset disabled={isLoopLocked} className={`space-y-5 ${isLoopLocked ? 'opacity-70 pointer-events-none' : ''}`}>
               {/* Resumen de Capas Stealth Anti-Restricción */}
               <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
                 <div className="flex items-center gap-3">
@@ -826,6 +1328,70 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                 <div className="text-[11px] font-bold text-emerald-800 shrink-0">
                   Elegibles en base: {campaign.totalElegiblesEnBase} · En tanda hoy: {campaign.items.length} (&lt; 45)
                 </div>
+              </div>
+
+              {/* Selector Destacado de 2 Colas (Cola 1: Primer Contacto vs Cola 2: Seguimientos) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleRegenerarCola({
+                      modoCola: 'PRIMER_CONTACTO',
+                      estadoFiltro: 'TODOS',
+                    })
+                  }
+                  className={`text-left rounded-2xl border-2 p-4 transition-all ${
+                    (config.modoCola || 'PRIMER_CONTACTO') === 'PRIMER_CONTACTO' &&
+                    (!config.estadoFiltro || config.estadoFiltro === 'TODOS' || config.estadoFiltro === 'SIN_CONTACTAR_1ER_MSJ')
+                      ? 'border-[#323232] bg-[#FFF06B] shadow-[3px_3px_0px_#323232]'
+                      : 'border-slate-200 bg-white hover:border-[#323232]/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs sm:text-sm font-black text-[#323232]">
+                      🌱 Cola 1: Primer Contacto (Nuevos)
+                    </span>
+                    <span className="rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[10px] font-black text-[#323232]">
+                      Etapa 1 · Nuevos
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-semibold text-[#323232]/80 mt-1">
+                    Envía el 1er mensaje rompehielo únicamente a vecinos en &ldquo;1. Nuevo · Sin 1er mensaje&rdquo; (con compensación automática si un número no tiene WhatsApp).
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleRegenerarCola({
+                      modoCola:
+                        config.modoCola && config.modoCola !== 'PRIMER_CONTACTO'
+                          ? config.modoCola
+                          : 'SEGUIMIENTO_24H_48H_BAJA',
+                      estadoFiltro: 'TODOS',
+                    })
+                  }
+                  className={`text-left rounded-2xl border-2 p-4 transition-all ${
+                    (config.modoCola && config.modoCola !== 'PRIMER_CONTACTO') ||
+                    (config.estadoFiltro &&
+                      config.estadoFiltro !== 'TODOS' &&
+                      config.estadoFiltro !== 'SIN_CONTACTAR_1ER_MSJ')
+                      ? 'border-[#323232] bg-[#DFF4FF] shadow-[3px_3px_0px_#323232]'
+                      : 'border-slate-200 bg-white hover:border-[#323232]/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs sm:text-sm font-black text-[#323232]">
+                      🔄 Cola 2: Seguimientos (Sin respuesta / Citas / Retiros)
+                    </span>
+                    <span className="rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[10px] font-black text-[#323232]">
+                      Etapas 2 a 5
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-semibold text-[#323232]/80 mt-1">
+                    Seguimientos 24h/48h a quienes no respondieron el 1er mensaje, recordatorios de encuentro o campañas filtradas por estado.
+                  </p>
+                </button>
               </div>
 
               {/* Diseñador de Campaña Libre & Filtro por Estado */}
@@ -1097,12 +1663,13 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setActiveTab('vista_cola')}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800 transition"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-800 transition pointer-events-auto"
                 >
                   <span>Revisar Cola ({campaign.items.length})</span>
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
+              </fieldset>
             </div>
           )}
 
@@ -1301,6 +1868,8 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                 config={config}
                 appsScriptUrl={appsScriptUrl}
                 onApplyItemResult={onApplyItemResult}
+                enviadosHoyCount={enviadosHoyCount}
+                cupoDiarioAlcanzadoHoy={cupoDiarioAlcanzadoHoy}
               />
             </div>
           )}

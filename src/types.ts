@@ -129,6 +129,8 @@ export interface RawContactRow {
   actualizadoEnAppAt?: string;
   ultimoMensajeCorteEnviadoAt?: string;
   alertaVencidoOcultaFecha?: string;
+  asignadoA?: string;
+  asignadoFecha?: string;
 }
 
 export interface SharedAppStateSnapshot {
@@ -265,6 +267,7 @@ export interface VoiceProfile {
   nombrePromotor: string;
   apellidoPromotor: string;
   emailUsuario: string;
+  avatarUrl?: string;
   espacioPolitico: string;
   partidoLegal: string;
   direccionPartida: string;

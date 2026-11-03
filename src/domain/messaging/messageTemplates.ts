@@ -140,21 +140,22 @@ export function generarMensajeContextual(
   } => {
     switch (tipo) {
     case 'primer_contacto': {
+      const promotorCompleto = /rinc[oó]n/i.test(promotor) ? promotor : `${promotor} Rincón`;
       // CASO ESPECIAL ESTRATÉGICO: Teléfono en Google Sheets sin nombre registrado
       if (esSinNombre) {
         if (breve) {
           return {
             tipoUsado: 'primer_contacto',
             asunto: '1er Contacto para Teléfono Sin Nombre (Sutil y Anti-Desconfianza)',
-            objetivo: 'Dar máxima confianza identificándose primero, aclarar que es adhesión (no afiliación) y consultar sutilmente nombre y apellido.',
-            texto: `Hola, muy buen día, ¿cómo te va? Soy ${promotor}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque dejaste tu contacto en nuestro formulario para apoyarnos a constituir el partido (${profile.partidoLegal}) en CABA —antes que nada, quería darte la tranquilidad de que lo que firmamos es sólo una *adhesión* ciudadana y de ninguna manera es una _afiliación_—.\n\nComo al pasar los datos del formulario a mi planilla me quedó registrado tu número pero salió en blanco la casilla de tu nombre, ¿me dirías tu *nombre y apellido* así te agendo como corresponde? Y contame si esta semana preferís que pase 2 minutos por tu cuadra en ${contact.barrio || 'la zona'} o que nos crucemos en algún café del barrio. Muchas gracias.`,
+            objetivo: 'Dar máxima confianza identificándose primero, aclarar que es adhesión (no afiliación), validar DNI CABA y consultar sutilmente nombre, apellido y esquina/café.',
+            texto: `Hola, muy buen día, ¿cómo te va? Soy ${promotorCompleto}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque dejaste tu contacto en nuestro formulario para apoyarnos con tu adhesión en CABA. Quería darte la tranquilidad de que lo que firmamos es únicamente una *adhesión* ciudadana para avalar la inscripción legal del partido (${profile.partidoLegal}) y de ninguna manera es una _afiliación_ (no te compromete ni te afilia a nada, e incluso podés firmarla aunque estés afiliado/a a otro espacio).\n\nComo al pasar los datos del formulario me quedó tu número pero salió en blanco la casilla del nombre, ¿me dirías tu *nombre y apellido*? Y contame si tenés *domicilio de CABA en tu DNI físico* y por qué esquina o café de *${contact.barrio || 'la zona'}* (y en qué franja horaria) te queda cómodo que nos crucemos 2 minutos esta semana. Muchas gracias.`,
           };
         }
         return {
           tipoUsado: 'primer_contacto',
           asunto: '1er Contacto Completo para Teléfono Sin Nombre (Sutil y Transparente)',
-          objetivo: 'Generar confianza plena, explicar el motivo del mensaje y obtener nombre y apellido para actualizar Google Sheets.',
-          texto: `Hola, muy buen día, ¿cómo te va? Soy ${promotor}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque vimos que dejaste tu teléfono en nuestro formulario para apoyarnos y ayudarnos a reconstruir lo común en CABA. Antes que nada, quiero darte la total tranquilidad de que lo que vamos a firmar es únicamente una *adhesión* para avalar la creación de nuestro partido (${profile.partidoLegal}), y de ninguna manera es una _afiliación_. Es un apoyo inicial que no te compromete a nada.\n\nTe hago una consulta muy cortita: al descargar la planilla del formulario me apareció tu número de WhatsApp pero quedó en blanco la casilla de tu nombre. Para poder agendarte bien acá en mi teléfono y organizar la hoja de ruta por ${contact.barrio || 'el barrio'} sin confundirme, ¿me recordarías tu *nombre y apellido*? Y de paso decime si preferís que pase dos minutos por tu puerta o que nos veamos en algún café de la zona. Muchas gracias.`,
+          objetivo: 'Generar confianza plena, explicar el motivo del mensaje, validar DNI CABA y obtener nombre, apellido y punto de encuentro.',
+          texto: `Hola, muy buen día, ¿cómo te va? Soy ${promotorCompleto}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque vimos que dejaste tu teléfono en nuestro formulario para apoyarnos con tu adhesión y ayudarnos a reconstruir lo común en CABA. Antes que nada, quiero darte la total tranquilidad de que lo que vamos a firmar es únicamente una *adhesión* para avalar la creación de nuestro partido (${profile.partidoLegal}), y de ninguna manera es una _afiliación_. Es sólo un aval ciudadano inicial que no genera ningún vínculo partidario ni te compromete a nada.\n\nTe hago una consulta muy cortita: al descargar la planilla del formulario me apareció tu número de WhatsApp pero quedó en blanco la casilla de tu nombre. ¿Me recordarías tu *nombre y apellido* para agendarte bien? Y de paso confirmame por favor si tenés *domicilio de CABA en tu DNI físico* (requisito de la Justicia Electoral) y si preferís que pase dos minutos por tu cuadra en *${contact.barrio || 'el barrio'}* o vernos en un café de la zona. Muchas gracias.`,
         };
       }
 
@@ -162,15 +163,15 @@ export function generarMensajeContextual(
         return {
           tipoUsado: 'primer_contacto',
           asunto: 'Primer Contacto (Breve y conversacional)',
-          objetivo: 'Lograr primera respuesta aclarando que es adhesión (no afiliación) y ofrecer pasar 2 min.',
-          texto: `Hola, ${nombre}, buen día. ¿Cómo te va? Soy ${promotor}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque completaste el formulario para apoyarnos a reconstruir lo común. Quería darte la tranquilidad de que lo que firmamos es sólo una *adhesión* para avalar la creación del partido (${profile.partidoLegal}) y de ninguna manera es una _afiliación_.\n\nEsta semana voy a estar recorriendo ${contact.barrio || 'la zona'} para juntar las firmas en papel (toma apenas dos minutos). ¿Preferís que pase un ratito por tu casa o que nos encontremos en algún café de ${contact.barrio || 'la zona'}? Muchas gracias.`,
+          objetivo: 'Lograr primera respuesta con confianza, diferenciar adhesión de afiliación, validar DNI en CABA y obtener esquina/franja o café.',
+          texto: `Hola, ${nombre}, buen día, ¿cómo estás? Soy ${promotorCompleto}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque completaste el formulario para apoyarnos con tu adhesión en *${contact.barrio || 'CABA'}*. Antes que nada, quería darte la tranquilidad de que lo que firmamos es únicamente una *adhesión* ciudadana para que nos permitan inscribir el partido (${profile.partidoLegal}) y de ninguna manera es una _afiliación_: no te afilia ni te compromete a nada, e incluso podés firmarla sin problema aunque estés afiliado/a a otro espacio.\n\nEsta semana voy a estar recorriendo *${contact.barrio || 'la zona'}* para juntar las firmas en papel (nos toma apenas un momento, unos 2 minutos). Como la Justicia Electoral pide tener *domicilio de CABA en el DNI físico*, ¿me confirmás si tenés DNI en CABA y me contás por qué *calle/esquina* y en qué *franja horaria* te queda cómodo que pase un ratito, o si preferís que nos crucemos en algún café del barrio? Muchas gracias.`,
         };
       }
       return {
         tipoUsado: 'primer_contacto',
         asunto: 'Primer Contacto (Completo)',
-        objetivo: 'Presentación completa de Hacemos Popurrí y coordinación de firma presencial.',
-        texto: `Hola, ${nombre}, buen día. ¿Cómo te va? Soy ${promotor}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque vimos que completaste el formulario para apoyarnos y ayudarnos a reconstruir lo común. Antes que nada, quiero darte la tranquilidad de que lo que vamos a firmar es únicamente una *adhesión* para avalar la creación de nuestro partido (${profile.partidoLegal}), y de ninguna manera es una _afiliación_. Es un apoyo inicial que no te compromete ni te afilia a nada, e incluso podés firmarlo sin problema aunque hoy estés afiliado/a a otro espacio.\n\nVivo y trabajo por la zona, así que esta semana voy a estar organizándome para hacer la recorrida casa por casa y juntar las firmas en papel (es un trámite que nos toma apenas dos minutos). Vos decime dónde te resulta más cómodo —si preferís que pase por tu casa o que nos encontremos en algún café de la zona—, en qué día y horario, y agendamos. Muchas gracias.`,
+        objetivo: 'Presentación completa de Hacemos Popurrí, validación de DNI CABA y coordinación de firma presencial.',
+        texto: `Hola, ${nombre}, buen día. ¿Cómo te va? Soy ${promotorCompleto}, del equipo de *${profile.espacioPolitico}*.\n\nTe escribo porque vimos que completaste el formulario para apoyarnos con tu adhesión en *${contact.barrio || 'CABA'}*. Antes que nada, quiero darte la tranquilidad de que lo que vamos a firmar es únicamente una *adhesión* para avalar la creación de nuestro partido (${profile.partidoLegal}), y de ninguna manera es una _afiliación_. Es un apoyo inicial que no te compromete ni te afilia a nada, e incluso podés firmarlo sin problema aunque hoy estés afiliado/a a otro espacio.\n\nEsta semana voy a estar recorriendo *${contact.barrio || 'la zona'}* para juntar las firmas en papel (es un trámite que nos toma apenas un momento, unos dos minutos). Como es requisito excluyente contar con *domicilio de CABA en el DNI físico*, ¿me confirmás si tenés DNI en CABA y me decís por qué *calle/esquina* (y en qué día y franja horaria) preferís que pase un ratito, o si te queda más cómodo que nos encontremos en un café de la zona? Muchas gracias.`,
       };
     }
 
@@ -281,6 +282,17 @@ export function generarMensajeContextual(
     }
 
     case 'convocatoria_cafe_hub': {
+      if (
+        contact.situacion === 'EVENTO_CHILE_1408' ||
+        /chile\s*1408|reuni[oó]n\s+de\s+los\s+mi[eé]rcoles|reuni[oó]n\s+del\s+partido/i.test(contact.comentario)
+      ) {
+        return {
+          tipoUsado: 'convocatoria_cafe_hub',
+          asunto: 'Confirmación Encuentro Semanal de los Miércoles en Chile 1408',
+          objetivo: 'Invitar/confirmar cruce el miércoles de 18:30 a 20:00 hs en la sede de Chile 1408 (Monserrat) y recordar DNI físico.',
+          texto: `${saludoConNombre}, ¿cómo estás? Como me habías comentado que te quedaba cómodo acercarte a nuestra sede de *Chile 1408* (Monserrat), te escribo para contarte que nos reunimos todos los miércoles de *18:30 a 20:00 hs*.\n\n¿Te queda bien pasar este miércoles en esa franja así nos conocemos y firmamos la ficha de adhesión en 2 minutos (acordate sólo de traer tu DNI físico con domicilio en CABA)?${posdataSutilNombre}`,
+        };
+      }
       if (!incluirCafe) {
         return {
           tipoUsado: 'convocatoria_cafe_hub',
@@ -581,6 +593,19 @@ export function diagnosticarYGenerarMensajeSeguimiento48h(
   // 1. CASO: Se agregó algún dato en la Columna G ("Comentario"), pero es INSUFICIENTE para concretar encuentro
   // (En todos estos subcasos ya hubo conversación previa con la persona, por lo que NO se vuelve a decir "Soy César...")
   if (params.tieneNuevaInfoEnColumnaG) {
+    // 1S. Si el comentario menciona Chile 1408 o la reunión de los miércoles, invitar a la Sede Central en Monserrat (y nunca a un café barrial)
+    if (/chile\s*1408|reuni[oó]n\s+de\s+los\s+mi[eé]rcoles|reuni[oó]n\s+del\s+partido/i.test(comLow)) {
+      return {
+        aplica: true,
+        subtipo: 'DATO_INSUFICIENTE_PREFIERE_PUNTO_FALTA_CONFIRMAR_HUB',
+        etiquetaCorta: 'Sede Chile 1408: confirmar miércoles 18:30 hs',
+        motivoDetallado: `En Columna G figura "${params.comentario}", indicando interés en acercarse a la sede de Chile 1408 (Monserrat).`,
+        infoDisponibleResumen: `Sede Central: Chile 1408 (Monserrat) · Miércoles 18:30 a 20:00 hs`,
+        datoFaltanteResumen: 'Confirmar asistencia este miércoles a Chile 1408',
+        mensajePersonalizado48h: `${saludo}, ¿cómo estás? Como tenía anotado que te interesaba acercarte a nuestra sede en *Chile 1408* (Monserrat), te escribo para contarte que nos reunimos todos los miércoles de *18:30 a 20:00 hs*.\n\n¿Te queda bien venir este miércoles en ese horario así nos conocemos y firmamos tu ficha de adhesión en 2 minutos (acordate sólo de traer tu DNI físico con domicilio en CABA)?${posdataNombre}`,
+      };
+    }
+
     // 1A. Tiene dirección y franja horaria en Col. G (ej: "Visita cualquier día luego de las 18:00 (Caracas 5581)" o "CONFIRMAR Visita..."), pero falta confirmar el día exacto
     if (tieneDir && (tieneFranja || /cualquier\s+d[ií]a|confirmar/i.test(comLow)) && !tieneFechas) {
       const textoFranja =

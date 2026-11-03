@@ -562,3 +562,195 @@ export async function pushContactUpdatesToSheet(params: {
     activeWritesCount = Math.max(0, activeWritesCount - 1);
   }
 }
+
+/**
+ * Crea o actualiza una pestaña separada por voluntario (`Voluntario - <Nombre>`) en Google Sheets
+ * con sus contactos asignados (según la respuesta de César: "Prefiero pestañas separadas por persona").
+ */
+export async function syncVolunteerSheetTab(params: {
+  sheetUrlOrId?: string;
+  volunteerName: string;
+  contacts: Array<{
+    id: string | number;
+    nombre: string;
+    barrio: string;
+    telRaw: string;
+    rsp?: string;
+    adhirio?: string;
+    comentario?: string;
+    estadoFlujoEtiqueta?: string;
+  }>;
+}): Promise<{ ok: boolean; tabName: string; rowCount: number; error?: string }> {
+  const spreadsheetId = extractSpreadsheetId(params.sheetUrlOrId);
+  const cleanName = String(params.volunteerName || 'Voluntario')
+    .replace(/[\[\]*?:\/\\]/g, '')
+    .trim()
+    .slice(0, 35);
+  const tabName = `Voluntario - ${cleanName}`;
+
+  try {
+    // 1. Intentar crear la pestaña si aún no existe (ignorar error si ya existe)
+    await execGsheetsCli(['mutate', 'add-sheet', spreadsheetId, tabName], 10000);
+
+    // 2. Construir filas [#, Nombre y Apellido, Barrio, Teléfono, RSP, Adhirió, Comentario, Estado (App)]
+    const rows: string[][] = [
+      ['#', 'Nombre y Apellido', 'Barrio', 'Teléfono', 'RSP', 'Adhirió', 'Comentario', 'Estado (App)'],
+      ...params.contacts.map((c) => [
+        String(c.id || ''),
+        String(c.nombre || ''),
+        String(c.barrio || ''),
+        String(c.telRaw || ''),
+        String(c.rsp || 'Nuevo'),
+        String(c.adhirio || 'Pendiente'),
+        String(c.comentario || ''),
+        normalizeOfficialSheetChipLabel(c.estadoFlujoEtiqueta),
+      ]),
+    ];
+
+    const batchOps = [
+      {
+        op: 'clear',
+        range: `'${tabName}'!A1:H600`,
+      },
+      {
+        op: 'write',
+        range: `'${tabName}'!A1:H${rows.length}`,
+        data: rows,
+      },
+    ];
+
+    const tmpFile = path.join(
+      os.tmpdir(),
+      `popurri_vol_tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.json`
+    );
+    try {
+      fs.writeFileSync(tmpFile, JSON.stringify(batchOps, null, 2), 'utf8');
+      const writeRes = await execGsheetsCli(
+        ['mutate', 'batch', spreadsheetId, '-f', tmpFile],
+        15000
+      );
+      if (!writeRes.ok) {
+        return {
+          ok: false,
+          tabName,
+          rowCount: params.contacts.length,
+          error: writeRes.stderr || 'No se pudo actualizar la pestaña del voluntario',
+        };
+      }
+      return {
+        ok: true,
+        tabName,
+        rowCount: params.contacts.length,
+      };
+    } finally {
+      try {
+        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+      } catch {}
+    }
+  } catch (err: any) {
+    return {
+      ok: false,
+      tabName,
+      rowCount: 0,
+      error: err?.message || String(err),
+    };
+  }
+}
+
+/**
+ * Elimina de forma permanente la fila de un contacto en la pestaña Control de Google Sheets
+ * (acción reservada para el rol Administrador desde la App).
+ */
+export async function deleteContactFromSheet(params: {
+  sheetUrlOrId?: string;
+  appsScriptUrl?: string;
+  contactId: string | number;
+  telRaw?: string;
+}): Promise<{
+  ok: boolean;
+  deletedFromSheets: boolean;
+  rowNum?: number;
+  error?: string;
+}> {
+  const spreadsheetId = extractSpreadsheetId(params.sheetUrlOrId);
+  const idClean = String(params.contactId || '')
+    .replace(/^#/, '')
+    .trim();
+  if (!idClean) {
+    return { ok: false, deletedFromSheets: false, error: 'ID de contacto vacío' };
+  }
+
+  activeWritesCount += 1;
+  try {
+    // Leer estado fresco de Control para ubicar el número exacto de fila 1-based
+    const readRes = await execGsheetsCli(
+      ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:H600`],
+      12000
+    );
+    if (readRes.ok && readRes.stdout.trim().length > 0) {
+      const cache = updateRowCacheFromTSV(spreadsheetId, readRes.stdout);
+      const entry = cache.byId.get(idClean);
+      if (entry && entry.rowNum >= 2) {
+        const delRes = await execGsheetsCli(
+          [
+            'mutate',
+            'delete-rows',
+            spreadsheetId,
+            '--range',
+            `${DEFAULT_CONTROL_SHEET_NAME}!${entry.rowNum}:${entry.rowNum}`,
+          ],
+          15000
+        );
+        // Invalidar caché porque los números de fila posteriores se desplazaron -1
+        rowCacheBySpreadsheet.delete(spreadsheetId);
+        if (delRes.ok) {
+          return {
+            ok: true,
+            deletedFromSheets: true,
+            rowNum: entry.rowNum,
+          };
+        }
+      } else {
+        // Ya no existe en Google Sheets
+        return {
+          ok: true,
+          deletedFromSheets: false,
+        };
+      }
+    }
+
+    // Fallback vía Apps Script si está configurado
+    const scriptUrl = String(params.appsScriptUrl || '').trim();
+    if (scriptUrl && scriptUrl.startsWith('https://script.google.com/')) {
+      const scriptRes = await fetch(scriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'deleteRow',
+          sheetUrlOrId: spreadsheetId,
+          sheetId: spreadsheetId,
+          id: idClean,
+          contactId: idClean,
+        }),
+      });
+      if (scriptRes.ok) {
+        rowCacheBySpreadsheet.delete(spreadsheetId);
+        return { ok: true, deletedFromSheets: true };
+      }
+    }
+
+    return {
+      ok: false,
+      deletedFromSheets: false,
+      error: 'No se pudo eliminar la fila en Google Sheets.',
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      deletedFromSheets: false,
+      error: err?.message || String(err),
+    };
+  } finally {
+    activeWritesCount = Math.max(0, activeWritesCount - 1);
+  }
+}

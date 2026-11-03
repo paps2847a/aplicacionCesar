@@ -18,7 +18,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js popurri-app popurri-app* popurri-app.exe",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/utils/logic.test.ts"
+    "test": "tsx --test src/utils/logic.test.ts",
+    "tunnel": "tsx scripts/tunnel.ts"
   },
   "dependencies": {
     "@esbuild/linux-x64": "^0.28.2",

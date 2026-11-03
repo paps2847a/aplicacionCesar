@@ -622,8 +622,8 @@ test('Stealth v2.0: navegación SPA sin page.goto en bucle, rompehielo corto, fi
   );
   assert.equal(campanaStealth.items.length, 2, 'Debe incluir a #168 y #169 (+54 Argentina)');
   assert.ok(
-    campanaStealth.items[0].mensajePrimerContacto.length < 260,
-    'El mensaje rompehielo corto debe tener menos de 260 caracteres'
+    campanaStealth.items[0].mensajePrimerContacto.length < 650,
+    'El mensaje rompehielo corto enriquecido debe ser conciso pero contener la validación completa (< 650 chars)'
   );
   assert.equal(
     campanaStealth.items[0].mensajePrimerContacto.includes('Baja'),
@@ -2211,6 +2211,84 @@ test('Reunión semanal en Chile 1408 en día viernes no se agenda HOY viernes si
   assert.ok(idsSede.includes('15'), 'Ana Clara Odello (#15) debe estar incluida');
   assert.ok(idsSede.includes('74'), 'Celeste Constanza Bucari (#74) debe estar incluida');
 });
+
+test('coincideBusquedaUniversal con #ID busca exclusivamente por ID exacto sin coincidir con fragmentos de teléfono y fusionarContactosDesdeSheetsConControl elimina filas borradas de Google Sheets', () => {
+  const c152 = procesarContacto({
+    id: '152',
+    nombre: 'Denise Karagiozlu',
+    barrio: 'Villa Urquiza',
+    telRaw: '54 9 11 6670-9653',
+    rsp: 'Sí',
+    adhirio: 'Pendiente',
+    comentario: 'Donado y Olazábal',
+  });
+  const cTel494 = procesarContacto({
+    id: '167',
+    nombre: '',
+    barrio: 'Palermo',
+    telRaw: '34 627 84 94 55',
+    rsp: 'Nuevo',
+    adhirio: 'Pendiente',
+    comentario: '',
+  });
+  const cTel152 = procesarContacto({
+    id: '250',
+    nombre: 'Contacto Tel 152',
+    barrio: 'Belgrano',
+    telRaw: '54 9 11 4152-9988',
+    rsp: 'Nuevo',
+    adhirio: 'Pendiente',
+    comentario: '',
+  });
+
+  // Búsqueda con #152 solo debe coincidir con #152 y jamás con cTel152
+  assert.equal(coincideBusquedaUniversal(c152, '#152'), true);
+  assert.equal(coincideBusquedaUniversal(cTel152, '#152'), false);
+  assert.equal(coincideBusquedaUniversal(cTel494, '#494'), false);
+
+  // Al borrar una fila en Google Sheets (#494), fusionarContactosDesdeSheetsConControl no debe re-agregarla desde previosEnApp
+  const previosEnApp = [
+    {
+      id: '493',
+      nombre: 'Patricia',
+      barrio: 'Almagro',
+      telRaw: '54 9 11 1111-2222',
+      rsp: 'Nuevo',
+      adhirio: 'Pendiente',
+      comentario: '',
+    },
+    {
+      id: '494',
+      nombre: 'Corina',
+      barrio: 'Parque Chas',
+      telRaw: '54 9 11 5704-7835',
+      rsp: 'Nuevo',
+      adhirio: 'Pendiente',
+      comentario: '',
+    },
+  ];
+  const nuevosDesdeSheets = [
+    {
+      id: '493',
+      nombre: 'Patricia',
+      barrio: 'Almagro',
+      telRaw: '54 9 11 1111-2222',
+      rsp: 'Nuevo',
+      adhirio: 'Pendiente',
+      comentario: '',
+    },
+  ];
+
+  const { contactosFusionados } = fusionarContactosDesdeSheetsConControl(
+    nuevosDesdeSheets as any,
+    previosEnApp as any,
+    new Set(),
+    true
+  );
+  assert.equal(contactosFusionados.length, 1, 'Solo debe quedar #493 tras eliminar #494 en Google Sheets');
+  assert.equal(contactosFusionados[0].id, '493');
+});
+
 
 
 

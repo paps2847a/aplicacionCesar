@@ -61,6 +61,46 @@ interface WhatsAppQueueProgress {
   nextBatchScheduledAtISO?: string;
 }
 
+function formatDurationHMS(totalSeconds?: number): string {
+  const sec = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) {
+    return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+  }
+  if (m > 0) {
+    return `${m}m ${String(s).padStart(2, '0')}s`;
+  }
+  return `${s}s`;
+}
+
+function formatActionTextWithHMS(action?: string): string {
+  if (!action) return 'Completado';
+  return action.replace(/~?(\d+)s\b/g, (_match, numStr) => {
+    const n = Number(numStr);
+    if (isNaN(n) || n < 60) return _match;
+    const prefix = _match.startsWith('~') ? '~' : '';
+    return `${prefix}${formatDurationHMS(n)}`;
+  });
+}
+
+interface DailyQuotaAuditSummary {
+  todayDateBA: string;
+  sentTodayAutoCount: number;
+  sentTodayTotalCount: number;
+  sentLastHourCount: number;
+  hourlyLimit: number;
+  currentWarmupDayNumber: number;
+  currentWarmupLevel: string;
+  dailyQuotaLimit: number;
+  remainingDailyQuota: number;
+  isDailyQuotaLocked: boolean;
+  quotaLockReason: string | null;
+  totalCampaignsCount: number;
+  firstContactedTotalCount: number;
+}
+
 interface WhatsAppWebAutomationPanelProps {
   campaign: AutoFirstMessageCampaign;
   config: AutoFirstMessageConfig;
@@ -73,6 +113,8 @@ interface WhatsAppWebAutomationPanelProps {
     fechaHoraISO?: string
   ) => void;
   onRefreshCampaign?: () => void;
+  enviadosHoyCount?: number;
+  cupoDiarioAlcanzadoHoy?: boolean;
 }
 
 export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProps> = ({
@@ -81,6 +123,8 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
   appsScriptUrl,
   onApplyItemResult,
   onRefreshCampaign,
+  enviadosHoyCount = 0,
+  cupoDiarioAlcanzadoHoy = false,
 }) => {
   const [status, setStatus] = useState<string>('DISCONNECTED');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
@@ -95,10 +139,19 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
     invalidCount: 0,
   });
   const [rollingLastHour, setRollingLastHour] = useState<number>(0);
+  const [dailyQuotaAudit, setDailyQuotaAudit] = useState<DailyQuotaAuditSummary | null>(null);
   const [logs, setLogs] = useState<WhatsAppLogEntry[]>([]);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [autoScrollLogs, setAutoScrollLogs] = useState<boolean>(true);
-  const [autoLoop24h, setAutoLoop24h] = useState<boolean>(true);
+  const [autoLoop24h, setAutoLoop24h] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('popurri_wa_autoloop24h_v2');
+      if (saved !== null) return saved === 'true';
+    } catch {
+      // ignore
+    }
+    return true;
+  });
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   // Polling del estado del servidor
@@ -114,6 +167,9 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
         if (data.queue) setQueue(data.queue);
         if (typeof data.rollingLastHourCount === 'number') {
           setRollingLastHour(data.rollingLastHourCount);
+        }
+        if (data.dailyQuotaAudit) {
+          setDailyQuotaAudit(data.dailyQuotaAudit);
         }
         if (Array.isArray(data.recentLogs)) {
           setLogs(data.recentLogs);
@@ -172,6 +228,15 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
   };
 
   const handleStartQueue = async () => {
+    const isPrimerContacto = !config.modoCola || config.modoCola === 'PRIMER_CONTACTO';
+    if (isPrimerContacto && (dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy)) {
+      alert(
+        dailyQuotaAudit?.quotaLockReason ||
+          `🛑 Bloqueo Anti-Ban Activo: Ya se enviaron ${dailyQuotaAudit?.sentTodayAutoCount ?? enviadosHoyCount} mensajes hoy (Día #${dailyQuotaAudit?.currentWarmupDayNumber ?? 1} de Warm-up, cuota máxima ${dailyQuotaAudit?.dailyQuotaLimit ?? config.cupoSorteado}). Esperá hasta mañana para evitar el bloqueo del número.`
+      );
+      return;
+    }
+
     if (!campaign.items || campaign.items.length === 0) {
       alert('La cola está vacía. Generá o sorteá contactos en la pestaña 1 primero.');
       return;
@@ -182,9 +247,15 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
       return;
     }
 
+    const warmupDayNum = dailyQuotaAudit?.currentWarmupDayNumber || 1;
+    const remainingQuota = dailyQuotaAudit?.remainingDailyQuota ?? campaign.items.length;
+    const effectiveBatchCount = isPrimerContacto
+      ? Math.min(campaign.items.length, Math.max(1, remainingQuota))
+      : campaign.items.length;
+
     const confirmMsg = autoLoop24h
-      ? `¿Iniciar campaña multi-día para los ${campaign.totalElegiblesEnBase} pendientes sin contactar?\n\n• Hoy (Día #1) enviará la tanda segura de ${campaign.items.length} mensajes (${config.minIntervaloSeg}-${config.maxIntervaloSeg}s + pausas de café).\n• Cumplidas las 24 hs, iniciará automáticamente la siguiente tanda diaria hasta completar todos los primeros contactos.`
-      : `¿Iniciar el envío automatizado de ${campaign.items.length} mensajes con intervalos humanos de seguridad (${config.minIntervaloSeg}-${config.maxIntervaloSeg}s) y pausas de café?`;
+      ? `¿Iniciar campaña multi-día para los ${campaign.totalElegiblesEnBase} pendientes sin contactar?\n\n• Hoy (Día #${warmupDayNum} de Warm-up) enviará hasta ${effectiveBatchCount} mensajes restantes de la cuota del día (${config.minIntervaloSeg}-${config.maxIntervaloSeg}s + pausas de café).\n• Cumplidas las 24 hs, iniciará automáticamente la siguiente tanda diaria hasta completar todos los primeros contactos.`
+      : `¿Iniciar el envío automatizado de hasta ${effectiveBatchCount} mensajes con intervalos humanos de seguridad (${config.minIntervaloSeg}-${config.maxIntervaloSeg}s) y pausas de café?`;
     if (!window.confirm(confirmMsg)) return;
 
     setLoadingAction('start');
@@ -476,17 +547,28 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-bold text-slate-500">Tanda Diaria / Total Pendientes</p>
+            <p className="text-xs font-bold text-slate-500">Cuota Hoy (Persistente SQLite) / Warm-up</p>
             <div className="flex items-center justify-between mt-1">
               <span className="text-lg font-black text-slate-900">
-                {campaign.items.length} <span className="text-xs font-normal text-slate-500">hoy / {campaign.totalElegiblesEnBase} total</span>
+                {dailyQuotaAudit ? dailyQuotaAudit.sentTodayAutoCount : enviadosHoyCount}{' '}
+                <span className="text-xs font-normal text-slate-500">
+                  / {dailyQuotaAudit ? dailyQuotaAudit.dailyQuotaLimit : config.cupoSorteado} hoy
+                </span>
               </span>
-              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-black text-indigo-900">
-                Cupo: {config.cupoSorteado}
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-black ${
+                  dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy
+                    ? 'bg-rose-100 text-rose-900 border border-rose-300'
+                    : 'bg-indigo-100 text-indigo-900'
+                }`}
+              >
+                Día #{dailyQuotaAudit?.currentWarmupDayNumber || 1} Warm-up
               </span>
             </div>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Etapa: {config.nivelWarmup.replace(/_/g, ' ')}
+              {dailyQuotaAudit
+                ? `${dailyQuotaAudit.totalCampaignsCount} campañas · ${dailyQuotaAudit.firstContactedTotalCount} 1er contacto total`
+                : `Etapa: ${config.nivelWarmup.replace(/_/g, ' ')}`}
             </p>
           </div>
         </div>
@@ -508,20 +590,35 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
             <p className="text-xs text-slate-600">
               {queue.isRunning
                 ? `Enviando tanda activa: contacto ${queue.currentIndex} de ${queue.totalItems}`
+                : (!config.modoCola || config.modoCola === 'PRIMER_CONTACTO') &&
+                  (dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy)
+                ? `🛑 Bloqueo Anti-Ban activo hoy (${dailyQuotaAudit?.sentTodayAutoCount ?? enviadosHoyCount}/${dailyQuotaAudit?.dailyQuotaLimit ?? config.cupoSorteado} enviados en Día #${dailyQuotaAudit?.currentWarmupDayNumber ?? 1})`
                 : `Tanda de hoy lista con ${campaign.items.length} mensajes (de ${campaign.totalElegiblesEnBase} pendientes totales en la base)`}
             </p>
           </div>
 
           <div className="flex items-center gap-2">
             {!queue.isRunning ? (
-              <button
-                onClick={handleStartQueue}
-                disabled={status !== 'READY' || campaign.items.length === 0 || loadingAction === 'start'}
-                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white hover:bg-emerald-500 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Play className="h-4 w-4 fill-current" />
-                Iniciar Envío Automático Directo ({campaign.items.length} msjs)
-              </button>
+              (!config.modoCola || config.modoCola === 'PRIMER_CONTACTO') &&
+              (dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy) ? (
+                <div className="inline-flex items-center gap-2 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-4 py-2.5 text-xs font-black text-[#323232] shadow-[2px_2px_0px_#323232]">
+                  <ShieldCheck className="h-4 w-4 text-rose-700 shrink-0" />
+                  <span>
+                    🛑 Bloqueo Anti-Ban Activo Hoy ({dailyQuotaAudit?.sentTodayAutoCount ?? enviadosHoyCount}/
+                    {dailyQuotaAudit?.dailyQuotaLimit ?? config.cupoSorteado} enviados · Día #
+                    {dailyQuotaAudit?.currentWarmupDayNumber ?? 1})
+                  </span>
+                </div>
+              ) : (
+                <button
+                  onClick={handleStartQueue}
+                  disabled={status !== 'READY' || campaign.items.length === 0 || loadingAction === 'start'}
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white hover:bg-emerald-500 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Play className="h-4 w-4 fill-current" />
+                  Iniciar Envío Automático Directo ({campaign.items.length} msjs)
+                </button>
+              )
             ) : (
               <>
                 {!queue.isPaused ? (
@@ -587,8 +684,20 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
             <input
               type="checkbox"
               checked={autoLoop24h}
-              onChange={(e) => setAutoLoop24h(e.target.checked)}
-              disabled={queue.isRunning}
+              onChange={(e) => {
+                const nextVal = e.target.checked;
+                setAutoLoop24h(nextVal);
+                try {
+                  localStorage.setItem('popurri_wa_autoloop24h_v2', String(nextVal));
+                } catch {
+                  // ignore
+                }
+                fetch('/api/whatsapp/queue/autoloop', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ autoLoop24h: nextVal }),
+                }).catch(() => {});
+              }}
               className="mt-0.5 h-4 w-4 rounded border-slate-400 text-emerald-600 focus:ring-emerald-500"
             />
             <div className="text-xs text-slate-800">
@@ -596,7 +705,7 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
                 🔁 Bucle Automático Diario cada 24 hs (Programar la totalidad de los {campaign.totalElegiblesEnBase} primeros contactos)
               </span>
               <span className="text-[11px] text-slate-600">
-                Envía hoy la tanda segura anti-baneo ({campaign.items.length} msjs, siempre &lt; 45/día) y, cumplidas las 24 horas, inicia automáticamente la siguiente tanda diaria hasta completar todos los pendientes (requiere mantener la PC encendida; podés monitorear o pausar desde tu celular).
+                Envía hoy la tanda segura anti-baneo ({campaign.items.length} msjs, siempre &lt; 45/día) y, cumplidas las 24 horas, inicia automáticamente la siguiente tanda diaria hasta completar todos los pendientes (podés desmarcar esta casilla en cualquier momento para desbloquear la edición de parámetros).
               </span>
             </div>
           </label>
@@ -612,7 +721,7 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
                   : `Última tanda finalizada: ${queue.sentCount} enviados con éxito`}
               </span>
               <span className="font-mono text-emerald-800 font-bold">
-                {queue.currentAction || 'Completado'}
+                {formatActionTextWithHMS(queue.currentAction)}
               </span>
             </div>
 
@@ -637,7 +746,7 @@ export const WhatsAppWebAutomationPanel: React.FC<WhatsAppWebAutomationPanelProp
               {queue.isRunning && queue.countdownSeconds !== undefined && queue.countdownSeconds > 0 && (
                 <div className="flex items-center gap-1 font-bold text-slate-800">
                   <Clock className="h-3 w-3 text-slate-500" />
-                  Próximo envío en: {queue.countdownSeconds}s
+                  Próximo envío en: {formatDurationHMS(queue.countdownSeconds)}
                 </div>
               )}
             </div>

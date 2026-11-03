@@ -108,10 +108,12 @@ export function calcularHojaDeRuta(
     ahoraMs?: number;
   }
 ): ParadaRuta[] {
-  // Regla: sólo considerar personas que aún NO han adherido y que tienen dirección o punto en Columna G ("Comentario")
+  // Regla: considerar personas que aún NO han adherido (o que tienen retiro de fichas extra pendiente) y que tienen dirección o punto en Columna G ("Comentario")
   const paradasNoAdheridas = paradas.filter(
     (c) =>
-      c.adhirio !== 'Sí' &&
+      (c.adhirio !== 'Sí' ||
+        c.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+        c.situacion === 'RETIRO_FICHAS') &&
       c.situacion !== 'DESCARTADO_NO_CABA' &&
       Boolean((c.calleOCruce && c.calleOCruce.trim().length > 0) || c.tienePuntoEncuentroDeterminado)
   );
@@ -122,7 +124,13 @@ export function calcularHojaDeRuta(
   const minutosActualesBA = hoyBA.hour * 60 + hoyBA.minute;
   const esRutaDeHoy = !fechaRutaDDMM || fechaRutaDDMM === hoyBA.ddmm;
 
-  const eventosUnicos = deduplicarEventosCalendar(eventosCalendar);
+  const eventosUnicos = deduplicarEventosCalendar(eventosCalendar).filter(
+    (ev) =>
+      !(
+        ev.id?.startsWith('route-') ||
+        /recorrido puerta a puerta|ruta casa x casa|bloque caf[eé] hub/i.test(ev.summary || '')
+      )
+  );
   const eventosDelDiaRuta = fechaRutaDDMM
     ? eventosUnicos.filter((ev) => !ev.fecha || ev.fecha === fechaRutaDDMM)
     : eventosUnicos.filter((ev) => !ev.fecha || ev.fecha === hoyBA.ddmm);
@@ -209,11 +217,12 @@ export function calcularHojaDeRuta(
       const ubiCand = obtenerUbicacionEncuentroContacto(cand);
       const d = distanciaHaversineMetros(actualLat, actualLng, ubiCand.lat, ubiCand.lng);
       const disp = analizarDisponibilidadColumnaG(cand.comentario);
+      const esConfirmado1a1 = esContactoConfirmadoEnLista1a1(cand);
       let refMinutos = 15 * 60;
-      let bonusPuntual = 0;
+      let bonusPuntual = esConfirmado1a1 ? -400 : 0;
       if (disp.horaPuntualPactada && !disp.esVentanaAmplia) {
         refMinutos = horaAMinutosDelDia(disp.horaPuntualPactada);
-        bonusPuntual = -500; // Prioridad estricta a quien pactó una hora puntual exacta (ej. Laura 10:00 hs, Felipe 15:00 hs)
+        bonusPuntual = esConfirmado1a1 ? -2500 : -500; // Prioridad estricta a quien pactó o confirmó una hora puntual exacta
       } else if (disp.minInicioVentana !== undefined && disp.minFinVentana !== undefined) {
         refMinutos = Math.round(disp.minInicioVentana * 0.45 + disp.minFinVentana * 0.55);
       } else if (cand.franjaHoraria === 'Mañana') {
@@ -299,6 +308,8 @@ export function calcularHojaDeRuta(
       };
 
       const pactadaExactaMin = horaPactadaExplicita ? horaAMinutosDelDia(horaPactadaExplicita) : null;
+      const esConfirmadoConHoraExacta =
+        esContactoConfirmadoEnLista1a1(c) && pactadaExactaMin !== null;
       const ventanaColGYaVencidaHoy =
         esRutaDeHoy &&
         dispColG.minFinVentana !== undefined &&
@@ -308,11 +319,12 @@ export function calcularHojaDeRuta(
         ((pactadaExactaMin !== null && minutosActualesBA >= pactadaExactaMin + 5) ||
           ventanaColGYaVencidaHoy);
 
-      // Si es la ruta de HOY y esta parada NO es una cita o ventana ya vencida en el pasado,
+      // Si es la ruta de HOY y esta parada NO es una cita o ventana ya vencida en el pasado ni una cita ya confirmada con hora fija,
       // el promotor no puede salir hacia esta parada antes de la hora actual (`minutosActualesBA`).
       if (
         esRutaDeHoy &&
         !citaPuntualYaVencidaHoy &&
+        !esConfirmadoConHoraExacta &&
         minutosActualesBA >= 8 * 60 + 30 &&
         minutosActualesBA < 19 * 60 + 30 &&
         horaAMinutosDelDia(horaSalida) < minutosActualesBA
@@ -327,9 +339,7 @@ export function calcularHojaDeRuta(
       // 1. Posicionar inicialmente según hora puntual pactada o inicio de ventana (incluyendo "por la tarde" >= 14:00)
       if (horaPactadaExplicita && pactadaExactaMin !== null) {
         const salidaParaLlegarPuntualMin = Math.max(8 * 60, pactadaExactaMin - minutosViaje);
-        if (citaPuntualYaVencidaHoy) {
-          horaSalida = sumarMinutosAHora('00:00', salidaParaLlegarPuntualMin);
-        } else if (i === 0 && Math.abs(llegadaActualMin - pactadaExactaMin) <= 60) {
+        if (esConfirmadoConHoraExacta || citaPuntualYaVencidaHoy || i === 0) {
           horaSalida = sumarMinutosAHora('00:00', salidaParaLlegarPuntualMin);
         } else if (i > 0 && llegadaActualMin < pactadaExactaMin) {
           horaSalida = sumarMinutosAHora('00:00', salidaParaLlegarPuntualMin);
@@ -907,7 +917,13 @@ export function generarCorteEstrategicoLocal(
   eventosCalendarInput: CalendarEventItem[] = INITIAL_CALENDAR_EVENTS,
   ahoraMs: number = Date.now()
 ): CorteResultado {
-  const eventosCalendar = filtrarEventosCalendarVigentes(eventosCalendarInput, ahoraMs);
+  const eventosCalendar = filtrarEventosCalendarVigentes(eventosCalendarInput, ahoraMs).filter(
+    (ev) =>
+      !(
+        ev.id?.startsWith('route-') ||
+        /recorrido puerta a puerta|ruta casa x casa|bloque caf[eé] hub/i.test(ev.summary || '')
+      )
+  );
   const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
   const manianaBA = sumarDiasAFechaBA(ahoraMs, 1);
   const dia2BA = sumarDiasAFechaBA(ahoraMs, 2);
@@ -944,7 +960,9 @@ export function generarCorteEstrategicoLocal(
   //    algún punto de encuentro, dirección, esquina o lugar determinado en Google Sheets o en la Sección 1.
   const noAdheridosTotales = filtrados.filter(
     (c) =>
-      c.adhirio !== 'Sí' &&
+      (c.adhirio !== 'Sí' ||
+        c.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+        c.situacion === 'RETIRO_FICHAS') &&
       c.estadoFlujo !== 'YA_ADHIRIO_FIRMA_OK' &&
       c.estadoFlujo !== 'DESCARTADO_O_BAJA' &&
       c.situacion !== 'DESCARTADO_NO_CABA' &&
@@ -1305,10 +1323,9 @@ export function generarCorteEstrategicoLocal(
       Object.entries(conteoB).sort((a, b) => b[1] - a[1])[0]?.[0] || barrioDefault;
     const etiquetaBarrios = barrioPrincipal;
 
-    // 1. Seleccionar café de la zona SÓLO cuando el bloque agrupa a varias personas ya contactadas (>= 2)
+    // 1. Seleccionar café de la zona y respetar cualquier café que un vecino ya haya confirmado en el bloque
     const esSede =
       modalidadPreferida === 'EVENTO_SEDE' || modalidadPreferida === 'ENCUENTRO_SEDE';
-    const agrupaVariasPersonas = !esSede && contactosGrupo.length >= 2;
 
     const seleccionCafes = seleccionarCafesHubPorCercaniaYFranja(
       contactosGrupo,
@@ -1316,13 +1333,39 @@ export function generarCorteEstrategicoLocal(
       fechaClave,
       profile
     );
-    const cafesRanking = agrupaVariasPersonas ? seleccionCafes.cafesRanking : [];
+    const cafeConfirmadoEnComentario = (() => {
+      for (const c of contactosGrupo) {
+        const m = (c.comentario || '').match(/Caf[eé]\s*Hub:\s*([^\])·]+)/i);
+        if (m?.[1]?.trim()) return m[1].trim();
+      }
+      return undefined;
+    })();
+    const permiteSugerirCafeEnEsteGrupo =
+      !esSede &&
+      (contactosGrupo.length >= 2 ||
+        Boolean(cafeConfirmadoEnComentario) ||
+        modalidadPreferida === 'CAFE_HUB');
+    const cafesRankingBase = permiteSugerirCafeEnEsteGrupo ? [...seleccionCafes.cafesRanking] : [];
+    if (cafeConfirmadoEnComentario && cafesRankingBase.length > 0) {
+      const nombreLimpio = cafeConfirmadoEnComentario.split('(')[0].trim().toLowerCase();
+      const idxCafe = cafesRankingBase.findIndex((cf) =>
+        cf.nombre.toLowerCase().includes(nombreLimpio) ||
+        nombreLimpio.includes(cf.nombre.toLowerCase())
+      );
+      if (idxCafe > 0) {
+        const [elegido] = cafesRankingBase.splice(idxCafe, 1);
+        cafesRankingBase.unshift(elegido);
+      }
+    }
+    const cafesRanking = cafesRankingBase;
     const franjaCompartidaResumen = seleccionCafes.franjaCompartidaResumen;
     const mediaMinutosMejorCafe = seleccionCafes.mediaMinutosMejorCafe;
     const mejorCafe = cafesRanking[0];
-    const nombreMejorCafe = mejorCafe
-      ? `${mejorCafe.nombre} (${mejorCafe.direccion.split(',')[0]})`
-      : profile.cafesPorBarrio[barrioPrincipal]?.nombre || `Café de ${barrioPrincipal}`;
+    const nombreMejorCafe =
+      cafeConfirmadoEnComentario ||
+      (mejorCafe
+        ? `${mejorCafe.nombre} (${mejorCafe.direccion.split(',')[0]})`
+        : profile.cafesPorBarrio[barrioPrincipal]?.nombre || `Café de ${barrioPrincipal}`);
 
     // Si es el encuentro de los miércoles en Chile 1408, no tratar el propio evento "Hagamos Popurrí (Chile 1408)" como choque
     const eventosParaCalculoRuta = esSede
@@ -1407,8 +1450,12 @@ export function generarCorteEstrategicoLocal(
 
     let iniMinReal = horaAMinutosDelDia(horaInicioReal);
     let finMinReal = Math.max(iniMinReal + 25, horaAMinutosDelDia(horaFinReal));
+    const tieneContactoConfirmadoConHoraExacta = contactosGrupo.some((c) => {
+      const disp = analizarDisponibilidadColumnaG(c.comentario);
+      return esContactoConfirmadoEnLista1a1(c) && Boolean(disp.horaPuntualPactada && !disp.esVentanaAmplia);
+    });
 
-    if (!esSede && chocaConOcupados(iniMinReal, finMinReal)) {
+    if (!esSede && !tieneContactoConfirmadoConHoraExacta && chocaConOcupados(iniMinReal, finMinReal)) {
       const basePrefMin = horaAMinutosDelDia(horaSalidaBase);
       const spanNecesario = Math.max(duracionTotalMinutos, finMinReal - iniMinReal);
       const candsOrdenados: number[] = [];
@@ -1744,13 +1791,13 @@ export function generarCorteEstrategicoLocal(
       }
     }
 
-    // Un café sólo se propone como modalidad de bloque cuando agrupa al menos a 2 personas contactadas
+    // Respetar siempre la modalidad confirmada explícitamente por el vecino/usuario (incluso si es 1 persona en Café Hub)
     const convieneCafe =
-      miembrosSub.length < 2
-        ? false
-        : modalidadForzada === 'CAFE_HUB'
+      modalidadForzada === 'CAFE_HUB'
         ? true
         : modalidadForzada === 'PUERTA_A_PUERTA'
+        ? false
+        : miembrosSub.length < 2
         ? false
         : convieneCafeDefault && miembrosSub.length >= 2;
 
@@ -1774,10 +1821,7 @@ export function generarCorteEstrategicoLocal(
       centroLat: cLat,
       centroLng: cLng,
       convieneCafeHub: convieneCafe,
-      modalidadAdaptadaPorConfirmacion:
-        miembrosSub.length < 2 && modalidadForzada === 'CAFE_HUB'
-          ? 'PUERTA_A_PUERTA'
-          : modalidadForzada,
+      modalidadAdaptadaPorConfirmacion: modalidadForzada,
       fechaExplicita: fechaEfectivaSub,
       tieneAlertaVencido: miembrosSub.some((c) => Boolean(c.alertaVencido?.activa)),
       franjaDominante: franjaDom,
@@ -1842,11 +1886,9 @@ export function generarCorteEstrategicoLocal(
       );
 
     const grupoCafeCandidato = [...pidieronCafeHub, ...sinPreferenciaForzada];
-    // Sólo separar en un sub-bloque de café si ese sub-bloque agrupa al menos a 2 personas contactadas
     if (
       pidieronPuertaAPuerta.length > 0 &&
-      grupoCafeCandidato.length >= 2 &&
-      (pidieronCafeHub.length > 0 || sinPreferenciaForzada.length >= 3)
+      (pidieronCafeHub.length > 0 || (grupoCafeCandidato.length >= 2 && sinPreferenciaForzada.length >= 3))
     ) {
       return [
         armarSubCircuito(`${clusterIdBase}-cafe`, grupoCafeCandidato, 'CAFE_HUB'),
@@ -1858,7 +1900,7 @@ export function generarCorteEstrategicoLocal(
       return [armarSubCircuito(clusterIdBase, contactosOrig, 'PUERTA_A_PUERTA')];
     }
 
-    if (pidieronCafeHub.length > 0 && contactosOrig.length >= 2) {
+    if (pidieronCafeHub.length > 0) {
       return [armarSubCircuito(clusterIdBase, contactosOrig, 'CAFE_HUB')];
     }
 
@@ -1986,6 +2028,9 @@ export function generarCorteEstrategicoLocal(
     const pa = prioridadFechaCircuito(a);
     const pb = prioridadFechaCircuito(b);
     if (pa !== pb) return pa - pb;
+    const aConfirmado = a.miembros.some(esContactoConfirmadoEnLista1a1);
+    const bConfirmado = b.miembros.some(esContactoConfirmadoEnLista1a1);
+    if (aConfirmado !== bConfirmado) return aConfirmado ? -1 : 1;
     const minA = minReferenciaOrdenCircuito(a);
     const minB = minReferenciaOrdenCircuito(b);
     const aPuntual = Boolean(a.horaPuntualMasTemprana);
@@ -2531,22 +2576,40 @@ export function generarMensajePropuestaBloqueAgenda(
     franjaHoraria?: string;
   }
 ): string {
-  const saludo = contact.sinNombre ? 'Hola, ¿cómo estás?' : `Hola, ${contact.primerNombre}, ¿cómo estás?`;
+  // Si recién se conversó hoy con la persona, no repetir saludo introductorio formal
+  const hoyBA = obtenerPartesFechaHoraBA();
+  const yaConversadoHoy =
+    contact.ultimoContacto === hoyBA.isoDate ||
+    (contact.ultimoMensajeCorteEnviadoAt && contact.ultimoMensajeCorteEnviadoAt.startsWith(hoyBA.isoDate)) ||
+    (contact.horasDesdeUltimoContacto !== undefined && contact.horasDesdeUltimoContacto < 12);
+
+  const saludo = yaConversadoHoy
+    ? (contact.sinNombre ? 'Te paso la propuesta para organizarnos:' : `${contact.primerNombre}, te paso la propuesta para coordinar:`)
+    : (contact.sinNombre ? 'Hola, ¿cómo estás?' : `Hola, ${contact.primerNombre}, ¿cómo estás?`);
 
   const comLow = (contact.comentario || '').toLowerCase();
+  const esEncuentroSedeChile =
+    bloque.modalidad === 'EVENTO_SEDE' ||
+    bloque.modalidad === 'ENCUENTRO_SEDE' ||
+    bloque.id === 'agenda-sede-chile-1408' ||
+    contact.situacion === 'EVENTO_CHILE_1408' ||
+    /chile\s*1408|reuni[oó]n\s+de\s+los\s+mi[eé]rcoles|reuni[oó]n\s+del\s+partido/i.test(comLow);
   const declinoCafe =
     comLow.includes('declinó café') ||
     comLow.includes('declino cafe') ||
     comLow.includes('pasa a puerta a puerta');
   const pidioCafe =
-    contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
-    comLow.includes('prefiere punto de encuentro') ||
-    comLow.includes('prefiere café hub');
+    !esEncuentroSedeChile &&
+    (contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+      comLow.includes('prefiere punto de encuentro') ||
+      comLow.includes('prefiere café hub'));
 
   const modalidadEfectiva: ModalidadEncuentroAgenda =
     opcionesOverride?.modalidad ||
     bloque.modalidadElegidaUsuario ||
-    (declinoCafe
+    (esEncuentroSedeChile
+      ? 'EVENTO_SEDE'
+      : declinoCafe
       ? 'PUERTA_A_PUERTA'
       : pidioCafe
       ? 'CAFE_HUB'
@@ -2642,8 +2705,14 @@ export function generarMensajePropuestaBloqueAgenda(
       .replace(/¿Cuál de las dos te queda mejor\?/i, '¿Te queda bien ese horario?');
   }
 
-  if (modalidadEfectiva === 'EVENTO_SEDE' || modalidadEfectiva === 'ENCUENTRO_SEDE') {
-    return `${saludo}\n\n${introDisculpas}Te escribo por la reunión de los miércoles en *${profile.sedeCentral}* para *${diaLimpio}* (${franjaLimpia}), así charlamos y sumamos tu firma de adhesión en 2 minutos con tu DNI físico de CABA.${notaFichas}\n\n¿Me confirmás si podés acercarte el miércoles en ese horario o preferís que coordinemos pasar 2 minutos por *${dirVecino}*?`;
+  if (
+    modalidadEfectiva === 'EVENTO_SEDE' ||
+    modalidadEfectiva === 'ENCUENTRO_SEDE' ||
+    comLow.includes('chile 1408') ||
+    comLow.includes('sede popurrí') ||
+    comLow.includes('sede central')
+  ) {
+    return `${saludo}\n\n${introDisculpas}Te escribo por el encuentro en la sede de *${profile.sedeCentral}* para *${diaLimpio}* (${franjaLimpia}), así charlamos y sumamos tu firma de adhesión en 2 minutos con tu DNI físico de CABA.${notaFichas}\n\n¿Me confirmás si podés acercarte en ese horario o preferís que coordinemos pasar 2 minutos por *${dirVecino}*?`;
   }
 
   if (
@@ -2767,12 +2836,14 @@ export function aplicarRespuestaPropuestaAgenda(
     nuevaFecha?: string;
     nuevaFranja?: FranjaHoraria;
     nuevoHorarioPuntual?: string;
+    nuevaModalidad?: 'PUERTA_A_PUERTA' | 'CAFE_HUB';
+    nuevoCafe?: string;
     notaAdicional?: string;
     confirmarEncuentro?: boolean;
   },
   profile: VoiceProfile = DEFAULT_VOICE_PROFILE
 ): RawContactRow {
-  const calleExistente = extraerCalleOCruce(raw.comentario);
+  const calleExistente = (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
   const direccionEfectiva =
     opciones?.nuevaDireccion?.trim() ||
     calleExistente ||
@@ -2819,14 +2890,11 @@ export function aplicarRespuestaPropuestaAgenda(
 
   // Preservar cualquier franja horaria amplia original de Columna G si el usuario no eligió una nueva franja/hora
   const dispOrig = analizarDisponibilidadColumnaG(raw.comentario);
-  const ventanaConservada =
-    !textoTurnoElegido && dispOrig.esVentanaAmplia && dispOrig.etiquetaVentana
-      ? ` ${dispOrig.etiquetaVentana}`
-      : '';
 
   // Café HUB unificado del bloque (fuente única de verdad entre Pestaña 2 y Pestaña 3)
   const cafePrincipalBloque = bloque.cafesHubOpciones?.[0];
   const cafeUnificadoTexto =
+    opciones?.nuevoCafe?.trim() ||
     bloque.cafeElegidoUsuario ||
     (cafePrincipalBloque
       ? `${cafePrincipalBloque.nombre} (${cafePrincipalBloque.direccion.split(',')[0]})`
@@ -2843,28 +2911,35 @@ export function aplicarRespuestaPropuestaAgenda(
     .replace(/\s{2,}/g, ' ')
     .trim();
 
+  const paradaVecino = bloque.paradasRutaSugerida?.find((p) => p.contact.id === raw.id);
+  const resolverHoraPuntualConfirmada = () => {
+    if (textoTurnoElegido) return textoTurnoElegido;
+    if (dispOrig.horaPuntualPactada && !dispOrig.esVentanaAmplia) {
+      return `a las ${dispOrig.horaPuntualPactada} hs`;
+    }
+    if (paradaVecino?.horaLlegada) {
+      return `a las ${paradaVecino.horaLlegada} hs`;
+    }
+    if (bloque.horaInicioCalculada) {
+      return `a las ${bloque.horaInicioCalculada} hs`;
+    }
+    return `${bloque.franjaHoraria}`;
+  };
+
   switch (respuesta) {
     case 'CONFIRMO_PROPUESTA': {
-      const lugarConfirmado =
-        opciones?.nuevaDireccion?.trim()
-          ? opciones.nuevaDireccion.trim()
-          : bloque.modalidad === 'PUERTA_A_PUERTA'
-          ? direccionEfectiva
-          : cafeUnificadoTexto;
-      const paradaVecino = bloque.paradasRutaSugerida?.find((p) => p.contact.id === raw.id);
-      const horarioIndividualConfirmado =
-        textoTurnoElegido ||
-        (dispOrig.horaPuntualPactada
-          ? `a las ${dispOrig.horaPuntualPactada} hs`
-          : dispOrig.etiquetaVentana
-          ? `${dispOrig.etiquetaVentana}`
-          : paradaVecino?.horaLlegada && bloque.modalidad === 'PUERTA_A_PUERTA'
-          ? `a las ${paradaVecino.horaLlegada} hs`
-          : `${bloque.franjaHoraria}`);
-      const nuevoComentario = `${lugarConfirmado} (el ${fechaEfectiva} ${horarioIndividualConfirmado}) [Confirmado 1-a-1]${notaExtra}`;
+      const modalidadEfectiva =
+        opciones?.nuevaModalidad ||
+        (bloque.modalidad === 'PUERTA_A_PUERTA' ? 'PUERTA_A_PUERTA' : 'CAFE_HUB');
+      const horarioIndividualConfirmado = resolverHoraPuntualConfirmada();
+      const nuevoComentario =
+        modalidadEfectiva === 'PUERTA_A_PUERTA'
+          ? `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${horarioIndividualConfirmado}) [Confirmado 1-a-1 · Puerta a Puerta]${notaExtra}`
+          : `Encuentro confirmado en Café Hub ${cafeUnificadoTexto} el ${fechaEfectiva} ${horarioIndividualConfirmado} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeUnificadoTexto}]${notaExtra}`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
         adhirio: 'Pendiente',
+        calleOCruce: direccionEfectiva,
         estadoFlujo: 'ENCUENTRO_CONFIRMADO',
         comentario: nuevoComentario,
       }).actualizado;
@@ -2872,50 +2947,75 @@ export function aplicarRespuestaPropuestaAgenda(
 
     case 'DECLINO_CAFE_PASA_PUERTA_A_PUERTA': {
       // La persona declinó ir al Café HUB y confirmó que pasemos Puerta a Puerta por su domicilio/esquina
-      const franjaTxt =
-        textoTurnoElegido ||
-        ventanaConservada ||
-        `(${bloque.franjaHoraria})`;
-      const nuevoComentario = `Visita confirmada Puerta a Puerta el ${fechaEfectiva} ${franjaTxt} (${direccionEfectiva}) [Declinó Café Hub -> Pasa a Puerta a Puerta]${notaExtra}`;
+      const franjaTxt = resolverHoraPuntualConfirmada();
+      const nuevoComentario = `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${franjaTxt}) [Confirmado 1-a-1 · Declinó Café Hub -> Pasa a Puerta a Puerta]${notaExtra}`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
         adhirio: 'Pendiente',
+        calleOCruce: direccionEfectiva,
         estadoFlujo: 'ENCUENTRO_CONFIRMADO',
         comentario: nuevoComentario,
       }).actualizado;
     }
 
     case 'PASA_A_CAFE_HUB': {
-      const turnoCafeTxt = textoTurnoElegido || `(${bloque.franjaHoraria})`;
+      const turnoCafeTxt = resolverHoraPuntualConfirmada();
       const cafeDestino =
-        opciones?.nuevaDireccion?.trim() && /caf[eé]|bar|havanna|starbucks|martinez|bonafide/i.test(opciones.nuevaDireccion)
+        opciones?.nuevoCafe?.trim() ||
+        (opciones?.nuevaDireccion?.trim() &&
+        /caf[eé]|bar|havanna|starbucks|martinez|bonafide/i.test(opciones.nuevaDireccion)
           ? opciones.nuevaDireccion.trim()
-          : cafeUnificadoTexto;
-      const nuevoComentario = `Prefiere punto de encuentro Café Hub confirmado el ${fechaEfectiva} ${turnoCafeTxt} (${direccionEfectiva} -> ${cafeDestino}) [Confirmado 1-a-1]${notaExtra}`;
+          : cafeUnificadoTexto);
+      const nuevoComentario = `Encuentro confirmado en Café Hub ${cafeDestino} el ${fechaEfectiva} ${turnoCafeTxt} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeDestino}]${notaExtra}`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
         adhirio: 'Pendiente',
-        estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE',
+        calleOCruce: direccionEfectiva,
+        estadoFlujo: 'ENCUENTRO_CONFIRMADO',
         comentario: nuevoComentario,
       }).actualizado;
     }
 
     case 'REPROGRAMAR_DIA_HORA': {
+      const yaEstabaConfirmado =
+        raw.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+        raw.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+        /\[Confirmad|Visita confirmada/i.test(raw.comentario || '');
+      const quedaConfirmado = Boolean(opciones?.confirmarEncuentro || yaEstabaConfirmado);
+      const modalidadEfectiva =
+        opciones?.nuevaModalidad ||
+        (/caf[eé]\s*hub/i.test(raw.comentario || '') ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
       const franjaTxt =
         textoTurnoElegido ||
+        (quedaConfirmado ? resolverHoraPuntualConfirmada() : '') ||
         etiquetaFranjaElegida(franjaEfectiva) ||
         'entre 15:30 y 18';
+
+      if (quedaConfirmado) {
+        const nuevoComentarioConfirmado =
+          modalidadEfectiva === 'CAFE_HUB'
+            ? `Encuentro confirmado en Café Hub ${cafeUnificadoTexto} el ${fechaEfectiva} ${franjaTxt} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeUnificadoTexto}]${notaExtra}`
+            : `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${franjaTxt}) [Confirmado 1-a-1 · Puerta a Puerta]${notaExtra}`;
+        return actualizarDatosContactoEnApp(raw, {
+          rsp: 'Sí',
+          adhirio: 'Pendiente',
+          calleOCruce: direccionEfectiva,
+          estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+          comentario: nuevoComentarioConfirmado,
+        }).actualizado;
+      }
+
       const baseLugar = direccionEfectiva ? `(${direccionEfectiva})` : '';
-      const tagConfirmacion = opciones?.confirmarEncuentro ? ' [Confirmado 1-a-1]' : '';
       const nuevoComentario = `Visita reprogramada para el ${fechaEfectiva} ${franjaTxt} ${baseLugar}${
         comentarioSinFechasViejas && !comentarioSinFechasViejas.includes(direccionEfectiva)
           ? ` — ${comentarioSinFechasViejas}`
           : ''
-      }${tagConfirmacion}${notaExtra}`.trim();
+      }${notaExtra}`.trim();
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
         adhirio: 'Pendiente',
-        estadoFlujo: opciones?.confirmarEncuentro ? 'ENCUENTRO_CONFIRMADO' : 'PASO_DATOS_FALTA_CONFIRMAR',
+        calleOCruce: direccionEfectiva,
+        estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
         comentario: nuevoComentario,
       }).actualizado;
     }

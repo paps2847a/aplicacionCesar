@@ -97,9 +97,27 @@ export function migrarContactosDesde167SinPrimerContacto(
     const yaEnviadoEnControl =
       controlEnviadosKeys.has(`id:${reparado.id}`) ||
       (Boolean(telKey) && controlEnviadosKeys.has(`tel:${telKey}`));
+    const esBajaInexistenteEnControl =
+      controlEnviadosKeys.has(`baja_id:${reparado.id}`) ||
+      (Boolean(telKey) && controlEnviadosKeys.has(`baja_tel:${telKey}`)) ||
+      /no existe en whatsapp|n[uú]mero inexistente|n[uú]mero inv[aá]lido/i.test(comRaw);
+
+    if (esBajaInexistenteEnControl) {
+      return {
+        ...reparado,
+        rsp: 'No',
+        adhirio: 'No',
+        primerContactoEnviado: true,
+        referidosCabaYaEnviado: true,
+        comentario: comRaw || 'El número no existe en WhatsApp.',
+        estadoFlujo: 'DESCARTADO_O_BAJA',
+        estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo('DESCARTADO_O_BAJA'),
+      };
+    }
 
     // Si la fila ya tiene un estadoFlujo explícito (por ejemplo, sincronizado de la Columna H de Google Sheets
-    // o asignado en la App), respetarlo 1:1 normalizando únicamente alias heredados.
+    // o asignado en la App), respetarlo 1:1 normalizando únicamente alias heredados,
+    // PERO sin permitir jamás que un contacto con mensaje enviado en control regrese a SIN_CONTACTAR_1ER_MSJ.
     if (reparado.estadoFlujo !== undefined) {
       let estEfectivo: EstadoFlujo = reparado.estadoFlujo;
       if (estEfectivo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP') {
@@ -107,11 +125,24 @@ export function migrarContactosDesde167SinPrimerContacto(
       } else if (estEfectivo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') {
         estEfectivo = 'YA_ADHIRIO_FIRMA_OK';
       }
+      const esSinPrimerMsjOriginal =
+        estEfectivo === 'SIN_CONTACTAR_1ER_MSJ' ||
+        estEfectivo === 'FALTA_NOMBRE_Y_APELLIDO';
+      if (
+        esSinPrimerMsjOriginal &&
+        (yaEnviadoEnControl ||
+          reparado.primerContactoEnviado === true ||
+          Boolean(reparado.ultimoMensajeCorteEnviadoAt))
+      ) {
+        estEfectivo =
+          reparado.rsp === 'Sí' ? 'RESPONDIO_FALTA_DNI_O_ZONA' : '1ER_MSJ_ENVIADO_SIN_RSP';
+      }
       const esSinPrimerMsj =
         estEfectivo === 'SIN_CONTACTAR_1ER_MSJ' ||
         estEfectivo === 'FALTA_NOMBRE_Y_APELLIDO';
       return {
         ...reparado,
+        rsp: !esSinPrimerMsj && reparado.rsp === 'Nuevo' ? 'No' : reparado.rsp,
         primerContactoEnviado: !esSinPrimerMsj,
         estadoFlujo: estEfectivo,
         estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estEfectivo),
@@ -244,20 +275,24 @@ export function migrarContactosDesde167SinPrimerContacto(
     return reparado;
   });
 
-  // 3. Garantizar que el padrón siempre incluya los contactos nuevos sin 1er mensaje de INITIAL_RAW_CONTACTS (#197 en adelante)
-  // para que la pestaña "1. Cola y 7 Reglas" del Automatizador siempre tenga personas sin contactar por primera vez.
+  // 3. Sólo en migración legacy (cuando una base antigua tenía #1..#196 pero ningún contacto >= #197),
+  // incorporar las filas #197+. Si la lista ya tiene contactos >= #197 (o viene de Google Sheets),
+  // jamás re-inyectar contactos eliminados desde INITIAL_RAW_CONTACTS.
   const idsPresentes = new Set(migrados.map((r) => extraerNumeroIdContacto(r.id)));
-  const telsPresentes = new Set(
-    migrados.map((r) => normalizarTelefonoWA(r.telRaw)).filter(Boolean)
-  );
-  for (const candidatoNuevo of INITIAL_RAW_CONTACTS) {
-    const numIdCand = extraerNumeroIdContacto(candidatoNuevo.id);
-    if (numIdCand < 197) continue;
-    const telCand = normalizarTelefonoWA(candidatoNuevo.telRaw);
-    if (!idsPresentes.has(numIdCand) && (!telCand || !telsPresentes.has(telCand))) {
-      migrados.push({ ...candidatoNuevo });
-      idsPresentes.add(numIdCand);
-      if (telCand) telsPresentes.add(telCand);
+  const maxIdPresente = migrados.reduce((max, r) => Math.max(max, extraerNumeroIdContacto(r.id)), 0);
+  if (migrados.length >= 150 && maxIdPresente > 0 && maxIdPresente < 197) {
+    const telsPresentes = new Set(
+      migrados.map((r) => normalizarTelefonoWA(r.telRaw)).filter(Boolean)
+    );
+    for (const candidatoNuevo of INITIAL_RAW_CONTACTS) {
+      const numIdCand = extraerNumeroIdContacto(candidatoNuevo.id);
+      if (numIdCand < 197) continue;
+      const telCand = normalizarTelefonoWA(candidatoNuevo.telRaw);
+      if (!idsPresentes.has(numIdCand) && (!telCand || !telsPresentes.has(telCand))) {
+        migrados.push({ ...candidatoNuevo });
+        idsPresentes.add(numIdCand);
+        if (telCand) telsPresentes.add(telCand);
+      }
     }
   }
 
@@ -275,7 +310,8 @@ export function fusionarContactosDesdeSheetsConControl(
   nuevosDesdeSheets: RawContactRow[],
   previosEnApp: RawContactRow[],
   controlEnviadosKeys: Set<string> = new Set(),
-  priorizarSheets: boolean = false
+  priorizarSheets: boolean = false,
+  ultimosVistosEnSheetPorId?: Map<string, RawContactRow>
 ): { contactosFusionados: RawContactRow[]; nuevosParaPrimerContactoCount: number } {
   const mapaPreviosPorId = new Map<string, RawContactRow>();
   const mapaPreviosPorTel = new Map<string, RawContactRow>();
@@ -314,29 +350,110 @@ export function fusionarContactosDesdeSheetsConControl(
     if (telKey) telsVistosEnSheet.add(telKey);
 
     const previo = mapaPreviosPorId.get(idKey) || (telKey ? mapaPreviosPorTel.get(telKey) : undefined);
+    const tieneSnapshotPrevioSheet = Boolean(
+      ultimosVistosEnSheetPorId && ultimosVistosEnSheetPorId.size > 0
+    );
+    const fotoPreviaSheet = tieneSnapshotPrevioSheet
+      ? ultimosVistosEnSheetPorId!.get(idKey)
+      : undefined;
+    const baseComparacionSheet = fotoPreviaSheet || (!ultimosVistosEnSheetPorId ? previo : undefined);
 
-    // Detectar si en Google Sheets se modificó el comentario, estado o adhesión respecto del previo en App
+    // Detectar si en Google Sheets se modificó el comentario, estado o adhesión respecto de la última foto de Sheets
     const comentarioSheet = (row.comentario || '').trim();
-    const comentarioPrevio = (previo?.comentario || '').trim();
-    const cambioEnSheetExplicito =
-      priorizarSheets &&
-      Boolean(previo) &&
-      (comentarioSheet !== comentarioPrevio ||
-        row.adhirio !== previo?.adhirio ||
-        row.rsp !== previo?.rsp ||
-        (row.estadoFlujo !== undefined && row.estadoFlujo !== previo?.estadoFlujo) ||
+    const comentarioBase = (baseComparacionSheet?.comentario || '').trim();
+    const cambioRespectoABase =
+      Boolean(baseComparacionSheet) &&
+      (comentarioSheet !== comentarioBase ||
+        row.adhirio !== baseComparacionSheet?.adhirio ||
+        row.rsp !== baseComparacionSheet?.rsp ||
+        (row.estadoFlujo !== undefined && row.estadoFlujo !== baseComparacionSheet?.estadoFlujo) ||
         (row.estadoFlujo === undefined &&
-          (previo?.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS' ||
-            previo?.estadoFlujo === 'DESCARTADO_O_BAJA') &&
+          (baseComparacionSheet?.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS' ||
+            baseComparacionSheet?.estadoFlujo === 'DESCARTADO_O_BAJA') &&
           !esComentarioDescartadoONoCaba(comentarioSheet)));
 
-    // Si el contacto fue editado explícitamente en la app (`actualizadoEnAppAt`) y NO fue modificado en Google Sheets, priorizar la app
-    const editadoEnApp = Boolean(previo?.actualizadoEnAppAt) && !cambioEnSheetExplicito;
+    // Ignorar como "cambio externo" si la fila leída de Sheets simplemente alcanzó el mismo estado que ya teníamos en `previo`
+    const coincideConPrevioEnApp =
+      Boolean(previo) &&
+      comentarioSheet === (previo?.comentario || '').trim() &&
+      row.adhirio === previo?.adhirio &&
+      row.estadoFlujo === previo?.estadoFlujo;
+
+    // Nunca considerar como "cambio externo en Sheets" una fila de TSV cacheada que está atrasada
+    // respecto a una cita ya confirmada o edición reciente en la App durante sincronizaciones automáticas.
+    const previoConfirmadoEnApp = Boolean(
+      previo &&
+        (previo.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+          previo.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+          /\[Confirmad|Visita confirmada/i.test(previo.comentario || ''))
+    );
+    const sheetAtrasadoRespectoAConfirmacionApp =
+      previoConfirmadoEnApp &&
+      row.estadoFlujo !== 'ENCUENTRO_CONFIRMADO' &&
+      row.estadoFlujo !== 'RECORDATORIO_DIA_ENVIADO' &&
+      row.estadoFlujo !== 'YA_ADHIRIO_FIRMA_OK' &&
+      row.estadoFlujo !== 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' &&
+      row.adhirio !== 'Sí' &&
+      !/\[Confirmad|Visita confirmada/i.test(comentarioSheet);
+
+    const editadoRecientementeEnApp = Boolean(
+      previo?.actualizadoEnAppAt &&
+        Date.now() - Date.parse(previo.actualizadoEnAppAt) < 600000
+    );
+
+    const cambioEnSheetExplicito =
+      !editadoRecientementeEnApp &&
+      !sheetAtrasadoRespectoAConfirmacionApp &&
+      (ultimosVistosEnSheetPorId
+        ? Boolean(fotoPreviaSheet) && cambioRespectoABase && !coincideConPrevioEnApp
+        : priorizarSheets && cambioRespectoABase && !coincideConPrevioEnApp);
+
+    const enviadoEnControl =
+      controlEnviadosKeys.has(`id:${idKey}`) ||
+      (Boolean(telKey) && controlEnviadosKeys.has(`tel:${telKey}`));
+
+    const esBajaInexistenteEnControlOApp =
+      controlEnviadosKeys.has(`baja_id:${idKey}`) ||
+      (Boolean(telKey) && controlEnviadosKeys.has(`baja_tel:${telKey}`)) ||
+      (!cambioEnSheetExplicito &&
+        (previo?.estadoFlujo === 'DESCARTADO_O_BAJA' ||
+          /no existe en whatsapp|n[uú]mero inexistente|n[uú]mero inv[aá]lido/i.test(
+            previo?.comentario || ''
+          )));
+
+    const tieneCitaConfirmadaEnApp =
+      !cambioEnSheetExplicito &&
+      Boolean(
+        previo &&
+          (previo.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+            previo.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+            /\[Confirmad|Visita confirmada/i.test(previo.comentario || ''))
+      );
+
+    const yaAdhirioEnApp =
+      !cambioEnSheetExplicito &&
+      Boolean(
+        previo &&
+          (previo.adhirio === 'Sí' ||
+            previo.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+            previo.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' ||
+            previo.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS')
+      );
+
+    // Si el contacto fue editado explícitamente en la app (`actualizadoEnAppAt`) o tiene un estado más avanzado confirmado en SQLite
+    // y NO fue modificado explícitamente en Google Sheets entre lecturas, priorizar la app/SQLite.
+    const editadoEnApp =
+      !cambioEnSheetExplicito &&
+      Boolean(
+        previo?.actualizadoEnAppAt ||
+          tieneCitaConfirmadaEnApp ||
+          yaAdhirioEnApp ||
+          esBajaInexistenteEnControlOApp
+      );
 
     const fueEnviadoEnApp =
       editadoEnApp ||
-      controlEnviadosKeys.has(`id:${idKey}`) ||
-      (Boolean(telKey) && controlEnviadosKeys.has(`tel:${telKey}`)) ||
+      enviadoEnControl ||
       Boolean(previo?.primerContactoEnviado === true) ||
       Boolean(previo?.ultimoMensajeCorteEnviadoAt);
 
@@ -363,25 +480,34 @@ export function fusionarContactosDesdeSheetsConControl(
         previo?.ultimoMensajeCorteEnviadoAt || row.ultimoMensajeCorteEnviadoAt,
       alertaVencidoOcultaFecha:
         previo?.alertaVencidoOcultaFecha || row.alertaVencidoOcultaFecha,
+      asignadoA: previo?.asignadoA || row.asignadoA,
+      asignadoFecha: previo?.asignadoFecha || row.asignadoFecha,
     };
 
-    // Si fue editado en la App en los últimos segundos (mientras el push a Google Sheets está en vuelo),
-    // preservar la edición local en la App para evitar cualquier reversión visual.
-    const editadoRecientementeEnApp = Boolean(
-      previo?.actualizadoEnAppAt &&
-        Date.now() - Date.parse(previo.actualizadoEnAppAt) < 6000
-    );
-
-    if (editadoRecientementeEnApp && previo) {
-      const estadoApp = previo.estadoFlujo || row.estadoFlujo;
+    // Si fue editado en la App o tiene estado consolidado en SQLite (sin cambio explícito en Sheets),
+    // preservar la edición local en la App para evitar cualquier reversión visual o pérdida de confirmaciones.
+    if ((editadoRecientementeEnApp || editadoEnApp) && previo) {
+      const estadoApp = esBajaInexistenteEnControlOApp
+        ? 'DESCARTADO_O_BAJA'
+        : previo.estadoFlujo || row.estadoFlujo;
       return sincronizarBarrioConDireccionComentario({
         ...row,
         ...previo,
+        ...metadatosPreservados,
         nombre: previo.nombre || row.nombre,
         barrio: previo.barrio || row.barrio,
         email: previo.email || row.email,
         telRaw: previo.telRaw || row.telRaw,
-        comentario: previo.comentario ?? row.comentario,
+        adhirio: esBajaInexistenteEnControlOApp ? 'No' : previo.adhirio || row.adhirio,
+        rsp: esBajaInexistenteEnControlOApp ? 'No' : previo.rsp || row.rsp,
+        primerContactoEnviado:
+          estadoApp === 'SIN_CONTACTAR_1ER_MSJ' || estadoApp === 'FALTA_NOMBRE_Y_APELLIDO'
+            ? false
+            : true,
+        comentario:
+          esBajaInexistenteEnControlOApp && !(previo.comentario || '').trim()
+            ? 'El número no existe en WhatsApp.'
+            : (previo.comentario ?? row.comentario),
         estadoFlujo: estadoApp,
         estadoFlujoEtiqueta: estadoApp ? obtenerEtiquetaEstadoFlujo(estadoApp) : undefined,
       });
@@ -389,10 +515,27 @@ export function fusionarContactosDesdeSheetsConControl(
 
     // 0a. Cuando priorizarSheets=true (sincronización con Google Sheets) y la Columna H ("Estado")
     // trae un estado explícito, o cuando no fue editado localmente en la App, sincronizar 1:1 con Google Sheets.
-    if (row.estadoFlujo !== undefined && (priorizarSheets || !editadoEnApp)) {
+    if (row.estadoFlujo !== undefined && (cambioEnSheetExplicito || (priorizarSheets && !editadoEnApp) || !editadoEnApp)) {
+      let estadoEfectivo0a: EstadoFlujo = row.estadoFlujo;
+      const esSin1erMsjSheet =
+        estadoEfectivo0a === 'SIN_CONTACTAR_1ER_MSJ' ||
+        estadoEfectivo0a === 'FALTA_NOMBRE_Y_APELLIDO';
+      // Jamás permitir que un contacto al que ya se le envió mensaje en controlEnvios o en la App regrese a SIN_CONTACTAR_1ER_MSJ
+      // durante un refresco silencioso o caché de Sheets, salvo que el usuario lo haya cambiado explícitamente en Sheets.
+      if (esSin1erMsjSheet && (fueEnviadoEnApp || (previo?.estadoFlujo && previo.estadoFlujo !== 'SIN_CONTACTAR_1ER_MSJ' && previo.estadoFlujo !== 'FALTA_NOMBRE_Y_APELLIDO')) && !cambioEnSheetExplicito) {
+        estadoEfectivo0a = esBajaInexistenteEnControlOApp
+          ? 'DESCARTADO_O_BAJA'
+          : previo?.estadoFlujo &&
+              previo.estadoFlujo !== 'SIN_CONTACTAR_1ER_MSJ' &&
+              previo.estadoFlujo !== 'FALTA_NOMBRE_Y_APELLIDO'
+            ? previo.estadoFlujo
+            : row.rsp === 'Sí' || previo?.rsp === 'Sí'
+              ? 'RESPONDIO_FALTA_DNI_O_ZONA'
+              : '1ER_MSJ_ENVIADO_SIN_RSP';
+      }
       const esSin1erMsj =
-        row.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
-        row.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO';
+        estadoEfectivo0a === 'SIN_CONTACTAR_1ER_MSJ' ||
+        estadoEfectivo0a === 'FALTA_NOMBRE_Y_APELLIDO';
       if (esSin1erMsj) {
         nuevosParaPrimerContactoCount++;
       }
@@ -400,13 +543,14 @@ export function fusionarContactosDesdeSheetsConControl(
       return sincronizarBarrioConDireccionComentario({
         ...row,
         ...metadatosPreservados,
+        rsp: !esSin1erMsj && row.rsp === 'Nuevo' ? (previo?.rsp && previo.rsp !== 'Nuevo' ? previo.rsp : 'No') : row.rsp,
         calleOCruce: calleExtraida || row.calleOCruce || undefined,
         comentario: comentarioSheet || comentarioEfectivo,
         primerContactoEnviado: !esSin1erMsj,
         referidosCabaYaEnviado:
-          row.estadoFlujo === 'DESCARTADO_O_BAJA'
+          estadoEfectivo0a === 'DESCARTADO_O_BAJA'
             ? true
-            : row.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS'
+            : estadoEfectivo0a === 'SIN_DNI_CABA_PEDIR_REFERIDOS'
               ? false
               : referidosCabaYaEnviado,
         vocativoOverride: previo?.vocativoOverride || row.vocativoOverride,
@@ -416,11 +560,11 @@ export function fusionarContactosDesdeSheetsConControl(
           : previo?.ultimoContacto || row.ultimoContacto || '2025-05-14',
         intentos: esSin1erMsj
           ? 0
-          : row.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP'
+          : estadoEfectivo0a === 'SEGUNDO_SEGUIMIENTO_SIN_RSP'
             ? Math.max(2, previo?.intentos || 2)
             : Math.max(1, previo?.intentos || row.intentos || 1),
-        estadoFlujo: row.estadoFlujo,
-        estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(row.estadoFlujo),
+        estadoFlujo: estadoEfectivo0a,
+        estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estadoEfectivo0a),
       });
     }
 
@@ -626,7 +770,13 @@ export function fusionarContactosDesdeSheetsConControl(
     });
   });
 
-  // Preservar también cualquier contacto agregado manualmente en la app que aún no figure en la exportación CSV de Sheets
+  // Reconciliación de eliminaciones en Google Sheets:
+  // Si `nuevosDesdeSheets` es el padrón completo de Sheets (o sincronización explícita `priorizarSheets`),
+  // cualquier fila que haya sido borrada de Google Sheets (ej. #494) NO debe volver a agregarse desde `previosEnApp`,
+  // salvo que acabe de ser creada localmente en la App en los últimos 45 segundos (mientras se escribe en Sheets).
+  const esLecturaCompletaSheets = nuevosDesdeSheets.length >= 50 || priorizarSheets;
+  const ahoraMergeMs = Date.now();
+
   for (const prev of previosEnApp) {
     const idKey = String(prev.id).trim();
     const telKey = normalizarTelefonoWA(prev.telRaw);
@@ -634,7 +784,17 @@ export function fusionarContactosDesdeSheetsConControl(
     const yaIncluidoPorTelMismoNombre =
       !idKey && Boolean(telKey) && telsVistosEnSheet.has(telKey);
     if (!yaIncluidoPorId && !yaIncluidoPorTelMismoNombre) {
-      contactosFusionados.push(sincronizarBarrioConDireccionComentario(prev));
+      const estabaEnSheetsAntes = Boolean(idKey && ultimosVistosEnSheetPorId?.has(idKey));
+      const recienCreadoEnApp =
+        !estabaEnSheetsAntes &&
+        !priorizarSheets &&
+        Boolean(
+          prev.actualizadoEnAppAt &&
+            ahoraMergeMs - Date.parse(prev.actualizadoEnAppAt) < 45000
+        );
+      if (!esLecturaCompletaSheets || recienCreadoEnApp) {
+        contactosFusionados.push(sincronizarBarrioConDireccionComentario(prev));
+      }
     }
   }
 
@@ -962,7 +1122,7 @@ export function actualizarDatosContactoEnApp(
     ...conBarrioSincronizado,
     actualizadoEnAppAt: esReversionANuevo
       ? undefined
-      : conBarrioSincronizado.actualizadoEnAppAt || ahoraISO,
+      : cambiosDefinidos.actualizadoEnAppAt || ahoraISO,
     estadoFlujo: estadoFinal,
     estadoFlujoEtiqueta: estadoFinal ? obtenerEtiquetaEstadoFlujo(estadoFinal) : undefined,
   };
@@ -1115,7 +1275,17 @@ export function registrarEnvioMensajeContacto(
         : 'PREFIERE_CAFE_HUB_O_SEDE';
     rspNuevo = 'Sí';
   } else if (tplEfectiva === 'confirmacion_visita') {
-    estadoNuevo = 'ENCUENTRO_CONFIRMADO';
+    const esPropuestaPidiendoConfirmar =
+      plantillaEnviada === 'auto' &&
+      /confirmanos por ac|te paso la propuesta|¿te queda bien si paso|avisame si te queda bien/i.test(
+        msgLow
+      ) &&
+      !/dejar confirmado|queda confirmado/i.test(msgLow);
+    estadoNuevo = esPropuestaPidiendoConfirmar
+      ? procActual.estadoFlujo === 'ENCUENTRO_CONFIRMADO'
+        ? 'ENCUENTRO_CONFIRMADO'
+        : 'PASO_DATOS_FALTA_CONFIRMAR'
+      : 'ENCUENTRO_CONFIRMADO';
     rspNuevo = 'Sí';
   } else if (tplEfectiva === 'convocatoria_cafe_hub') {
     estadoNuevo =

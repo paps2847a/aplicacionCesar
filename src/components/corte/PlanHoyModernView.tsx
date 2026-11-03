@@ -84,7 +84,23 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
 
   // Por defecto abrimos en "1. Planificador de Propuestas" para que el usuario envíe propuestas
   // y marque "✓ Confirmó Cita"; en "2. Hoja de Ruta en Terreno" solo aparecen las citas explícitamente confirmadas.
-  const [activeSubMode, setActiveSubMode] = useState<'planificador' | 'terreno'>('planificador');
+  const [activeSubMode, setActiveSubMode] = useState<'planificador' | 'terreno'>(() => {
+    try {
+      const saved = sessionStorage.getItem('popurri_plan_submode_v1');
+      if (saved === 'planificador' || saved === 'terreno') return saved;
+    } catch {
+      // ignore
+    }
+    return 'planificador';
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('popurri_plan_submode_v1', activeSubMode);
+    } catch {
+      // ignore
+    }
+  }, [activeSubMode]);
 
   const diasUnicos = useMemo(() => {
     const list: string[] = [];
@@ -96,42 +112,177 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     return list;
   }, [bloques]);
 
-  const [selectedDia, setSelectedDia] = useState<string>(() => diasUnicos[0] || 'Todos');
-  const [expandedBloqueId, setExpandedBloqueId] = useState<string | null>(
-    () => bloques[0]?.id || null
-  );
+  const [selectedDia, setSelectedDia] = useState<string>(() => {
+    try {
+      const saved = sessionStorage.getItem('popurri_plan_selected_dia_v1');
+      if (saved && (saved === 'Todos' || diasUnicos.includes(saved))) return saved;
+    } catch {
+      // ignore
+    }
+    return diasUnicos[0] || 'Todos';
+  });
+  const [expandedBloqueId, setExpandedBloqueId] = useState<string | null>(() => {
+    try {
+      const saved = sessionStorage.getItem('popurri_plan_expanded_bloque_v1');
+      if (saved && bloques.some((b) => b.id === saved)) return saved;
+    } catch {
+      // ignore
+    }
+    return bloques[0]?.id || null;
+  });
 
   useEffect(() => {
     if (selectedDia !== 'Todos' && !diasUnicos.includes(selectedDia)) {
       setSelectedDia(diasUnicos[0] || 'Todos');
+    } else {
+      try {
+        sessionStorage.setItem('popurri_plan_selected_dia_v1', selectedDia);
+      } catch {
+        // ignore
+      }
     }
   }, [diasUnicos, selectedDia]);
 
-  // Overrides locales por bloque en el Planificador (modalidad y café único elegido)
+  useEffect(() => {
+    try {
+      if (expandedBloqueId) {
+        sessionStorage.setItem('popurri_plan_expanded_bloque_v1', expandedBloqueId);
+      }
+    } catch {
+      // ignore
+    }
+  }, [expandedBloqueId]);
+
+  // Overrides persistentes por bloque en el Planificador (modalidad y café único elegido)
   const [bloqueModalidadOverride, setBloqueModalidadOverride] = useState<
     Record<string, ModalidadEncuentroAgenda>
-  >({});
+  >(() => {
+    try {
+      const raw = localStorage.getItem('popurri_bloque_modalidad_v1');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
   const [bloqueCafeOverride, setBloqueCafeOverride] = useState<
     Record<string, { nombre: string; direccion: string }>
-  >({});
+  >(() => {
+    try {
+      const raw = localStorage.getItem('popurri_bloque_cafe_v1');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('popurri_bloque_modalidad_v1', JSON.stringify(bloqueModalidadOverride));
+    } catch {
+      // ignore
+    }
+  }, [bloqueModalidadOverride]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('popurri_bloque_cafe_v1', JSON.stringify(bloqueCafeOverride));
+    } catch {
+      // ignore
+    }
+  }, [bloqueCafeOverride]);
+
+  const getBloqueOverrideKey = (b: BloqueAgendaRecomendado): string =>
+    `${b.fechaClave || b.diaEtiqueta}_${(b.barrio || '').toLowerCase()}`;
+  const getModalidadOver = (b: BloqueAgendaRecomendado): ModalidadEncuentroAgenda | undefined =>
+    bloqueModalidadOverride[b.id] || bloqueModalidadOverride[getBloqueOverrideKey(b)];
+  const getCafeOver = (
+    b: BloqueAgendaRecomendado
+  ): { nombre: string; direccion: string } | undefined =>
+    bloqueCafeOverride[b.id] || bloqueCafeOverride[getBloqueOverrideKey(b)];
 
   // Mensajes editables por contacto en el Planificador
   const [propuestaTexts, setPropuestaTexts] = useState<Record<string, string>>({});
-  // Reprogramación rápida de fecha/hora en el Planificador
+  // Reprogramación / Edición de planificación por contacto (día, hora puntual, dirección, modalidad, café)
   const [reprogFecha, setReprogFecha] = useState<Record<string, string>>({});
   const [reprogHora, setReprogHora] = useState<Record<string, string>>({});
+  const [reprogDireccion, setReprogDireccion] = useState<Record<string, string>>({});
+  const [reprogModalidad, setReprogModalidad] = useState<
+    Record<string, 'PUERTA_A_PUERTA' | 'CAFE_HUB'>
+  >({});
+  const [reprogCafe, setReprogCafe] = useState<Record<string, string>>({});
 
   // Estado por parada en la Hoja de Ruta en Terreno
   const [paradaModoMsj, setParadaModoMsj] = useState<Record<string, ModoMensajeTerrenoRuta>>({});
   const [paradaTextoEditado, setParadaTextoEditado] = useState<Record<string, string>>({});
   const [paradaUnlockEnCamino, setParadaUnlockEnCamino] = useState<Record<string, boolean>>({});
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [countdownSending, setCountdownSending] = useState<{
+    contactId: string;
+    secondsLeft: number;
+    timer: any;
+  } | null>(null);
+  const [sentSuccessIds, setSentSuccessIds] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [editingConfirmedIds, setEditingConfirmedIds] = useState<Record<string, boolean>>({});
+  const [showVencidosSection, setShowVencidosSection] = useState<boolean>(false);
+  const [syncingCalendarRoute, setSyncingCalendarRoute] = useState<boolean>(false);
+  const [calendarQuickLinks, setCalendarQuickLinks] = useState<{ summary: string; url: string }[]>([]);
 
   const triggerToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3500);
+  };
+
+  const abrirEdicionPlanContacto = (
+    contact: Contact,
+    bloque: BloqueAgendaRecomendado,
+    paradaRef?: ParadaRuta
+  ) => {
+    const com = contact.comentario || '';
+    const horaEnCom = com.match(/a\s+las\s+(\d{1,2}:\d{2})/i)?.[1];
+    const cafeEnCom = com.match(/Caf[eé]\s*Hub:\s*([^\])·]+)/i)?.[1]?.trim();
+    const esCafeActual =
+      /caf[eé]\s*hub/i.test(com) ||
+      (!/puerta\s+a\s+puerta/i.test(com) &&
+        (getModalidadOver(bloque) || bloque.modalidad) === 'CAFE_HUB');
+    const cafeDefault =
+      cafeEnCom ||
+      (getCafeOver(bloque)
+        ? `${getCafeOver(bloque)!.nombre} (${getCafeOver(bloque)!.direccion.split(',')[0]})`
+        : bloque.cafesHubOpciones?.[0]
+        ? `${bloque.cafesHubOpciones[0].nombre} (${
+            bloque.cafesHubOpciones[0].direccion.split(',')[0]
+          })`
+        : '');
+
+    setReprogFecha((prev) => ({
+      ...prev,
+      [contact.id]: prev[contact.id] || contact.fechasMencionadas[0] || bloque.fechaClave || '',
+    }));
+    setReprogHora((prev) => ({
+      ...prev,
+      [contact.id]:
+        prev[contact.id] || horaEnCom || paradaRef?.horaLlegada || bloque.horaInicioCalculada || '',
+    }));
+    setReprogDireccion((prev) => ({
+      ...prev,
+      [contact.id]: prev[contact.id] || contact.calleOCruce || '',
+    }));
+    setReprogModalidad((prev) => ({
+      ...prev,
+      [contact.id]: prev[contact.id] || (esCafeActual ? 'CAFE_HUB' : 'PUERTA_A_PUERTA'),
+    }));
+    if (cafeDefault) {
+      setReprogCafe((prev) => ({
+        ...prev,
+        [contact.id]: prev[contact.id] || cafeDefault,
+      }));
+    }
+    setEditingConfirmedIds((prev) => ({
+      ...prev,
+      [contact.id]: true,
+    }));
   };
 
   const bloquesFiltrados = useMemo(() => {
@@ -140,19 +291,32 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   }, [bloques, selectedDia]);
 
   // Determina si un vecino fue explícitamente confirmado 1-a-1 para salir a la Hoja de Ruta en Terreno.
-  // Regla estricta: si tiene una fecha vencida del pasado (ej. 23/10 sin concretar) o solo dejó una dirección/franja
-  // sin que se haya marcado "✓ Confirmó Cita", NO figura como confirmado ni entra en "2. Hoja de Ruta en Terreno".
   const esConfirmadoParaHojaDeRuta = (contact: Contact): boolean => {
+    const com = contact.comentario || '';
+    const tieneTagConfirmado =
+      /\[confirmado\s+1-a-1|visita\s+confirmada|encuentro\s+confirmado\s+en\s+caf[eé]\s*hub|confirm[oó]\s+caf[eé]\s*hub|\[declin[oó]\s+caf[eé]\s*hub/i.test(
+        com
+      );
+    if (
+      contact.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+      contact.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+      tieneTagConfirmado
+    ) {
+      return true;
+    }
     if (contact.alertaVencido?.activa) {
       return false;
     }
     if (paradaUnlockEnCamino[contact.id]) {
       return true;
     }
-    const com = contact.comentario || '';
-    return /\[confirmado\s+1-a-1\]|visita\s+confirmada|confirm[oó]\s+caf[eé]\s*hub|\[declin[oó]\s+caf[eé]\s*hub/i.test(
-      com
-    );
+    if (
+      contact.fechasMencionadas.length > 0 &&
+      contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
+    ) {
+      return true;
+    }
+    return false;
   };
 
   const totalConfirmadosDiaSeleccionado = useMemo(() => {
@@ -183,15 +347,21 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
       return next;
     });
     const comLimpio = (contact.comentario || '')
-      .replace(/\s*\[Confirmado\s+1-a-1\]/gi, '')
+      .replace(/\s*\[Confirmado\s+1-a-1[^\]]*\]/gi, '')
       .replace(/\s*\[Declinó\s+Café\s+Hub[^\]]*\]/gi, '')
+      .replace(/Visita\s+confirmada\s+Puerta\s+a\s+Puerta\s+en\s+/gi, 'Visita por confirmar en ')
       .replace(/Visita\s+confirmada\s+Puerta\s+a\s+Puerta/gi, 'Visita por confirmar')
+      .replace(/Encuentro\s+confirmado\s+en\s+Café\s+Hub/gi, 'Prefiere Café Hub')
       .replace(/Prefiere\s+punto\s+de\s+encuentro\s+Café\s+Hub\s+confirmado/gi, 'Prefiere Café Hub')
       .trim();
     await onUpdateContact(contact.id, {
       estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
       comentario: comLimpio,
     });
+    setEditingConfirmedIds((prev) => ({
+      ...prev,
+      [contact.id]: false,
+    }));
     triggerToast(
       `↺ ${contact.primerNombre || contact.nombre}: Quitado de Hoja de Ruta en Terreno (vuelve a Por Confirmar)`
     );
@@ -200,8 +370,8 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   const obtenerTextoPropuestaContacto = (contact: Contact, bloque: BloqueAgendaRecomendado) => {
     const key = `${bloque.id}_${contact.id}`;
     if (propuestaTexts[key] !== undefined) return propuestaTexts[key];
-    const modOver = bloqueModalidadOverride[bloque.id];
-    const cafeOver = bloqueCafeOverride[bloque.id];
+    const modOver = getModalidadOver(bloque);
+    const cafeOver = getCafeOver(bloque);
     return generarMensajePropuestaBloqueAgenda(contact, bloque, voiceProfile, {
       modalidad: modOver,
       cafeHubNombre: cafeOver?.nombre,
@@ -223,7 +393,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     const modo = obtenerModoEfectivoParada(p);
     const key = `${p.contact.id}_${modo}`;
     if (paradaTextoEditado[key] !== undefined) return paradaTextoEditado[key];
-    const cafeOver = bloqueCafeOverride[bloque.id];
+    const cafeOver = getCafeOver(bloque);
     const cafePrincipal = cafeOver || bloque.cafesHubOpciones?.[0];
     const cafeTexto = cafePrincipal
       ? `${cafePrincipal.nombre} (${cafePrincipal.direccion.split(',')[0]})`
@@ -234,17 +404,23 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   const handleConsolidarRespuestaPlanificador = async (
     contact: Contact,
     bloque: BloqueAgendaRecomendado,
-    respuesta: TipoRespuestaPropuestaAgenda
+    respuesta: TipoRespuestaPropuestaAgenda,
+    paradaRef?: ParadaRuta
   ) => {
+    const modOver = getModalidadOver(bloque);
+    const cafeOver = getCafeOver(bloque);
     const bloqueConOverrides: BloqueAgendaRecomendado = {
       ...bloque,
-      modalidad: bloqueModalidadOverride[bloque.id] || bloque.modalidad,
-      cafeElegidoUsuario: bloqueCafeOverride[bloque.id]
-        ? `${bloqueCafeOverride[bloque.id].nombre} (${
-            bloqueCafeOverride[bloque.id].direccion.split(',')[0]
-          })`
+      modalidad: modOver || bloque.modalidad,
+      cafeElegidoUsuario: cafeOver
+        ? `${cafeOver.nombre} (${cafeOver.direccion.split(',')[0]})`
         : bloque.cafeElegidoUsuario,
     };
+
+    const horaSugeridaParada =
+      reprogHora[contact.id]?.trim() ||
+      paradaRef?.horaLlegada ||
+      bloque.paradasRutaSugerida?.find((p) => p.contact.id === contact.id)?.horaLlegada;
 
     const actualizado = aplicarRespuestaPropuestaAgenda(
       contact,
@@ -252,7 +428,10 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
       respuesta,
       {
         nuevaFecha: reprogFecha[contact.id],
-        nuevoHorarioPuntual: reprogHora[contact.id],
+        nuevoHorarioPuntual: horaSugeridaParada,
+        nuevaDireccion: reprogDireccion[contact.id],
+        nuevaModalidad: reprogModalidad[contact.id],
+        nuevoCafe: reprogCafe[contact.id],
         confirmarEncuentro: true,
       },
       voiceProfile
@@ -266,39 +445,69 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
       calleOCruce: actualizado.calleOCruce,
     });
 
+    // Limpiar texto cacheado de parada para que refleje el nuevo horario/modalidad al instante
+    setParadaTextoEditado((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (k.startsWith(`${contact.id}_`)) delete next[k];
+      }
+      return next;
+    });
+
     triggerToast(
       `✓ ${contact.primerNombre || contact.nombre}: ${
         respuesta === 'CONFIRMO_PROPUESTA'
-          ? 'Encuentro confirmado (listo en Hoja de Ruta)'
+          ? 'Encuentro confirmado (listo en Hoja de Ruta y en Candidatos)'
           : respuesta === 'DECLINO_CAFE_PASA_PUERTA_A_PUERTA'
-          ? 'Pasó a recorrido Puerta a Puerta'
+          ? 'Confirmado Puerta a Puerta en domicilio'
           : respuesta === 'PASA_A_CAFE_HUB'
           ? 'Confirmado en Café del circuito'
-          : 'Reprogramado con éxito'
+          : 'Planificación actualizada y guardada'
       }`
     );
   };
 
-  const handleSendWA = async (contact: Contact, text: string) => {
+  const handleSendWA = (contact: Contact, text: string) => {
     const phone = contact.tel || contact.telRaw || contact.telWA || '';
-    if (!phone) return;
-    if (onSendDirectWA) {
-      setSendingId(contact.id);
-      try {
-        const ok = await onSendDirectWA(
-          phone,
-          text,
-          contact.id,
-          contact.primerNombre || contact.nombre || `Contacto #${contact.id}`,
-          contact.barrio
-        );
-        if (ok) {
-          triggerToast(`✓ Mensaje enviado a ${contact.primerNombre || contact.nombre}`);
-        }
-      } finally {
-        setSendingId(null);
-      }
+    if (!phone || !onSendDirectWA) return;
+
+    // Si ya hay una cuenta regresiva activa para este contacto, el clic funciona como BOTÓN DE ARREPENTIMIENTO
+    if (countdownSending && countdownSending.contactId === contact.id) {
+      if (countdownSending.timer) clearInterval(countdownSending.timer);
+      setCountdownSending(null);
+      triggerToast('⏹️ Envío cancelado.');
+      return;
     }
+
+    // Iniciar cuenta regresiva de 3 segundos para confirmación / arrepentimiento
+    let seconds = 3;
+    const timer = setInterval(async () => {
+      seconds -= 1;
+      if (seconds > 0) {
+        setCountdownSending({ contactId: contact.id, secondsLeft: seconds, timer });
+      } else {
+        clearInterval(timer);
+        setCountdownSending(null);
+        setSendingId(contact.id);
+        try {
+          const ok = await onSendDirectWA(
+            phone,
+            text,
+            contact.id,
+            contact.primerNombre || contact.nombre || `Contacto #${contact.id}`,
+            contact.barrio
+          );
+          if (ok) {
+            setSentSuccessIds((prev) => new Set(prev).add(contact.id));
+            triggerToast(`✅ Mensaje enviado a ${contact.primerNombre || contact.nombre}`);
+          }
+        } finally {
+          setSendingId(null);
+        }
+      }
+    }, 1000);
+
+    setCountdownSending({ contactId: contact.id, secondsLeft: 3, timer });
   };
 
   const handleMarkFichasParada = async (contact: Contact, cant: 1 | 2 | 3) => {
@@ -314,6 +523,88 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     triggerToast(
       `✓ ${contact.primerNombre || contact.nombre}: Firmó y se dejaron X${cant} fichas (retiro en 1 semana)`
     );
+  };
+
+  const handleSyncConfirmedRouteToCalendar = async () => {
+    const bloquesConConfirmados = bloquesFiltrados.filter((b) =>
+      b.contactosIncluidos.some((c) => esConfirmadoParaHojaDeRuta(c))
+    );
+    if (bloquesConConfirmados.length === 0) {
+      triggerToast('⚠️ No hay citas confirmadas 1-a-1 en este día para bloquear en Calendar.');
+      return;
+    }
+
+    setSyncingCalendarRoute(true);
+    try {
+      const eventsPayload = bloquesConConfirmados.map((b) => {
+        const confirmados = b.contactosIncluidos.filter((c) => esConfirmadoParaHojaDeRuta(c));
+        const paradasConf = (b.paradasRutaSugerida || []).filter((p) =>
+          esConfirmadoParaHojaDeRuta(p.contact)
+        );
+        const mRange = (b.franjaHoraria || '').match(/(\d{1,2}:\d{2})\s*a\s*(\d{1,2}:\d{2})/);
+        const startHHMM = paradasConf[0]?.horaSalida || (mRange ? mRange[1] : '11:00');
+        const endHHMM =
+          paradasConf[paradasConf.length - 1]?.horaFinVisita || (mRange ? mRange[2] : '13:00');
+        const padHHMM = (s: string) => {
+          const [hh, mm] = s.split(':');
+          return `${String(hh || '11').padStart(2, '0')}:${String(mm || '00').padStart(2, '0')}`;
+        };
+        const sTime = padHHMM(startHHMM);
+        const eTime = padHHMM(endHHMM);
+
+        // Extraer DD/MM de diaEtiqueta (ej: "MAÑANA · Martes 03/11")
+        const mDate = (b.diaEtiqueta || '').match(/(\d{1,2})\/(\d{1,2})/);
+        const yearNow = new Date().getFullYear();
+        const fechaISO = mDate
+          ? `${yearNow}-${String(mDate[2]).padStart(2, '0')}-${String(mDate[1]).padStart(2, '0')}`
+          : new Date().toISOString().slice(0, 10);
+
+        const descLines = confirmados.map((c) => {
+          const p = paradasConf.find((pr) => pr.contact.id === c.id);
+          const hora = p ? `${p.horaLlegada} hs: ` : '';
+          return `• ${hora}#${c.id} ${c.nombreCompletoCorregido || c.nombre} (${c.calleOCruce || c.barrio})`;
+        });
+
+        return {
+          id: `route-${fechaISO}-${b.barrio.toLowerCase().replace(/\s+/g, '-')}`,
+          summary: `🏠 Recorrido Puerta a Puerta: ${b.barrio} (${confirmados.length} vecino${
+            confirmados.length === 1 ? '' : 's'
+          } confirmado${confirmados.length === 1 ? '' : 's'})`,
+          location: b.puntoEncuentroODireccion || `${b.barrio}, CABA`,
+          description: `Ruta Casa x Casa en ${b.barrio}:\n${descLines.join('\n')}`,
+          fecha: b.diaEtiqueta,
+          fechaISO,
+          startTime: sTime,
+          endTime: eTime,
+          startIso: `${fechaISO}T${sTime}:00-03:00`,
+          endIso: `${fechaISO}T${eTime}:00-03:00`,
+        };
+      });
+
+      const res = await fetch('/api/calendar/sync-route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: eventsPayload }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        if (Array.isArray(data.templateUrls)) {
+          setCalendarQuickLinks(data.templateUrls);
+        }
+        onRefreshCorte();
+        triggerToast(
+          data.method === 'gcalendar_cli' || data.method === 'apps_script'
+            ? `📅 ¡${eventsPayload.length} bloque(s) de ruta agendados en Google Calendar y bloqueados en la App!`
+            : `📅 ¡${eventsPayload.length} bloque(s) bloqueados en la Agenda de la App! Podés abrirlos en 1 clic en Google Calendar.`
+        );
+      } else {
+        triggerToast(`⚠️ ${data.error || 'No se pudo sincronizar la ruta con el calendario'}`);
+      }
+    } catch {
+      triggerToast('⚠️ Error de red al sincronizar la ruta con el calendario.');
+    } finally {
+      setSyncingCalendarRoute(false);
+    }
   };
 
   return (
@@ -395,10 +686,89 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
         </div>
       </div>
 
-      {/* 2. SECCIÓN PRIORITARIA SIEMPRE ARRIBA: Citas Vencidas / Sin Confirmar para Reprogramar */}
+      {/* 2. Selector de Día Operativo + Sincronización de Ruta con Google Calendar (SIEMPRE ARRIBA) */}
+      {diasUnicos.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-[#323232] bg-white px-4 py-3 shadow-[3px_3px_0px_#323232]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold font-display uppercase text-[#5A5955] mr-1">
+              Día del recorrido:
+            </span>
+            {diasUnicos.map((dia) => {
+              const isSelected = selectedDia === dia;
+              const esHoy = /hoy/i.test(dia);
+
+              return (
+                <button
+                  key={dia}
+                  type="button"
+                  onClick={() => setSelectedDia(dia)}
+                  className={`inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-3.5 py-1.5 text-xs font-bold font-display transition-all ${
+                    isSelected
+                      ? 'bg-[#FFF06B] text-[#323232] shadow-[2px_2px_0px_#323232]'
+                      : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
+                  }`}
+                >
+                  {esHoy && (
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#FF2C00] border border-[#323232]" />
+                  )}
+                  {dia}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setSelectedDia('Todos')}
+              className={`rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition ${
+                selectedDia === 'Todos'
+                  ? 'bg-[#323232] text-[#FFF06B]'
+                  : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
+              }`}
+            >
+              Todos los días ({bloques.length})
+            </button>
+          </div>
+
+          {totalConfirmadosDiaSeleccionado > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSyncConfirmedRouteToCalendar}
+                disabled={syncingCalendarRoute}
+                className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-emerald-200 px-3.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-300 transition shadow-[2px_2px_0px_#323232]"
+                title="Bloquear las franjas de este recorrido confirmado en el Calendario de la App y Google Calendar"
+              >
+                <Calendar className="h-3.5 w-3.5" />
+                <span>
+                  {syncingCalendarRoute
+                    ? 'Sincronizando Calendar...'
+                    : `📅 Agendar Ruta en Calendar (${totalConfirmadosDiaSeleccionado} conf.)`}
+                </span>
+              </button>
+              {calendarQuickLinks.map((lnk, idx) => (
+                <a
+                  key={idx}
+                  href={lnk.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#DFF4FF] px-2.5 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#29B8FF]"
+                  title={`Abrir "${lnk.summary}" en Google Calendar Web`}
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  <span>GCal #{idx + 1}</span>
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. SECCIÓN COLAPSABLE: Citas Vencidas / Sin Confirmar para Reprogramar */}
       {alertasVencidos.length > 0 && (
-        <div className="rounded-2xl border-2 border-[#323232] bg-[#F5817F]/25 p-4 sm:p-5 shadow-[4px_4px_0px_#323232] space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="rounded-2xl border-2 border-[#323232] bg-[#F5817F]/25 p-3.5 sm:p-4 shadow-[3px_3px_0px_#323232] space-y-3">
+          <div
+            onClick={() => setShowVencidosSection((prev) => !prev)}
+            className="flex cursor-pointer flex-wrap items-center justify-between gap-2"
+          >
             <div className="flex items-center gap-2">
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border-2 border-[#323232] bg-[#FF2C00] text-white">
                 <AlertCircle className="h-4 w-4" />
@@ -408,130 +778,97 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                   ⚠️ Prioridad 1: Citas Vencidas o Sin Concretar ({alertasVencidos.length})
                 </h3>
                 <p className="text-xs font-medium text-[#323232]/80">
-                  Vecinos con fecha/hora pasada que aún no figuran como &ldquo;Adhirió: Sí&rdquo;. Enviá disculpas y reprogramá en 1 clic.
+                  Vecinos con fecha/hora pasada sin concretar. Tocá para {showVencidosSection ? 'ocultar' : 'desplegar y reprogramar'}.
                 </p>
               </div>
             </div>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-3 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#FFF06B]"
+            >
+              <span>{showVencidosSection ? 'Ocultar vencidas' : `Ver ${alertasVencidos.length} vencidas`}</span>
+              {showVencidosSection ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {alertasVencidos.slice(0, 6).map((c) => {
-              const phone = c.tel || c.telRaw || c.telWA || '';
-              const msgDisculpas =
-                c.alertaVencido?.mensajeDisculpasReprogramacion || c.mensajeSugerido || '';
-              const waLink = crearEnlaceWhatsApp(phone, msgDisculpas);
+          {showVencidosSection && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+              {alertasVencidos.slice(0, 6).map((c) => {
+                const phone = c.tel || c.telRaw || c.telWA || '';
+                const msgDisculpas =
+                  c.alertaVencido?.mensajeDisculpasReprogramacion || c.mensajeSugerido || '';
+                const waLink = crearEnlaceWhatsApp(phone, msgDisculpas);
 
-              return (
-                <div
-                  key={c.id}
-                  className="rounded-xl border-2 border-[#323232] bg-white p-3.5 shadow-[2px_2px_0px_#323232] flex flex-col justify-between gap-2.5"
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-display text-xs font-bold text-[#323232]">
-                        #{c.id} {c.nombreCompletoCorregido || c.nombre} ({c.barrio})
-                      </span>
-                      <span className="rounded bg-[#FF2C00] px-2 py-0.5 text-[10px] font-bold text-white">
-                        {c.alertaVencido?.fechaVencida || 'Vencido'}
-                      </span>
+                return (
+                  <div
+                    key={c.id}
+                    className="rounded-xl border-2 border-[#323232] bg-white p-3.5 shadow-[2px_2px_0px_#323232] flex flex-col justify-between gap-2.5"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-display text-xs font-bold text-[#323232]">
+                          #{c.id} {c.nombreCompletoCorregido || c.nombre} ({c.barrio})
+                        </span>
+                        <span className="rounded bg-[#FF2C00] px-2 py-0.5 text-[10px] font-bold text-white">
+                          {c.alertaVencido?.fechaVencida || 'Vencido'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] font-semibold text-[#5A5955] mt-1">
+                        📍 {c.calleOCruce || c.comentario}
+                      </p>
                     </div>
-                    <p className="text-[11px] font-semibold text-[#5A5955] mt-1">
-                      📍 {c.calleOCruce || c.comentario}
-                    </p>
-                  </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    {onSendDirectWA && phone && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      {onSendDirectWA && phone && (
+                        <button
+                          type="button"
+                          onClick={() => handleSendWA(c, msgDisculpas)}
+                          disabled={sendingId === c.id}
+                          className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838]"
+                        >
+                          <Send className="h-3 w-3" />
+                          <span>Enviar Disculpas + Reprogramar</span>
+                        </button>
+                      )}
+                      <a
+                        href={waLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2.5 py-1 text-xs font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        <span>wa.me</span>
+                      </a>
                       <button
                         type="button"
-                        onClick={() => handleSendWA(c, msgDisculpas)}
-                        disabled={sendingId === c.id}
-                        className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838]"
+                        onClick={() =>
+                          onUpdateContact(c.id, {
+                            adhirio: 'Sí',
+                            rsp: 'Sí',
+                            estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+                          })
+                        }
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-950"
                       >
-                        <Send className="h-3 w-3" />
-                        <span>Enviar Disculpas + Reprogramar</span>
+                        <CheckCircle2 className="h-3 w-3" />
+                        <span>Ya Firmó</span>
                       </button>
-                    )}
-                    <a
-                      href={waLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2.5 py-1 text-xs font-bold text-[#323232] hover:bg-[#ECEAE2]"
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                      <span>wa.me</span>
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onUpdateContact(c.id, {
-                          adhirio: 'Sí',
-                          rsp: 'Sí',
-                          estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
-                        })
-                      }
-                      className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-950"
-                    >
-                      <CheckCircle2 className="h-3 w-3" />
-                      <span>Ya Firmó</span>
-                    </button>
-                    {onJumpToCandidate && (
-                      <button
-                        type="button"
-                        onClick={() => onJumpToCandidate(c.id)}
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232]/40 bg-white px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
-                      >
-                        <span>Editar</span>
-                        <ArrowRight className="h-3 w-3" />
-                      </button>
-                    )}
+                      {onJumpToCandidate && (
+                        <button
+                          type="button"
+                          onClick={() => onJumpToCandidate(c.id)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-[#323232]/40 bg-white px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                        >
+                          <span>Editar</span>
+                          <ArrowRight className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* 3. Selector de Día Operativo */}
-      {diasUnicos.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 border-b-2 border-[#323232]/20 pb-3">
-          <span className="text-xs font-bold font-display uppercase text-[#5A5955] mr-1">
-            Día del recorrido:
-          </span>
-          {diasUnicos.map((dia) => {
-            const isSelected = selectedDia === dia;
-            const esHoy = /hoy/i.test(dia);
-
-            return (
-              <button
-                key={dia}
-                type="button"
-                onClick={() => setSelectedDia(dia)}
-                className={`inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-3.5 py-1.5 text-xs font-bold font-display transition-all ${
-                  isSelected
-                    ? 'bg-[#FFF06B] text-[#323232] shadow-[2px_2px_0px_#323232]'
-                    : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
-                }`}
-              >
-                {esHoy && (
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#FF2C00] border border-[#323232]" />
-                )}
-                {dia}
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => setSelectedDia('Todos')}
-            className={`rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition ${
-              selectedDia === 'Todos'
-                ? 'bg-[#323232] text-[#FFF06B]'
-                : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
-            }`}
-          >
-            Todos los días ({bloques.length})
-          </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -581,12 +918,12 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
               activeSubMode === 'terreno'
                 ? bloque.contactosIncluidos.filter((c) => esConfirmadoParaHojaDeRuta(c))
                 : bloque.contactosIncluidos;
-            const modalidadActiva = bloqueModalidadOverride[bloque.id] || bloque.modalidad;
+            const modalidadActiva = getModalidadOver(bloque) || bloque.modalidad;
             const esCafe = modalidadActiva === 'CAFE_HUB';
             const esSede =
               modalidadActiva === 'EVENTO_SEDE' || modalidadActiva === 'ENCUENTRO_SEDE';
             const cafeUnicoCircuito =
-              bloqueCafeOverride[bloque.id] || bloque.cafesHubOpciones?.[0];
+              getCafeOver(bloque) || bloque.cafesHubOpciones?.[0];
 
             return (
               <div
@@ -695,6 +1032,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                   setBloqueModalidadOverride((prev) => ({
                                     ...prev,
                                     [bloque.id]: 'PUERTA_A_PUERTA',
+                                    [getBloqueOverrideKey(bloque)]: 'PUERTA_A_PUERTA',
                                   }))
                                 }
                                 className={`inline-flex items-center gap-1.5 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display ${
@@ -711,13 +1049,14 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                   </span>
                                 )}
                               </button>
-                              {bloque.contactosIncluidos.length >= 2 && (
+                              {bloque.cafesHubOpciones && bloque.cafesHubOpciones.length > 0 && (
                                 <button
                                   type="button"
                                   onClick={() =>
                                     setBloqueModalidadOverride((prev) => ({
                                       ...prev,
                                       [bloque.id]: 'CAFE_HUB',
+                                      [getBloqueOverrideKey(bloque)]: 'CAFE_HUB',
                                     }))
                                   }
                                   className={`inline-flex items-center gap-1.5 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display ${
@@ -751,12 +1090,14 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                       (cf) => cf.nombre === e.target.value
                                     );
                                     if (found) {
+                                      const val = {
+                                        nombre: found.nombre,
+                                        direccion: found.direccion,
+                                      };
                                       setBloqueCafeOverride((prev) => ({
                                         ...prev,
-                                        [bloque.id]: {
-                                          nombre: found.nombre,
-                                          direccion: found.direccion,
-                                        },
+                                        [bloque.id]: val,
+                                        [getBloqueOverrideKey(bloque)]: val,
                                       }));
                                     }
                                   }}
@@ -805,11 +1146,16 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                             const waLink = crearEnlaceWhatsApp(phone, textoProp);
                             const paradaRef = todasParadas.find((p) => p.contact.id === contact.id);
                             const yaConfirmado = esConfirmadoParaHojaDeRuta(contact);
+                            const isEditingConfirmed = Boolean(editingConfirmedIds[contact.id]);
 
                             return (
                               <div
                                 key={contact.id}
-                                className="rounded-2xl border-2 border-[#323232] bg-white p-4 shadow-[2px_2px_0px_#323232] space-y-3"
+                                className={`rounded-2xl border-2 p-4 shadow-[2px_2px_0px_#323232] space-y-3 transition-colors ${
+                                  yaConfirmado
+                                    ? 'border-emerald-700 bg-emerald-50/60'
+                                    : 'border-[#323232] bg-white'
+                                }`}
                               >
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                   <div className="flex items-center gap-2 flex-wrap">
@@ -824,7 +1170,8 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                     </span>
                                     {paradaRef && (
                                       <span className="rounded-md bg-[#FFF06B] px-2 py-0.5 font-mono text-xs font-bold text-[#323232] border border-[#323232]">
-                                        Horario sugerido: {paradaRef.horaLlegada} hs
+                                        {yaConfirmado ? 'Horario en Ruta:' : 'Horario sugerido:'}{' '}
+                                        {paradaRef.horaLlegada} hs
                                       </span>
                                     )}
                                     {contact.alertaVencido?.activa && (
@@ -833,7 +1180,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                       </span>
                                     )}
                                     {yaConfirmado ? (
-                                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-900 border border-[#323232]">
+                                      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-0.5 text-xs font-bold text-white border border-[#323232] shadow-[1px_1px_0px_#323232]">
                                         ✓ Confirmado 1-a-1 (En Hoja de Ruta)
                                       </span>
                                     ) : (
@@ -859,151 +1206,375 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                   Comentario: &ldquo;{contact.comentario || 'Sin comentario'}&rdquo;
                                 </p>
 
-                                {/* Textarea editable de la propuesta */}
-                                <textarea
-                                  rows={3}
-                                  value={textoProp}
-                                  onChange={(e) =>
-                                    setPropuestaTexts((prev) => ({
-                                      ...prev,
-                                      [key]: e.target.value,
-                                    }))
-                                  }
-                                  className="w-full rounded-xl border-2 border-[#323232] bg-[#F5F4F0] p-2.5 text-xs font-medium text-[#323232]"
-                                />
-
-                                {/* Botonera de Envío de Propuesta + Consolidación de Respuesta */}
-                                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    {onSendDirectWA && phone && (
+                                {yaConfirmado && !isEditingConfirmed ? (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-emerald-700 bg-emerald-100/80 px-3.5 py-2.5">
+                                    <span className="text-xs font-bold text-emerald-950">
+                                      ✅ Cita confirmada y sincronizada con Candidatos y con 2. Hoja de Ruta en Terreno.
+                                    </span>
+                                    <div className="flex flex-wrap items-center gap-2">
                                       <button
                                         type="button"
-                                        onClick={() => handleSendWA(contact, textoProp)}
-                                        disabled={sendingId === contact.id}
-                                        className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[2px_2px_0px_#323232]"
+                                        onClick={() => setActiveSubMode('terreno')}
+                                        className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#29B8FF] px-3 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#1aa8f0] shadow-[2px_2px_0px_#323232]"
                                       >
-                                        <Send className="h-3.5 w-3.5" />
-                                        <span>
-                                          {sendingId === contact.id
-                                            ? 'Enviando...'
-                                            : '⚡ Enviar Propuesta WA'}
-                                        </span>
+                                        <Navigation className="h-3.5 w-3.5" />
+                                        <span>🚶‍♂️ Ver en 2. Hoja de Ruta en Terreno</span>
                                       </button>
-                                    )}
-                                    <a
-                                      href={waLink}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#ECEAE2]"
-                                    >
-                                      <ExternalLink className="h-3.5 w-3.5" />
-                                      <span>wa.me</span>
-                                    </a>
-                                  </div>
-
-                                  {/* Botones de Consolidación 1-a-1 */}
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleConsolidarRespuestaPlanificador(
-                                          contact,
-                                          bloque,
-                                          'CONFIRMO_PROPUESTA'
-                                        )
-                                      }
-                                      className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200"
-                                    >
-                                      <CheckCircle2 className="h-3.5 w-3.5" />
-                                      <span>✓ Confirmó Cita</span>
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleConsolidarRespuestaPlanificador(
-                                          contact,
-                                          bloque,
-                                          'DECLINO_CAFE_PASA_PUERTA_A_PUERTA'
-                                        )
-                                      }
-                                      className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#DFF4FF] px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#29B8FF]"
-                                    >
-                                      <Home className="h-3.5 w-3.5" />
-                                      <span>Pasa a Domicilio</span>
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleConsolidarRespuestaPlanificador(
-                                          contact,
-                                          bloque,
-                                          'PASA_A_CAFE_HUB'
-                                        )
-                                      }
-                                      className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#FFF06B]/60 px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]"
-                                    >
-                                      <Coffee className="h-3.5 w-3.5" />
-                                      <span>Va al Café</span>
-                                    </button>
-
-                                    {yaConfirmado && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          abrirEdicionPlanContacto(contact, bloque, paradaRef)
+                                        }
+                                        className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[1px_1px_0px_#323232]"
+                                      >
+                                        <span>✏️ Cambiar Planificación (Día / Hora / Lugar)</span>
+                                      </button>
                                       <button
                                         type="button"
                                         onClick={() => handleQuitarConfirmacionPlanificador(contact)}
-                                        className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#FF2C00] hover:bg-[#F5817F]/20"
+                                        className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#FF2C00] hover:bg-[#F5817F]/20"
                                         title="Quitar de la Hoja de Ruta en Terreno"
                                       >
                                         <span>↺ Quitar confirmación</span>
                                       </button>
-                                    )}
+                                    </div>
                                   </div>
-                                </div>
+                                ) : yaConfirmado && isEditingConfirmed ? (
+                                  <div className="rounded-xl border-2 border-[#323232] bg-white p-3.5 shadow-[3px_3px_0px_#323232] space-y-3">
+                                    <div className="flex items-center justify-between border-b border-[#323232]/20 pb-2">
+                                      <span className="text-xs font-bold font-display text-[#323232]">
+                                        ✏️ Modificar Planificación Confirmada de{' '}
+                                        {contact.primerNombre || contact.nombre}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setEditingConfirmedIds((prev) => ({
+                                            ...prev,
+                                            [contact.id]: false,
+                                          }))
+                                        }
+                                        className="rounded-lg border border-[#323232] bg-[#ECEAE2] px-2.5 py-0.5 text-[11px] font-bold text-[#323232] hover:bg-[#d8d5ca]"
+                                      >
+                                        ✕ Cerrar
+                                      </button>
+                                    </div>
 
-                                {/* Fila rápida para reprogramar día/hora puntual */}
-                                <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-[#323232]/15 text-xs">
-                                  <span className="font-bold text-[#5A5955]">
-                                    ¿Pidió otro día u horario?:
-                                  </span>
-                                  <input
-                                    type="text"
-                                    value={reprogFecha[contact.id] || ''}
-                                    onChange={(e) =>
-                                      setReprogFecha((prev) => ({
-                                        ...prev,
-                                        [contact.id]: e.target.value,
-                                      }))
-                                    }
-                                    placeholder="Día (ej: 24/10)"
-                                    className="w-28 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2 py-1 text-xs font-semibold"
-                                  />
-                                  <input
-                                    type="text"
-                                    value={reprogHora[contact.id] || ''}
-                                    onChange={(e) =>
-                                      setReprogHora((prev) => ({
-                                        ...prev,
-                                        [contact.id]: e.target.value,
-                                      }))
-                                    }
-                                    placeholder="Hora (ej: 16:30)"
-                                    className="w-28 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2 py-1 text-xs font-semibold"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleConsolidarRespuestaPlanificador(
-                                        contact,
-                                        bloque,
-                                        'REPROGRAMAR_DIA_HORA'
-                                      )
-                                    }
-                                    className="rounded-lg border border-[#323232] bg-[#323232] px-2.5 py-1 text-xs font-bold text-[#FFF06B]"
-                                  >
-                                    Guardar Nuevo Horario
-                                  </button>
-                                </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                          Día (DD/MM):
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={reprogFecha[contact.id] ?? ''}
+                                          onChange={(e) =>
+                                            setReprogFecha((prev) => ({
+                                              ...prev,
+                                              [contact.id]: e.target.value,
+                                            }))
+                                          }
+                                          placeholder="Ej: 03/11"
+                                          className="w-full rounded-lg border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                          Hora puntual (HH:MM):
+                                        </label>
+                                        <input
+                                          type="text"
+                                          value={reprogHora[contact.id] ?? ''}
+                                          onChange={(e) =>
+                                            setReprogHora((prev) => ({
+                                              ...prev,
+                                              [contact.id]: e.target.value,
+                                            }))
+                                          }
+                                          placeholder="Ej: 12:00"
+                                          className="w-full rounded-lg border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                          Modalidad del encuentro:
+                                        </label>
+                                        <select
+                                          value={reprogModalidad[contact.id] || 'PUERTA_A_PUERTA'}
+                                          onChange={(e) =>
+                                            setReprogModalidad((prev) => ({
+                                              ...prev,
+                                              [contact.id]: e.target.value as
+                                                | 'PUERTA_A_PUERTA'
+                                                | 'CAFE_HUB',
+                                            }))
+                                          }
+                                          className="w-full rounded-lg border-2 border-[#323232] bg-[#FFF06B]/50 px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                        >
+                                          <option value="PUERTA_A_PUERTA">
+                                            🏠 Pasar por su Domicilio
+                                          </option>
+                                          <option value="CAFE_HUB">
+                                            ☕ Encuentro en Café Hub
+                                          </option>
+                                        </select>
+                                      </div>
+
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                          {(reprogModalidad[contact.id] || 'PUERTA_A_PUERTA') ===
+                                          'CAFE_HUB'
+                                            ? 'Café elegido:'
+                                            : 'Dirección / Esquina:'}
+                                        </label>
+                                        {(reprogModalidad[contact.id] || 'PUERTA_A_PUERTA') ===
+                                          'CAFE_HUB' &&
+                                        bloque.cafesHubOpciones &&
+                                        bloque.cafesHubOpciones.length > 0 ? (
+                                          <select
+                                            value={
+                                              reprogCafe[contact.id] ||
+                                              `${bloque.cafesHubOpciones[0].nombre} (${
+                                                bloque.cafesHubOpciones[0].direccion.split(',')[0]
+                                              })`
+                                            }
+                                            onChange={(e) =>
+                                              setReprogCafe((prev) => ({
+                                                ...prev,
+                                                [contact.id]: e.target.value,
+                                              }))
+                                            }
+                                            className="w-full rounded-lg border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                          >
+                                            {bloque.cafesHubOpciones.map((cf) => {
+                                              const val = `${cf.nombre} (${
+                                                cf.direccion.split(',')[0]
+                                              })`;
+                                              return (
+                                                <option key={cf.nombre} value={val}>
+                                                  {val}
+                                                </option>
+                                              );
+                                            })}
+                                          </select>
+                                        ) : (
+                                          <input
+                                            type="text"
+                                            value={reprogDireccion[contact.id] ?? ''}
+                                            onChange={(e) =>
+                                              setReprogDireccion((prev) => ({
+                                                ...prev,
+                                                [contact.id]: e.target.value,
+                                              }))
+                                            }
+                                            placeholder="Calle y altura o esquina"
+                                            className="w-full rounded-lg border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                          />
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          await handleConsolidarRespuestaPlanificador(
+                                            contact,
+                                            bloque,
+                                            'REPROGRAMAR_DIA_HORA',
+                                            paradaRef
+                                          );
+                                          setEditingConfirmedIds((prev) => ({
+                                            ...prev,
+                                            [contact.id]: false,
+                                          }));
+                                        }}
+                                        className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-emerald-300 px-3.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-emerald-400 shadow-[2px_2px_0px_#323232]"
+                                      >
+                                        <CheckCircle2 className="h-3.5 w-3.5" />
+                                        <span>💾 Guardar Nueva Planificación Confirmada</span>
+                                      </button>
+
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuitarConfirmacionPlanificador(contact)}
+                                        className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#FF2C00] hover:bg-[#F5817F]/20"
+                                      >
+                                        <span>↺ Volver a Pendiente de Confirmar</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <>
+                                    {/* Textarea editable de la propuesta (SÓLO para contactos aún NO confirmados) */}
+                                    <textarea
+                                      rows={3}
+                                      value={textoProp}
+                                      onChange={(e) =>
+                                        setPropuestaTexts((prev) => ({
+                                          ...prev,
+                                          [key]: e.target.value,
+                                        }))
+                                      }
+                                      className="w-full rounded-xl border-2 border-[#323232] bg-[#F5F4F0] p-2.5 text-xs font-medium text-[#323232]"
+                                    />
+
+                                    {/* Botonera de Envío de Propuesta + Consolidación de Respuesta */}
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        {onSendDirectWA && phone && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleSendWA(contact, textoProp)}
+                                            disabled={sendingId === contact.id}
+                                            className={`inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${
+                                              countdownSending?.contactId === contact.id
+                                                ? 'bg-amber-400 text-[#323232] animate-pulse hover:bg-amber-500'
+                                                : sentSuccessIds.has(contact.id)
+                                                ? 'bg-emerald-200 text-emerald-900 border-emerald-700'
+                                                : 'bg-[#FFF06B] text-[#323232] hover:bg-[#ffe838]'
+                                            }`}
+                                            title={countdownSending?.contactId === contact.id ? 'Click para cancelar el envío' : ''}
+                                          >
+                                            <Send className="h-3.5 w-3.5" />
+                                            <span>
+                                              {sendingId === contact.id
+                                                ? 'Enviando...'
+                                                : countdownSending?.contactId === contact.id
+                                                ? `⏳ Enviar en ${countdownSending.secondsLeft}s (Cancelar)`
+                                                : sentSuccessIds.has(contact.id)
+                                                ? '✅ Enviado'
+                                                : '⚡ Enviar Propuesta WA'}
+                                            </span>
+                                          </button>
+                                        )}
+                                        <a
+                                          href={waLink}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                                        >
+                                          <ExternalLink className="h-3.5 w-3.5" />
+                                          <span>wa.me</span>
+                                        </a>
+                                      </div>
+
+                                      {/* Botones de Consolidación 1-a-1 */}
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            handleConsolidarRespuestaPlanificador(
+                                              contact,
+                                              bloque,
+                                              'CONFIRMO_PROPUESTA',
+                                              paradaRef
+                                            );
+                                            setEditingConfirmedIds((prev) => ({
+                                              ...prev,
+                                              [contact.id]: false,
+                                            }));
+                                          }}
+                                          className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200"
+                                        >
+                                          <CheckCircle2 className="h-3.5 w-3.5" />
+                                          <span>✓ Confirmó Cita</span>
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            handleConsolidarRespuestaPlanificador(
+                                              contact,
+                                              bloque,
+                                              'DECLINO_CAFE_PASA_PUERTA_A_PUERTA',
+                                              paradaRef
+                                            );
+                                            setEditingConfirmedIds((prev) => ({
+                                              ...prev,
+                                              [contact.id]: false,
+                                            }));
+                                          }}
+                                          className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#DFF4FF] px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#29B8FF]"
+                                        >
+                                          <Home className="h-3.5 w-3.5" />
+                                          <span>Pasa a Domicilio</span>
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            handleConsolidarRespuestaPlanificador(
+                                              contact,
+                                              bloque,
+                                              'PASA_A_CAFE_HUB',
+                                              paradaRef
+                                            );
+                                            setEditingConfirmedIds((prev) => ({
+                                              ...prev,
+                                              [contact.id]: false,
+                                            }));
+                                          }}
+                                          className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#FFF06B]/60 px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]"
+                                        >
+                                          <Coffee className="h-3.5 w-3.5" />
+                                          <span>Va al Café</span>
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Fila rápida para reprogramar día/hora puntual */}
+                                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-[#323232]/15 text-xs">
+                                      <span className="font-bold text-[#5A5955]">
+                                        ¿Pidió otro día u horario?:
+                                      </span>
+                                      <input
+                                        type="text"
+                                        value={reprogFecha[contact.id] || ''}
+                                        onChange={(e) =>
+                                          setReprogFecha((prev) => ({
+                                            ...prev,
+                                            [contact.id]: e.target.value,
+                                          }))
+                                        }
+                                        placeholder="Día (ej: 04/11)"
+                                        className="w-28 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2 py-1 text-xs font-semibold"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={reprogHora[contact.id] || ''}
+                                        onChange={(e) =>
+                                          setReprogHora((prev) => ({
+                                            ...prev,
+                                            [contact.id]: e.target.value,
+                                          }))
+                                        }
+                                        placeholder="Hora (ej: 16:30)"
+                                        className="w-28 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2 py-1 text-xs font-semibold"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          handleConsolidarRespuestaPlanificador(
+                                            contact,
+                                            bloque,
+                                            'REPROGRAMAR_DIA_HORA',
+                                            paradaRef
+                                          );
+                                          setEditingConfirmedIds((prev) => ({
+                                            ...prev,
+                                            [contact.id]: false,
+                                          }));
+                                        }}
+                                        className="rounded-lg border border-[#323232] bg-[#323232] px-2.5 py-1 text-xs font-bold text-[#FFF06B]"
+                                      >
+                                        Guardar y Confirmar Horario
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             );
                           })}
@@ -1125,13 +1696,182 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                           <span>Sin confirmar (Desbloquear En Camino)</span>
                                         </button>
                                       ) : (
-                                        <span className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold text-emerald-950">
-                                          <Unlock className="h-3.5 w-3.5 text-emerald-700" />
-                                          <span>Cita Confirmada</span>
-                                        </span>
+                                        <>
+                                          <span className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold text-emerald-950">
+                                            <Unlock className="h-3.5 w-3.5 text-emerald-700" />
+                                            <span>Cita Confirmada</span>
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              editingConfirmedIds[c.id]
+                                                ? setEditingConfirmedIds((prev) => ({
+                                                    ...prev,
+                                                    [c.id]: false,
+                                                  }))
+                                                : abrirEdicionPlanContacto(c, bloque, parada)
+                                            }
+                                            className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[2px_2px_0px_#323232]"
+                                          >
+                                            <span>
+                                              {editingConfirmedIds[c.id]
+                                                ? '✕ Cerrar Edición'
+                                                : '✏️ Cambiar Plan / Horario'}
+                                            </span>
+                                          </button>
+                                        </>
                                       )}
                                     </div>
                                   </div>
+
+                                  {editingConfirmedIds[c.id] && (
+                                    <div className="rounded-xl border-2 border-[#323232] bg-[#FFF06B]/20 p-3.5 space-y-3">
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                                        <div>
+                                          <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                            Día (DD/MM):
+                                          </label>
+                                          <input
+                                            type="text"
+                                            value={reprogFecha[c.id] ?? ''}
+                                            onChange={(e) =>
+                                              setReprogFecha((prev) => ({
+                                                ...prev,
+                                                [c.id]: e.target.value,
+                                              }))
+                                            }
+                                            placeholder="Ej: 03/11"
+                                            className="w-full rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                          />
+                                        </div>
+
+                                        <div>
+                                          <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                            Hora puntual (HH:MM):
+                                          </label>
+                                          <input
+                                            type="text"
+                                            value={reprogHora[c.id] ?? ''}
+                                            onChange={(e) =>
+                                              setReprogHora((prev) => ({
+                                                ...prev,
+                                                [c.id]: e.target.value,
+                                              }))
+                                            }
+                                            placeholder="Ej: 12:00"
+                                            className="w-full rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                          />
+                                        </div>
+
+                                        <div>
+                                          <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                            Modalidad:
+                                          </label>
+                                          <select
+                                            value={reprogModalidad[c.id] || 'PUERTA_A_PUERTA'}
+                                            onChange={(e) =>
+                                              setReprogModalidad((prev) => ({
+                                                ...prev,
+                                                [c.id]: e.target.value as
+                                                  | 'PUERTA_A_PUERTA'
+                                                  | 'CAFE_HUB',
+                                              }))
+                                            }
+                                            className="w-full rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                          >
+                                            <option value="PUERTA_A_PUERTA">
+                                              🏠 Pasar por su Domicilio
+                                            </option>
+                                            <option value="CAFE_HUB">
+                                              ☕ Encuentro en Café Hub
+                                            </option>
+                                          </select>
+                                        </div>
+
+                                        <div>
+                                          <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
+                                            {(reprogModalidad[c.id] || 'PUERTA_A_PUERTA') ===
+                                            'CAFE_HUB'
+                                              ? 'Café elegido:'
+                                              : 'Dirección / Esquina:'}
+                                          </label>
+                                          {(reprogModalidad[c.id] || 'PUERTA_A_PUERTA') ===
+                                            'CAFE_HUB' &&
+                                          bloque.cafesHubOpciones &&
+                                          bloque.cafesHubOpciones.length > 0 ? (
+                                            <select
+                                              value={
+                                                reprogCafe[c.id] ||
+                                                `${bloque.cafesHubOpciones[0].nombre} (${
+                                                  bloque.cafesHubOpciones[0].direccion.split(',')[0]
+                                                })`
+                                              }
+                                              onChange={(e) =>
+                                                setReprogCafe((prev) => ({
+                                                  ...prev,
+                                                  [c.id]: e.target.value,
+                                                }))
+                                              }
+                                              className="w-full rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                            >
+                                              {bloque.cafesHubOpciones.map((cf) => {
+                                                const val = `${cf.nombre} (${
+                                                  cf.direccion.split(',')[0]
+                                                })`;
+                                                return (
+                                                  <option key={cf.nombre} value={val}>
+                                                    {val}
+                                                  </option>
+                                                );
+                                              })}
+                                            </select>
+                                          ) : (
+                                            <input
+                                              type="text"
+                                              value={reprogDireccion[c.id] ?? ''}
+                                              onChange={(e) =>
+                                                setReprogDireccion((prev) => ({
+                                                  ...prev,
+                                                  [c.id]: e.target.value,
+                                                }))
+                                              }
+                                              placeholder="Calle y altura o esquina"
+                                              className="w-full rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                                            />
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            await handleConsolidarRespuestaPlanificador(
+                                              c,
+                                              bloque,
+                                              'REPROGRAMAR_DIA_HORA',
+                                              parada
+                                            );
+                                            setEditingConfirmedIds((prev) => ({
+                                              ...prev,
+                                              [c.id]: false,
+                                            }));
+                                          }}
+                                          className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-emerald-300 px-3.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-emerald-400 shadow-[2px_2px_0px_#323232]"
+                                        >
+                                          <CheckCircle2 className="h-3.5 w-3.5" />
+                                          <span>💾 Guardar Cambio de Planificación</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleQuitarConfirmacionPlanificador(c)}
+                                          className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#FF2C00] hover:bg-[#F5817F]/20"
+                                        >
+                                          <span>↺ Quitar de Ruta Confirmada</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
 
                                   {/* Selector de los 8 Modos de Mensaje en Terreno + Edición del Mensaje */}
                                   <div className="rounded-xl border-2 border-[#323232]/40 bg-[#F5F4F0] p-3 space-y-2">
@@ -1187,12 +1927,23 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                             type="button"
                                             onClick={() => handleSendWA(c, textoActual)}
                                             disabled={sendingId === c.id}
-                                            className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ffe838] shadow-[2px_2px_0px_#323232]"
+                                            className={`inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-3.5 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${
+                                              countdownSending?.contactId === c.id
+                                                ? 'bg-amber-400 text-[#323232] animate-pulse hover:bg-amber-500'
+                                                : sentSuccessIds.has(c.id)
+                                                ? 'bg-emerald-200 text-emerald-900 border-emerald-700'
+                                                : 'bg-[#FFF06B] text-[#323232] hover:bg-[#ffe838]'
+                                            }`}
+                                            title={countdownSending?.contactId === c.id ? 'Click para cancelar el envío' : ''}
                                           >
                                             <Send className="h-3.5 w-3.5" />
                                             <span>
                                               {sendingId === c.id
                                                 ? 'Enviando...'
+                                                : countdownSending?.contactId === c.id
+                                                ? `⏳ Enviar en ${countdownSending.secondsLeft}s (Cancelar)`
+                                                : sentSuccessIds.has(c.id)
+                                                ? '✅ Enviado'
                                                 : whatsAppReady
                                                 ? '⚡ Enviar por WhatsApp Web'
                                                 : 'Enviar / Registrar WA'}

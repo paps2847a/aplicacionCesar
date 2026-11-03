@@ -58,6 +58,7 @@ import {
   procesarContacto,
   registrarEnvioMensajeContacto,
   sincronizarBarrioConDireccionComentario,
+  sumarDiasAFechaBA,
 } from './utils/logic';
 import { ModernNavbar, ModernTabType } from './components/layout/ModernNavbar';
 import { CandidatePipelineView } from './components/pipeline/CandidatePipelineView';
@@ -66,6 +67,8 @@ import { WhatsAppWebAutomationPanel } from './components/WhatsAppWebAutomationPa
 import { ModernSettingsView } from './components/config/ModernSettingsView';
 import { AutoFirstMessageModal } from './components/AutoFirstMessageModal';
 import { InteractiveMapPanel } from './components/InteractiveMapPanel';
+import { LoginModal, AppUserSession } from './components/auth/LoginModal';
+import { AdminDashboardView, VolunteerUser } from './components/admin/AdminDashboardView';
 
 const DEFAULT_SHEET_URL =
   'https://docs.google.com/spreadsheets/d/1IjsWFTYXnFZPo76GVbEKngG5ksU5ZLpwxddV1cj6F8k/edit?gid=1772654652#gid=1772654652';
@@ -157,9 +160,49 @@ const buscarCandidatoDeFichaEnPadron = (
 };
 
 export default function App() {
-  // 1. Navegación Principal y Foco de Contacto
+  // 1. Navegación Principal, Usuario Activo y Foco de Contacto
   const [activeTab, setActiveTab] = useState<ModernTabType>('pipeline');
   const [focusedContactId, setFocusedContactId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<AppUserSession>(() => {
+    try {
+      const saved = localStorage.getItem('popurri_current_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.username) return parsed;
+      }
+    } catch {}
+    return {
+      id: 'cesar',
+      username: 'cesar',
+      nombre: 'César Rincón',
+      role: 'volunteer',
+      barrioAsignado: 'Palermo',
+    };
+  });
+  const [showLoginModal, setShowLoginModal] = useState<boolean>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return Boolean(params.get('invite'));
+    } catch {
+      return false;
+    }
+  });
+  const [volunteersList, setVolunteersList] = useState<VolunteerUser[]>([
+    {
+      id: 'cesar',
+      username: 'cesar',
+      nombre: 'César Rincón',
+      role: 'volunteer',
+      telefono: '5491130730854',
+      barrioAsignado: 'Palermo',
+    },
+    {
+      id: 'admin',
+      username: 'admin',
+      nombre: 'Default / Admin (Coordinación)',
+      role: 'admin',
+    },
+  ]);
 
   // 2. Estado de Datos y Persistencia
   const [rawContacts, setRawContacts] = useState<RawContactRow[]>(() => INITIAL_RAW_CONTACTS);
@@ -189,6 +232,9 @@ export default function App() {
   const [copiedDailySummary, setCopiedDailySummary] = useState<boolean>(false);
   const [dailyStatusFilter, setDailyStatusFilter] = useState<EstatusReporteApp | 'TODOS'>('TODOS');
   const [adhesionesExtrasHoy, setAdhesionesExtrasHoy] = useState<number>(0);
+  const [selectedCierreDate, setSelectedCierreDate] = useState<string>(() => {
+    return obtenerPartesFechaHoraBA(Date.now()).isoDate;
+  });
   const [excluidosCierreHoyIds, setExcluidosCierreHoyIds] = useState<string[]>(() => {
     try {
       const hoyIso = obtenerPartesFechaHoraBA(Date.now()).isoDate;
@@ -282,6 +328,22 @@ export default function App() {
     };
   }, []);
 
+  const refreshVolunteers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/users');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.users) && data.users.length > 0) {
+          setVolunteersList(data.users);
+        }
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    void refreshVolunteers();
+  }, [refreshVolunteers]);
+
   // ----------------------------------------------------
   // MONITOR DE ESTADO EN VIVO DE WHATSAPP WEB
   // ----------------------------------------------------
@@ -289,7 +351,9 @@ export default function App() {
     let cancelled = false;
     const checkWA = async () => {
       try {
-        const res = await fetch('/api/whatsapp/status');
+        const res = await fetch(
+          `/api/whatsapp/status?userId=${encodeURIComponent(currentUser?.id || 'cesar')}`
+        );
         if (res.ok && !cancelled) {
           const d = await res.json();
           setWhatsAppStatus(d.status || 'DISCONNECTED');
@@ -304,14 +368,40 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [currentUser?.id]);
 
   // ----------------------------------------------------
   // DERIVADOS MEMOIZADOS (Dominio)
   // ----------------------------------------------------
   const contacts: Contact[] = useMemo(() => {
-    return rawContacts.map((r) => procesarContacto(r, profile, ahoraCorteMs));
-  }, [rawContacts, profile, ahoraCorteMs]);
+    const ultimoEnvioPorId = new Map<string, string>();
+    const ultimoEnvioPorTel = new Map<string, string>();
+    for (const reg of controlEnvios) {
+      const ts = reg.fechaHora || '';
+      if (!ts) continue;
+      const cid = String(reg.contactId || '').trim();
+      if (cid && !ultimoEnvioPorId.has(cid)) {
+        ultimoEnvioPorId.set(cid, ts);
+      }
+      const telNorm = normalizarTelefonoWA(reg.telRaw || '');
+      if (telNorm && !ultimoEnvioPorTel.has(telNorm)) {
+        ultimoEnvioPorTel.set(telNorm, ts);
+      }
+    }
+
+    return rawContacts.map((r) => {
+      const cid = String(r.id || '').trim();
+      const telNorm = normalizarTelefonoWA(r.telRaw || r.tel || '');
+      const tsControl =
+        r.ultimoMensajeCorteEnviadoAt ||
+        ultimoEnvioPorId.get(cid) ||
+        (telNorm ? ultimoEnvioPorTel.get(telNorm) : undefined);
+      const enrichedRaw: RawContactRow = tsControl
+        ? { ...r, ultimoMensajeCorteEnviadoAt: tsControl }
+        : r;
+      return procesarContacto(enrichedRaw, profile, ahoraCorteMs);
+    });
+  }, [rawContacts, controlEnvios, profile, ahoraCorteMs]);
 
   const kpis = useMemo(() => {
     const adheridos = contacts.filter(
@@ -348,6 +438,28 @@ export default function App() {
       excluidosCierreHoyIds
     );
   }, [contacts, corteResultado, controlEnvios, profile, ahoraCorteMs, excluidosCierreHoyIds]);
+
+  const fechaCierreRefMs = useMemo(() => {
+    try {
+      const parts = selectedCierreDate.split('-');
+      if (parts.length === 3) {
+        return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12, 0, 0).getTime();
+      }
+    } catch {}
+    return ahoraCorteMs;
+  }, [selectedCierreDate, ahoraCorteMs]);
+
+  const panelTareasDiariasCierre = useMemo(() => {
+    return generarPanelTareasDiarias(
+      contacts,
+      corteResultado,
+      controlEnvios,
+      profile,
+      fechaCierreRefMs,
+      'AUTO_MISMO_DIA',
+      excluidosCierreHoyIds
+    );
+  }, [contacts, corteResultado, controlEnvios, profile, fechaCierreRefMs, excluidosCierreHoyIds]);
 
   const defaultAutoConfig: AutoFirstMessageConfig = useMemo(
     () => ({
@@ -405,6 +517,8 @@ export default function App() {
   const recentLocalEditsByIdRef = useRef<
     Map<string, { timestamp: number; row: RawContactRow }>
   >(new Map());
+  const lastSeenSheetRowsByIdRef = useRef<Map<string, RawContactRow>>(new Map());
+  const deletedContactIdsRef = useRef<Set<string>>(new Set());
 
   // Push en vivo de una fila modificada a Google Sheets (vía gsheets CLI directo + fallback Apps Script)
   const pushUpdateToGoogleSheets = useCallback(
@@ -484,6 +598,21 @@ export default function App() {
       if (updates.fechaAdhesion !== undefined) {
         cambiosInput.fechaAdhesion = updates.fechaAdhesion;
       }
+      if (updates.ultimoMensajeCorteEnviadoAt !== undefined) {
+        cambiosInput.ultimoMensajeCorteEnviadoAt = updates.ultimoMensajeCorteEnviadoAt;
+      }
+      if (updates.alertaVencidoOcultaFecha !== undefined) {
+        cambiosInput.alertaVencidoOcultaFecha = updates.alertaVencidoOcultaFecha;
+      }
+      if (updates.actualizadoEnAppAt !== undefined) {
+        cambiosInput.actualizadoEnAppAt = updates.actualizadoEnAppAt;
+      }
+      if (updates.asignadoA !== undefined) {
+        cambiosInput.asignadoA = updates.asignadoA;
+      }
+      if (updates.asignadoFecha !== undefined) {
+        cambiosInput.asignadoFecha = updates.asignadoFecha;
+      }
 
       const preserveIdentityColumns =
         updates.nombre === undefined &&
@@ -495,13 +624,15 @@ export default function App() {
       const contactoActual = rawContactsRef.current.find(
         (c) => String(c.id) === String(contactId)
       );
-      const rowCalculada = contactoActual
-        ? actualizarDatosContactoEnApp(contactoActual, cambiosInput).actualizado
+      const resultadoCalc = contactoActual
+        ? actualizarDatosContactoEnApp(contactoActual, cambiosInput)
         : null;
+      const rowCalculada = resultadoCalc ? resultadoCalc.actualizado : null;
 
       editEpochRef.current += 1;
       if (rowCalculada) {
-        recentLocalEditsByIdRef.current.set(String(contactId).trim(), {
+        const idKeyClean = String(contactId).trim();
+        recentLocalEditsByIdRef.current.set(idKeyClean, {
           timestamp: Date.now(),
           row: rowCalculada,
         });
@@ -523,12 +654,47 @@ export default function App() {
       }
 
       if (!isUndoRunningRef.current && contactoActual) {
-        const nom = contactoActual.nombre || `Contacto #${contactId}`;
-        const desc = updates.estadoFlujo
-          ? `cambió a "${obtenerEtiquetaEstadoFlujo(updates.estadoFlujo)}"`
-          : updates.adhirio === 'Sí'
-          ? 'marcó como Adhirió/Firmó'
-          : 'modificación de datos';
+        const nom = (rowCalculada?.nombre || contactoActual.nombre || `Contacto #${contactId}`).trim();
+        const partesCambio: string[] = [];
+        if (
+          rowCalculada?.estadoFlujo &&
+          rowCalculada.estadoFlujo !== contactoActual.estadoFlujo
+        ) {
+          partesCambio.push(
+            `Estado → "${obtenerEtiquetaEstadoFlujo(rowCalculada.estadoFlujo)}"`
+          );
+        } else if (updates.adhirio === 'Sí' && contactoActual.adhirio !== 'Sí') {
+          partesCambio.push('Marcado como ✓ Firmó');
+        }
+        if (
+          resultadoCalc?.barrioAutocorregido &&
+          resultadoCalc.barrioAnterior &&
+          resultadoCalc.barrioFinal
+        ) {
+          partesCambio.push(
+            `Barrio auto-corregido: ${resultadoCalc.barrioAnterior} → ${resultadoCalc.barrioFinal}`
+          );
+        } else if (
+          updates.barrio !== undefined &&
+          updates.barrio.trim() !== (contactoActual.barrio || '').trim()
+        ) {
+          partesCambio.push(`Barrio → ${updates.barrio.trim()}`);
+        }
+        if (
+          updates.comentario !== undefined &&
+          updates.comentario.trim() !== (contactoActual.comentario || '').trim()
+        ) {
+          partesCambio.push('Comentario/Dirección actualizado');
+        }
+        if (
+          updates.nombre !== undefined &&
+          updates.nombre.trim() !== (contactoActual.nombre || '').trim()
+        ) {
+          partesCambio.push(`Nombre → ${updates.nombre.trim()}`);
+        }
+        const desc =
+          partesCambio.length > 0 ? partesCambio.join(' · ') : 'Datos actualizados';
+
         setUndoAction({
           contactId: String(contactId),
           nombre: nom,
@@ -537,6 +703,7 @@ export default function App() {
           expiresAt: Date.now() + 8000,
         });
         setUndoSecondsLeft(8);
+        showNotice(`✓ Guardado #${contactId} (${nom}): ${desc}`, 'ok');
       }
 
       try {
@@ -550,7 +717,7 @@ export default function App() {
         console.error('Error persistiendo contacto en SQLite:', err);
       }
     },
-    [pushUpdateToGoogleSheets]
+    [pushUpdateToGoogleSheets, showNotice]
   );
 
   // Deshacer el cambio recién hecho dentro de la ventana de 8 segundos
@@ -667,6 +834,44 @@ export default function App() {
     [pushUpdateToGoogleSheets, showNotice]
   );
 
+  // Eliminar un contacto desde la App (Solo Admin: borra en React, SQLite y Google Sheets)
+  const handleDeleteContact = useCallback(
+    async (contactId: string) => {
+      const idKey = String(contactId || '').trim();
+      if (!idKey) return;
+
+      const targetRow = rawContactsRef.current.find((c) => String(c.id).trim() === idKey);
+      const label = targetRow?.nombre || `Contacto #${idKey}`;
+
+      deletedContactIdsRef.current.add(idKey);
+      recentLocalEditsByIdRef.current.delete(idKey);
+      lastSeenSheetRowsByIdRef.current.delete(idKey);
+      editEpochRef.current += 1;
+
+      setRawContacts((prev) => prev.filter((c) => String(c.id).trim() !== idKey));
+
+      try {
+        await fetch('/api/admin/delete-contact', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contactId: idKey,
+            sheetUrlOrId: sheetUrlInput,
+            appsScriptUrl: appsScriptUrlInput,
+          }),
+        });
+        showNotice(
+          `🗑️ Contacto #${idKey} (${label}) eliminado de la App, SQLite y Google Sheets.`,
+          'ok'
+        );
+      } catch (err) {
+        console.error('Error eliminando contacto:', err);
+        showNotice(`⚠️ Contacto #${idKey} eliminado en la App, pero hubo un error al sincronizar.`, 'warn');
+      }
+    },
+    [sheetUrlInput, appsScriptUrlInput, showNotice]
+  );
+
   // Envío directo por WhatsApp Web (Simulación humana + avance inteligente de estado sin regresiones)
   const handleSendDirectWA = useCallback(
     async (
@@ -738,16 +943,68 @@ export default function App() {
             });
           }
           if (rowActualizada) {
+            const idKeyClean = String((rowActualizada as RawContactRow).id || '').trim();
+            if (idKeyClean) {
+              recentLocalEditsByIdRef.current.set(idKeyClean, {
+                timestamp: Date.now(),
+                row: rowActualizada,
+              });
+            }
+            void fetch(
+              `/api/contacts/${encodeURIComponent(String((rowActualizada as RawContactRow).id))}`,
+              {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(rowActualizada),
+              }
+            ).catch(() => {});
             void pushUpdateToGoogleSheets(rowActualizada, 'mensaje_wa_enviado', true);
           }
           return true;
+        } else if (data?.resultado === 'NUMERO_INEXISTENTE') {
+          let rowInvalida: RawContactRow | null = null;
+          setRawContacts((prev) =>
+            prev.map((c) => {
+              if (String(c.id) !== String(contactId)) return c;
+              const actualizado = aplicarResultadoEnvioAutoAContacto(
+                c,
+                'NUMERO_INEXISTENTE',
+                data.detalle || 'El número no existe en WhatsApp'
+              );
+              rowInvalida = actualizado;
+              return actualizado;
+            })
+          );
+          if (rowInvalida) {
+            const idKeyClean = String((rowInvalida as RawContactRow).id || '').trim();
+            if (idKeyClean) {
+              recentLocalEditsByIdRef.current.set(idKeyClean, {
+                timestamp: Date.now(),
+                row: rowInvalida,
+              });
+            }
+            void fetch(
+              `/api/contacts/${encodeURIComponent(String((rowInvalida as RawContactRow).id))}`,
+              {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(rowInvalida),
+              }
+            ).catch(() => {});
+            void pushUpdateToGoogleSheets(rowInvalida, 'numero_inexistente_wa', true);
+            showNotice(
+              `🚫 El número de #${contactId} (${nombre}) no existe en WhatsApp. Marcado como 11. Baja / Número Inválido.`,
+              'warn'
+            );
+          }
+          return false;
         }
         return false;
       } catch {
         return false;
       }
     },
-    [profile, pushUpdateToGoogleSheets]
+    [profile, pushUpdateToGoogleSheets, showNotice]
   );
 
   // Sincronización en vivo con Google Sheets (Pestaña Control) — Manual y Automática en Segundo Plano
@@ -769,7 +1026,22 @@ export default function App() {
       try {
         const keysControl = new Set<string>();
         for (const reg of controlEnviosRef.current) {
-          if (reg.contactId) keysControl.add(`id:${String(reg.contactId).trim()}`);
+          const tipoStr = `${reg.tipoMensaje || ''} ${reg.estadoNuevoEtiqueta || ''} ${reg.comentario || ''}`;
+          const esFalloReintento = /fallo wa web|pendiente reintento|error_envio/i.test(tipoStr);
+          if (esFalloReintento) continue;
+          const esBajaInex =
+            reg.estadoNuevo === 'DESCARTADO_O_BAJA' ||
+            /inexistente|no existe en whatsapp|baja|inválido/i.test(tipoStr);
+          if (reg.contactId) {
+            const idClean = String(reg.contactId).trim();
+            keysControl.add(`id:${idClean}`);
+            if (esBajaInex) keysControl.add(`baja_id:${idClean}`);
+          }
+          const tNorm = normalizarTelefonoWA(reg.telRaw || '');
+          if (tNorm) {
+            keysControl.add(`tel:${tNorm}`);
+            if (esBajaInex) keysControl.add(`baja_tel:${tNorm}`);
+          }
         }
 
         const res = await fetch('/api/sheets/fetch-live', {
@@ -814,21 +1086,29 @@ export default function App() {
               parsed,
               currentContacts,
               keysControl,
-              true
+              !silentMode,
+              lastSeenSheetRowsByIdRef.current
             );
+            const nextSeenMap = new Map<string, RawContactRow>();
+            for (const p of parsed) {
+              if (p.id) nextSeenMap.set(String(p.id).trim(), p);
+            }
+            lastSeenSheetRowsByIdRef.current = nextSeenMap;
 
             const nowMs = Date.now();
-            const contactosFusionados = rawMerged.map((row) => {
-              const idKey = String(row.id || '').trim();
-              const recentLocal = recentLocalEditsByIdRef.current.get(idKey);
-              if (
-                recentLocal &&
-                (activePushCountRef.current > 0 || nowMs - recentLocal.timestamp < 6000)
-              ) {
-                return recentLocal.row;
-              }
-              return row;
-            });
+            const contactosFusionados = rawMerged
+              .filter((row) => !deletedContactIdsRef.current.has(String(row.id || '').trim()))
+              .map((row) => {
+                const idKey = String(row.id || '').trim();
+                const recentLocal = recentLocalEditsByIdRef.current.get(idKey);
+                if (
+                  recentLocal &&
+                  (activePushCountRef.current > 0 || nowMs - recentLocal.timestamp < 600000)
+                ) {
+                  return recentLocal.row;
+                }
+                return row;
+              });
 
             // Verificar si hubo algún cambio real respecto del estado en memoria
             const hasDiff =
@@ -854,7 +1134,7 @@ export default function App() {
               await fetch('/api/contacts/bulk', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contacts: contactosFusionados }),
+                body: JSON.stringify({ contacts: contactosFusionados, replaceAll: true }),
               });
             }
 
@@ -1254,10 +1534,21 @@ export default function App() {
             fechaHoraResultadoISO?: string;
           }[] = [];
 
+          const nowMsWa = Date.now();
           for (const it of data.itemResults) {
             const sig = `res:${it.contactId || it.telefonoNorm}:${it.resultado}:${it.fechaHoraResultadoISO || ''}`;
             if (!appliedWaSignaturesRef.current.has(sig)) {
               appliedWaSignaturesRef.current.add(sig);
+              const cidClean = String(it.contactId || '').trim();
+              const recentDirect = cidClean ? recentLocalEditsByIdRef.current.get(cidClean) : undefined;
+              // Si acaba de enviarse como mensaje directo desde la UI (< 20s), no duplicar transición
+              if (
+                it.resultado === 'ENVIADO_OK' &&
+                recentDirect &&
+                nowMsWa - recentDirect.timestamp < 20000
+              ) {
+                continue;
+              }
               freshItems.push({
                 contactId: String(it.contactId || ''),
                 telefonoNorm: String(it.telefonoNorm || ''),
@@ -1284,10 +1575,17 @@ export default function App() {
             }
           }
           if (freshUpdated.length > 0) {
+            const nowTime = Date.now();
             setRawContacts((prev) =>
               prev.map((row) => {
                 const match = freshUpdated.find((u) => String(u.id) === String(row.id));
-                return match ? { ...row, ...match } : row;
+                if (!match) return row;
+                const idKey = String(row.id || '').trim();
+                const recentLocal = recentLocalEditsByIdRef.current.get(idKey);
+                if (recentLocal && nowTime - recentLocal.timestamp < 180000) {
+                  return row; // Proteger edición local reciente contra reversión
+                }
+                return { ...row, ...match };
               })
             );
             for (const u of freshUpdated) {
@@ -1454,6 +1752,22 @@ export default function App() {
         }}
         onOpenDailyCloseModal={() => setShowDailyCloseModal(true)}
         onOpenScannerModal={() => setShowScannerModal(true)}
+        currentUser={currentUser}
+        onOpenLoginModal={() => setShowLoginModal(true)}
+        onLogout={() => {
+          localStorage.removeItem('popurri_auth_token');
+          setShowLoginModal(true);
+        }}
+        userAvatarUrl={profile.avatarUrl}
+        onUpdateAvatarUrl={(avatarUrl) => {
+          const next = { ...profile, avatarUrl };
+          setProfile(next);
+          void fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: 'profile', value: next }),
+          });
+        }}
       />
 
       {/* Aviso Flotante de Sincronización / Acciones */}
@@ -1508,6 +1822,12 @@ export default function App() {
             onCreateContact={handleCreateContact}
             onSendDirectWA={handleSendDirectWA}
             onOpenAutoWAModal={() => setActiveTab('whatsapp')}
+            canDeleteContact={
+              currentUser?.role === 'admin' ||
+              currentUser?.username === 'cesar' ||
+              Boolean(currentUser?.canSwitchToAdmin)
+            }
+            onDeleteContact={handleDeleteContact}
           />
         )}
 
@@ -1729,7 +2049,95 @@ export default function App() {
             }}
           />
         )}
+
+        {activeTab === 'admin' && (
+          <AdminDashboardView
+            contacts={contacts}
+            volunteers={volunteersList}
+            barriosDisponibles={todosLosBarrios}
+            controlEnvios={controlEnvios}
+            sheetUrlInput={sheetUrlInput}
+            onRefreshVolunteers={refreshVolunteers}
+            onAssignContactsToVolunteer={async (contactIds, volunteerUsername, syncSheetTab) => {
+              const nowIso = new Date().toISOString();
+              const updatedRows: RawContactRow[] = [];
+              setRawContacts((prev) =>
+                prev.map((c) => {
+                  if (!contactIds.includes(String(c.id))) return c;
+                  const nextRow: RawContactRow = {
+                    ...c,
+                    asignadoA: volunteerUsername,
+                    asignadoFecha: nowIso,
+                    actualizadoEnAppAt: nowIso,
+                  };
+                  updatedRows.push(nextRow);
+                  return nextRow;
+                })
+              );
+              await fetch('/api/admin/assign-contacts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contactIds,
+                  volunteerUsername,
+                  syncSheetTab,
+                  sheetUrlOrId: sheetUrlInput,
+                }),
+              });
+            }}
+            onSendDirectWA={handleSendDirectWA}
+            onDeleteContact={handleDeleteContact}
+            onOpenLoginModal={() => setShowLoginModal(true)}
+            onSwitchToVolunteerView={(vol) => {
+              const targetUser: AppUserSession = vol
+                ? {
+                    id: vol.id || vol.username,
+                    username: vol.username,
+                    nombre: vol.nombre,
+                    role: 'volunteer',
+                    barrioAsignado: vol.barrioAsignado || 'Palermo',
+                    canSwitchToAdmin: true,
+                  }
+                : {
+                    id: 'cesar',
+                    username: 'cesar',
+                    nombre: 'César Rincón',
+                    role: 'volunteer',
+                    barrioAsignado: 'Palermo',
+                    canSwitchToAdmin: true,
+                  };
+              setCurrentUser(targetUser);
+              try {
+                localStorage.setItem('popurri_current_user', JSON.stringify(targetUser));
+              } catch {}
+              setActiveTab('pipeline');
+            }}
+            onJumpToCandidate={handleJumpToCandidate}
+            showNotice={showNotice}
+          />
+        )}
       </main>
+
+      {/* Modal de Inicio de Sesión y Cambio de Usuario (Voluntario / Default-Admin) */}
+      <LoginModal
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        currentUser={currentUser}
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          try {
+            localStorage.setItem('popurri_current_user', JSON.stringify(user));
+          } catch {}
+          void refreshVolunteers();
+          if (user.role === 'admin') {
+            setActiveTab('admin');
+            showNotice('🛡️ Sesión iniciada en el Panel de Administrador (Default/Admin).', 'ok');
+          } else {
+            if (activeTab === 'admin') setActiveTab('pipeline');
+            showNotice(`👤 Vista de Voluntario activa: ${user.nombre}.`, 'ok');
+          }
+        }}
+      />
 
       {/* 3. Modal Auxiliar de Campañas Automáticas */}
       <AutoFirstMessageModal
@@ -1749,8 +2157,11 @@ export default function App() {
       {/* 4. Modal de Cierre Diario (Cierre Forms) con los 3 Contadores, los 7 Estatus y Automatización de Google Forms */}
       {showDailyCloseModal &&
         (() => {
-          const rf = panelTareasDiarias.resumenFormsYApps;
-          const fechaIsoHoy = panelTareasDiarias.fechaReferenciaBA;
+          const rf = panelTareasDiariasCierre.resumenFormsYApps;
+          const fechaIsoHoy = panelTareasDiariasCierre.fechaReferenciaBA;
+          const hoyDateIso = obtenerPartesFechaHoraBA(Date.now()).isoDate;
+          const ayerDateIso = sumarDiasAFechaBA(Date.now(), -1).isoDate;
+          const anteayerDateIso = sumarDiasAFechaBA(Date.now(), -2).isoDate;
           const prefilledFormUrl = `https://docs.google.com/forms/d/e/${OFFICIAL_DAILY_REPORT_FORM_ID}/viewform?usp=pp_url&entry.1525073162=${encodeURIComponent(
             fechaIsoHoy
           )}&entry.280893168=${encodeURIComponent('Cesar Rincon')}&entry.2003193919=${
@@ -1827,25 +2238,79 @@ export default function App() {
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#323232]/60 p-2.5 sm:p-4 backdrop-blur-xs overflow-y-auto">
               <div className="w-full max-w-3xl rounded-2xl border-2 border-[#323232] bg-white shadow-[6px_6px_0px_#323232] overflow-hidden">
-                <div className="flex items-center justify-between border-b-2 border-[#323232] bg-[#FFF06B] px-4 sm:px-5 py-3.5">
-                  <div className="flex items-center gap-2.5">
-                    <ClipboardCheck className="w-5 h-5 text-[#323232] shrink-0" />
-                    <div>
-                      <h3 className="text-sm sm:text-base font-black text-[#323232]">
-                        Cierre Diario Casa x Casa (Google Forms + 7 Estatus)
-                      </h3>
-                      <p className="text-[11px] font-bold text-[#323232]/75">
-                        Jornada {rf.fechaHoyEtiqueta} · Contadores en vivo, clasificación en 7 estatus y envío al formulario oficial.
-                      </p>
+                <div className="border-b-2 border-[#323232] bg-[#FFF06B] px-4 sm:px-5 py-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <ClipboardCheck className="w-5 h-5 text-[#323232] shrink-0" />
+                      <div>
+                        <h3 className="text-sm sm:text-base font-black text-[#323232]">
+                          Cierre Diario Casa x Casa (Google Forms + 7 Estatus)
+                        </h3>
+                        <p className="text-[11px] font-bold text-[#323232]/75">
+                          Jornada {rf.fechaHoyEtiqueta} · Contadores del día seleccionado, 7 estatus y Google Forms oficial.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowDailyCloseModal(false)}
+                      className="p-1.5 rounded-lg bg-white border border-[#323232] text-[#323232] hover:bg-stone-100"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Selector de Fecha para revisar días anteriores */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[#323232]/20">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] font-bold text-[#323232] uppercase">Revisar fecha:</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCierreDate(hoyDateIso)}
+                        className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition ${
+                          selectedCierreDate === hoyDateIso
+                            ? 'bg-[#323232] text-[#FFF06B] border-[#323232]'
+                            : 'bg-white text-[#323232] border-[#323232]/40 hover:bg-[#F5F4F0]'
+                        }`}
+                      >
+                        Hoy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCierreDate(ayerDateIso)}
+                        className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition ${
+                          selectedCierreDate === ayerDateIso
+                            ? 'bg-[#323232] text-[#FFF06B] border-[#323232]'
+                            : 'bg-white text-[#323232] border-[#323232]/40 hover:bg-[#F5F4F0]'
+                        }`}
+                      >
+                        Ayer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCierreDate(anteayerDateIso)}
+                        className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition ${
+                          selectedCierreDate === anteayerDateIso
+                            ? 'bg-[#323232] text-[#FFF06B] border-[#323232]'
+                            : 'bg-white text-[#323232] border-[#323232]/40 hover:bg-[#F5F4F0]'
+                        }`}
+                      >
+                        Anteayer
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-semibold text-[#323232]/80">Elegir otro día:</span>
+                      <input
+                        type="date"
+                        value={selectedCierreDate}
+                        onChange={(e) => {
+                          if (e.target.value) setSelectedCierreDate(e.target.value);
+                        }}
+                        className="rounded-lg border-2 border-[#323232] bg-white px-2 py-0.5 text-xs font-bold text-[#323232] shadow-[1px_1px_0px_#323232]"
+                      />
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowDailyCloseModal(false)}
-                    className="p-1.5 rounded-lg bg-white border border-[#323232] text-[#323232]"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
                 </div>
 
                 <div className="p-4 sm:p-5 space-y-4 max-h-[82vh] overflow-y-auto">

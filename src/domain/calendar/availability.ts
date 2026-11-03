@@ -54,6 +54,27 @@ export function extraerFechasMencionadas(comentario: string): string[] {
     agregarFecha(m[1], m[2]);
   }
 
+  // 4. Fechas con nombre de mes en texto (ej. "3 de noviembre", "03 de nov", "3 nov")
+  const mesesMap: Record<string, number> = {
+    enero: 1, ene: 1,
+    febrero: 2, feb: 2,
+    marzo: 3, mar: 3,
+    abril: 4, abr: 4,
+    mayo: 5, may: 5,
+    junio: 6, jun: 6,
+    julio: 7, jul: 7,
+    agosto: 8, ago: 8,
+    septiembre: 9, setiembre: 9, sep: 9, set: 9,
+    octubre: 10, oct: 10,
+    noviembre: 11, nov: 11,
+    diciembre: 12, dic: 12,
+  };
+  const regexMesTexto = /\b(\d{1,2})\s*(?:de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sep|set|oct|nov|dic)\b/gi;
+  for (const m of text.matchAll(regexMesTexto)) {
+    const mesNum = mesesMap[m[2].toLowerCase()];
+    if (mesNum) agregarFecha(m[1], mesNum);
+  }
+
   return encontradas;
 }
 
@@ -473,7 +494,8 @@ export function detectarAlertaPendienteVencido(
   if (!fechaVencidaDetectada) {
     return undefined;
   }
-  if (tieneFechaHoraHoyOFuturaVigente && !tieneAlgunaFechaAnteriorAHoy) {
+  const yaConfirmadoEnApp = /\[Confirmado 1-a-1\]|\[Modalidad:/i.test(params.comentario || '');
+  if (tieneFechaHoraHoyOFuturaVigente && (!tieneAlgunaFechaAnteriorAHoy || yaConfirmadoEnApp)) {
     return undefined;
   }
 
