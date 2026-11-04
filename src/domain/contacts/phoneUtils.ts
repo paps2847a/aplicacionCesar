@@ -15,16 +15,33 @@ export function normalizarTelefonoWA(rawTel: string): string {
   if (!rawTel) return '';
   const trimmed = String(rawTel).trim();
   if (trimmed.toUpperCase() === 'N/A' || trimmed === '-') return '';
-  const digits = trimmed.replace(/\D/g, '');
+  let digits = trimmed.replace(/\D/g, '');
   if (!digits || digits.length < 8) return '';
 
   if (digits.startsWith('549')) return digits;
   if (digits.startsWith('54') && !digits.startsWith('549')) {
     return '549' + digits.slice(2);
   }
+
+  // Quitar el 0 inicial del prefijo interurbano (ej. 011 -> 11)
+  if (digits.startsWith('0')) {
+    digits = digits.replace(/^0+/, '');
+  }
+
+  // Si tiene el formato CABA con 15 intermedio (ej. 011-15-xxxx-xxxx -> 1115xxxxxxxx)
+  if (digits.startsWith('1115') && digits.length === 12) {
+    return '54911' + digits.slice(4);
+  }
+
   if (digits.startsWith('15') && digits.length === 10) {
     return '54911' + digits.slice(2);
   }
+
+  // Si tiene 8 dígitos (número local directo en CABA sin prefijo de área)
+  if (digits.length === 8) {
+    return '54911' + digits;
+  }
+
   if (digits.length === 10 && (digits.startsWith('11') || digits.startsWith('2') || digits.startsWith('3'))) {
     return '549' + digits;
   }

@@ -69,6 +69,9 @@ test('normalizarTelefonoWA formatea números argentinos correctamente', () => {
   assert.equal(normalizarTelefonoWA('54 9 11 6590-6852'), '5491165906852');
   assert.equal(normalizarTelefonoWA('11 3345-7903'), '5491133457903');
   assert.equal(normalizarTelefonoWA('15 4412-5685'), '5491144125685');
+  assert.equal(normalizarTelefonoWA('011-3345-7903'), '5491133457903');
+  assert.equal(normalizarTelefonoWA('(011) 15-4412-5685'), '5491144125685');
+  assert.equal(normalizarTelefonoWA('3345-7903'), '5491133457903');
   assert.equal(normalizarTelefonoWA('N/A'), '');
 });
 
