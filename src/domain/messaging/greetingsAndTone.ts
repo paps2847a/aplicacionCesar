@@ -123,8 +123,10 @@ export function esMovimientoDeHoy(
 export function yaSeHabloConContactoHoy(
   contact: {
     ultimoContacto?: string;
+    fechaPrimerContacto?: string;
     ultimoMensajeCorteEnviadoAt?: string;
     actualizadoEnAppAt?: string;
+    estadoFlujo?: string;
     enviadoEnSesion?: boolean;
     comentario?: string;
   },
@@ -136,7 +138,18 @@ export function yaSeHabloConContactoHoy(
   if (contact.ultimoContacto && esTimestampDeHoyBA(contact.ultimoContacto, ahoraMs)) {
     return true;
   }
+  if (contact.fechaPrimerContacto && esTimestampDeHoyBA(contact.fechaPrimerContacto, ahoraMs)) {
+    return true;
+  }
   if (contact.ultimoMensajeCorteEnviadoAt && esTimestampDeHoyBA(contact.ultimoMensajeCorteEnviadoAt, ahoraMs)) {
+    return true;
+  }
+  if (
+    contact.actualizadoEnAppAt &&
+    contact.estadoFlujo !== 'SIN_CONTACTAR_1ER_MSJ' &&
+    contact.estadoFlujo !== 'FALTA_NOMBRE_Y_APELLIDO' &&
+    esTimestampDeHoyBA(contact.actualizadoEnAppAt, ahoraMs)
+  ) {
     return true;
   }
   const com = contact.comentario || '';
@@ -156,14 +169,20 @@ export function yaSeHabloConContactoHoy(
  * elimina el saludo repetitivo de apertura ("Hola, Nombre, ¿cómo estás?", "Hola, buen día, ¿cómo te va?", etc.)
  * para que el mensaje continúe la conversación del día de manera fluida y humana.
  */
+export function quitarSaludoInicialMismoDia(texto: string): string {
+  return aplicarReglaSaludoMismoDia(texto, {}, 'SIN_SALUDO');
+}
+
 export function aplicarReglaSaludoMismoDia(
   texto: string,
   contact: {
     primerNombre?: string;
     sinNombre?: boolean;
     ultimoContacto?: string;
+    fechaPrimerContacto?: string;
     ultimoMensajeCorteEnviadoAt?: string;
     actualizadoEnAppAt?: string;
+    estadoFlujo?: string;
     enviadoEnSesion?: boolean;
     comentario?: string;
   },

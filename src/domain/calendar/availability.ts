@@ -7,6 +7,7 @@ import {
 } from '../../types';
 import { extraerCalleOCruce } from '../geo/cabaLocations';
 import { DIAS_SEMANA_ES } from '../messaging/messageTemplates';
+import { aplicarReglaSaludoMismoDia, yaSeHabloConContactoHoy } from '../messaging/greetingsAndTone';
 import { DEFAULT_VOICE_PROFILE } from '../../data/estatusPopurriData';
 import { OpcionesCafeMensaje, describirCafeConDistanciaDesdeContacto } from '../geo/cafesHub';
 
@@ -25,6 +26,31 @@ export function extraerFechasMencionadas(comentario: string): string[] {
     }
   };
 
+  // 0. Rangos con mes en ambos extremos ("04/11 al 06/11", "20/10 al 24/10", "30/10 al 02/11", "04/11 - 06/11")
+  const regexRangoCompleto =
+    /\b(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\s*(?:al|a|y(?:\s+el)?|-|hasta(?:\s+el)?)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
+  for (const m of text.matchAll(regexRangoCompleto)) {
+    const d1 = Number(m[1]);
+    const m1 = Number(m[2]);
+    const d2 = Number(m[3]);
+    const m2 = Number(m[4]);
+    if (m1 === m2 && d2 >= d1 && d2 - d1 <= 14) {
+      for (let d = d1; d <= d2; d++) {
+        agregarFecha(d, m1);
+      }
+    } else if (m1 >= 1 && m1 <= 12 && m2 >= 1 && m2 <= 12) {
+      const start = new Date(Date.UTC(2026, m1 - 1, d1));
+      const end = new Date(Date.UTC(2026, m2 - 1, d2));
+      const diffDays = Math.round((end.getTime() - start.getTime()) / (86400 * 1000));
+      if (diffDays >= 0 && diffDays <= 14) {
+        for (let offset = 0; offset <= diffDays; offset++) {
+          const cur = new Date(start.getTime() + offset * 86400 * 1000);
+          agregarFecha(cur.getUTCDate(), cur.getUTCMonth() + 1);
+        }
+      }
+    }
+  }
+
   // 1. Expresiones compuestas con conjunción ("20 o 21/10", "21 o 22/10", "21 o 23/10", "20, 21 o 22/10", "21 y 22/10")
   const regexCompuesta =
     /\b(\d{1,2})\s*(?:,\s*(\d{1,2})\s*)?(?:o|u|y|e)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
@@ -35,14 +61,14 @@ export function extraerFechasMencionadas(comentario: string): string[] {
     agregarFecha(m[3], mes);
   }
 
-  // 2. Rangos de días que comparten mes ("del 20 al 22/10", "entre el 20 y 24/10", "entre el 21 y el 23/10")
+  // 2. Rangos de días que comparten mes ("del 20 al 22/10", "entre el 20 y 24/10", "20 al 24/10")
   const regexRangoDias =
-    /\b(?:del|entre(?:\s+el)?)\s+(\d{1,2})\s+(?:al|a|y(?:\s+el)?|-)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
+    /\b(?:(?:del|entre(?:\s+el)?)\s+)?(\d{1,2})\s+(?:al|a|y(?:\s+el)?|-)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
   for (const m of text.matchAll(regexRangoDias)) {
     const d1 = Number(m[1]);
     const d2 = Number(m[2]);
     const mes = m[3];
-    if (d2 >= d1 && d2 - d1 <= 10) {
+    if (d2 >= d1 && d2 - d1 <= 14) {
       for (let d = d1; d <= d2; d++) {
         agregarFecha(d, mes);
       }
@@ -114,9 +140,9 @@ export function analizarFranjaHoraria(comentario: string): FranjaHoraria {
   // Quitar fechas DD/MM(/YYYY) y rangos de fechas ("entre el 20 y 24/10", "20 o 21/10")
   const com = limpiarFechasDeTextoParaHorario(comentario).toLowerCase();
 
-  // 1. Rango explícito "entre X y Y" o "de X a Y"
+  // 1. Rango explícito "entre X y Y" o "de X a Y" o "15:00 a 19:00"
   const mRango = com.match(
-    /\b(?:entre\s+(?:las\s+)?|de\s+(?:las\s+)?)(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:y|a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\b/i
+    /\b(?:(?:entre\s+(?:las\s+)?|de\s+(?:las\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:y|a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?)\b/i
   );
   if (mRango) {
     const h1 = Number(mRango[1]);
@@ -410,6 +436,8 @@ export function detectarAlertaPendienteVencido(
     primerNombre: string;
     barrio: string;
     calleOCruce: string;
+    diasEncuentro?: string;
+    horarioEncuentro?: string;
     comentario: string;
     franjaHoraria: FranjaHoraria;
     fechasMencionadas: string[];
@@ -417,6 +445,12 @@ export function detectarAlertaPendienteVencido(
     estadoFlujo: EstadoFlujo;
     adhirio: string;
     horasDesdeUltimoContacto: number;
+    alertaVencidoOcultaFecha?: string;
+    ultimoMensajeCorteEnviadoAt?: string;
+    actualizadoEnAppAt?: string;
+    ultimoContacto?: string;
+    fechaPrimerContacto?: string;
+    enviadoEnSesion?: boolean;
     lat?: number;
     lng?: number;
   },
@@ -431,6 +465,8 @@ export function detectarAlertaPendienteVencido(
     params.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
     params.estadoFlujo === 'DESCARTADO_O_BAJA' ||
     params.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS' ||
+    params.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+    params.situacion === 'PREFIERE_PUNTO' ||
     params.situacion === 'YA_ADHIRIO' ||
     params.situacion === 'DESCARTADO_NO_CABA' ||
     params.situacion === 'NUEVO_SIN_PRIMER_MENSAJE'
@@ -438,26 +474,39 @@ export function detectarAlertaPendienteVencido(
     return undefined;
   }
 
-  const comLower = (params.comentario || '').toLowerCase().trim();
-  if (!comLower) return undefined;
+  const textoAgenda = [params.diasEncuentro, params.horarioEncuentro, params.comentario]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  const comLower = textoAgenda.toLowerCase();
+  if (!comLower && params.fechasMencionadas.length === 0) return undefined;
 
-  // 1. Verificar que tenga LUGAR / DIRECCIÓN / PUNTO en la celda de Columna G
+  // 1. Verificar que tenga LUGAR / DIRECCIÓN / PUNTO
   const tieneLugarEnColG =
     Boolean(params.calleOCruce && params.calleOCruce.trim().length > 0) ||
     /\b(chile\s*1408|caf[eé]\s*hub|plaza|pza\.|parque|pqe\.|estaci[oó]n|sede)\b/i.test(comLower);
 
-  // 2. Verificar que tenga FECHA (día) en la celda de Columna G
+  // 2. Verificar que tenga FECHA (día)
   const tieneFechaEnColG = params.fechasMencionadas.length > 0;
   if (!tieneLugarEnColG || !tieneFechaEnColG) {
     return undefined;
   }
 
-  // 3. Verificar que tenga HORA / FRANJA HORARIA en la celda de Columna G
-  const infoHoraColG = extraerHoraVencimientoEnColumnaG(params.comentario, params.franjaHoraria);
+  // 3. Verificar que tenga HORA / FRANJA HORARIA
+  const textoHorario = [params.horarioEncuentro, params.comentario].filter(Boolean).join(' ');
+  const infoHoraColG = extraerHoraVencimientoEnColumnaG(textoHorario, params.franjaHoraria);
 
   const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
   const manianaBA = sumarDiasAFechaBA(ahoraMs, 1);
   const minutosActualesBA = hoyBA.hour * 60 + hoyBA.minute;
+
+  if (
+    params.alertaVencidoOcultaFecha &&
+    (params.alertaVencidoOcultaFecha === hoyBA.isoDate ||
+      params.alertaVencidoOcultaFecha === hoyBA.ddmm)
+  ) {
+    return undefined;
+  }
 
   // Si ninguna fecha es anterior a hoy y tampoco tiene hora en celda para hoy, no se puede dar por vencido hoy
   const tieneAlgunaFechaAnteriorAHoy = params.fechasMencionadas.some(
@@ -527,8 +576,6 @@ export function detectarAlertaPendienteVencido(
     titulo = `Visita sin confirmar vencida (${fechaVencidaDetectada}) en ${lugarRef}`;
     motivo = `Tenía información completa en Columna G (${lugarRef} · ${fechaVencidaDetectada}), pero ya pasó el día y la hora sin confirmarse ni cambiar a "Ya adhirió".`;
   } else if (
-    params.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
-    params.situacion === 'PREFIERE_PUNTO' ||
     params.situacion === 'EVENTO_CHILE_1408' ||
     /caf[eé]\s*hub|punto|chile\s*1408/i.test(comLower)
   ) {
@@ -558,7 +605,7 @@ export function detectarAlertaPendienteVencido(
     ? `, o bien encontrarnos unos minutos en ${fraseCafe}`
     : '';
 
-  const mensajeDisculpasReprogramacion =
+  const mensajeDisculpasBase =
     tipoAlerta === 'NO_RECIBIDO_EN_CAFE_HUB_O_SEDE'
       ? `${saludo}, ¿cómo estás? Te pido disculpas porque no pude cumplir con nuestro compromiso de encontrarnos en *${lugarRef}* como habíamos quedado para los 2 minutos de tu firma de adhesión.\n\nQuería proponerte reprogramarlo entre mañana (*${manianaBA.nombreDia} ${manianaBA.ddmm}*) y los próximos días en *${params.barrio}*: ${
           incluirCafe
@@ -566,6 +613,19 @@ export function detectarAlertaPendienteVencido(
             : `puedo pasar 2 minutos por *${params.calleOCruce || `tu cuadra en ${params.barrio}`}*`
         }. ¿Qué día y horario te viene mejor?${posdataNombre}`
       : `${saludo}, ¿cómo estás? Te pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${params.calleOCruce || params.barrio}* como habíamos quedado para los 2 minutos de tu firma de adhesión.\n\nQuería proponerte reprogramarlo para mañana *${manianaBA.nombreDia} ${manianaBA.ddmm}* (o el día de esta semana que te quede más cómodo) pasando un ratito por *${params.calleOCruce || `tu cuadra en ${params.barrio}`}*${altCafeTexto}. ¿Qué día y franja horaria te queda mejor?${posdataNombre}`;
+
+  const mensajeDisculpasReprogramacion = aplicarReglaSaludoMismoDia(
+    mensajeDisculpasBase,
+    {
+      ultimoMensajeCorteEnviadoAt: params.ultimoMensajeCorteEnviadoAt,
+      actualizadoEnAppAt: params.actualizadoEnAppAt,
+      ultimoContacto: params.ultimoContacto,
+      fechaPrimerContacto: params.fechaPrimerContacto,
+      enviadoEnSesion: params.enviadoEnSesion,
+    },
+    'AUTO_MISMO_DIA',
+    ahoraMs
+  );
 
   return {
     activa: true,
@@ -636,15 +696,15 @@ export function analizarDisponibilidadColumnaG(comentario: string): {
     }
   }
 
-  // 2. Rango explícito: "entre (las) 9 y (las) 16:00", "de 10 a 17 hs", "entre 13:30 y 18", "10 a 13 hs"
+  // 2. Rango explícito: "entre (las) 9 y (las) 16:00", "de 10 a 17 hs", "entre 13:30 y 18", "10 a 13 hs", "15:00 a 19:00"
   const mRango = texto.match(
-    /\b(?:(?:entre\s+(?:las\s+)?|de\s+(?:las\s+)?)(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:y|a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?|(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h))\b/i
+    /\b(?:(?:entre\s+(?:las\s+)?|de\s+(?:las\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?\s*(?:y|a|-)\s*(?:las\s+)?(\d{1,2})(?::(\d{2}))?\s*(?:hs|h)?)\b/i
   );
   if (mRango) {
-    const h1 = Number(mRango[1] || mRango[5]);
-    const min1 = (mRango[2] || mRango[6]) ? Number(mRango[2] || mRango[6]) : 0;
-    const h2 = Number(mRango[3] || mRango[7]);
-    const min2 = (mRango[4] || mRango[8]) ? Number(mRango[4] || mRango[8]) : 0;
+    const h1 = Number(mRango[1]);
+    const min1 = mRango[2] ? Number(mRango[2]) : 0;
+    const h2 = Number(mRango[3]);
+    const min2 = mRango[4] ? Number(mRango[4]) : 0;
     if (h1 >= 6 && h1 <= 22 && h2 > h1 && h2 <= 23) {
       const ini = h1 * 60 + min1;
       const fin = h2 * 60 + min2;

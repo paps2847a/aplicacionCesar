@@ -97,8 +97,12 @@ const createEmptyFichaRow = (idx = 1): FichaEscaneadaRow => ({
   dni: '',
   matriculaTipo: 'DNI',
   domicilio: '',
-  lugarYFecha: `${new Date().toLocaleDateString('es-AR')} - CABA`,
-  partido: 'Regeneración',
+  lugarYFecha: `CABA ${new Date().toLocaleDateString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  })}`.toUpperCase(),
+  partido: 'REGENERACIÓN',
   tieneFirma: true,
   barrio: '',
   fechaNacimiento: '',
@@ -538,11 +542,24 @@ export default function App() {
           timestamp: Date.now(),
           row: updatedRow,
         });
+        lastSeenSheetRowsByIdRef.current.set(idKey, updatedRow);
       }
       activePushCountRef.current += 1;
       editEpochRef.current += 1;
 
       const proc = procesarContacto(updatedRow, profile);
+      const horarioSheet =
+        updatedRow.horarioEncuentro !== undefined
+          ? updatedRow.horarioEncuentro
+          : updatedRow.horaInicio && updatedRow.horaFin && updatedRow.horaInicio !== updatedRow.horaFin
+          ? `${updatedRow.horaInicio} a ${updatedRow.horaFin}`
+          : updatedRow.horaInicio || '';
+      const direccionSheet =
+        updatedRow.calleOCruce !== undefined
+          ? updatedRow.pisoDepto && !updatedRow.calleOCruce.includes(updatedRow.pisoDepto)
+            ? `${updatedRow.calleOCruce} (${updatedRow.pisoDepto})`
+            : updatedRow.calleOCruce
+          : undefined;
       const itemUpdate = {
         id: updatedRow.id,
         contactId: updatedRow.id,
@@ -552,6 +569,9 @@ export default function App() {
         telRaw: updatedRow.telRaw,
         rsp: updatedRow.rsp,
         adhirio: updatedRow.adhirio,
+        diasEncuentro: updatedRow.diasEncuentro ?? '',
+        horarioEncuentro: horarioSheet ?? '',
+        calleOCruce: direccionSheet ?? '',
         comentario: updatedRow.comentario,
         estado: proc.estadoFlujoEtiqueta,
         estadoFlujo: proc.estadoFlujoEtiqueta,
@@ -593,6 +613,22 @@ export default function App() {
       if (updates.adhirio !== undefined) cambiosInput.adhirio = updates.adhirio;
       if (updates.comentario !== undefined) cambiosInput.comentario = updates.comentario;
       if (updates.calleOCruce !== undefined) cambiosInput.calleOCruce = updates.calleOCruce;
+      if (updates.diasEncuentro !== undefined) cambiosInput.diasEncuentro = updates.diasEncuentro;
+      if (updates.horaInicio !== undefined) cambiosInput.horaInicio = updates.horaInicio;
+      if (updates.horaFin !== undefined) cambiosInput.horaFin = updates.horaFin;
+      if (updates.horarioEncuentro !== undefined) {
+        cambiosInput.horarioEncuentro = updates.horarioEncuentro;
+      }
+      if (updates.pisoDepto !== undefined) cambiosInput.pisoDepto = updates.pisoDepto;
+      if (updates.fichasExtrasCantidad !== undefined) {
+        cambiosInput.fichasExtrasCantidad = updates.fichasExtrasCantidad;
+      }
+      if (updates.retiroConfirmado !== undefined) {
+        cambiosInput.retiroConfirmado = updates.retiroConfirmado;
+      }
+      if (updates.fechaEstadoPuntoSede !== undefined) {
+        cambiosInput.fechaEstadoPuntoSede = updates.fechaEstadoPuntoSede;
+      }
       if (updates.estadoFlujo !== undefined) cambiosInput.estadoFlujo = updates.estadoFlujo;
       if (updates.vocativoOverride !== undefined) {
         cambiosInput.vocativoOverride = updates.vocativoOverride;
@@ -1126,6 +1162,11 @@ export default function App() {
                   c.estadoFlujo !== prev.estadoFlujo ||
                   c.estadoFlujoEtiqueta !== prev.estadoFlujoEtiqueta ||
                   (c.comentario || '') !== (prev.comentario || '') ||
+                  (c.diasEncuentro || '') !== (prev.diasEncuentro || '') ||
+                  (c.horarioEncuentro || '') !== (prev.horarioEncuentro || '') ||
+                  (c.horaInicio || '') !== (prev.horaInicio || '') ||
+                  (c.horaFin || '') !== (prev.horaFin || '') ||
+                  (c.calleOCruce || '') !== (prev.calleOCruce || '') ||
                   c.adhirio !== prev.adhirio ||
                   c.rsp !== prev.rsp ||
                   c.nombre !== prev.nombre ||
@@ -1612,7 +1653,10 @@ export default function App() {
   }, [handleApplyAutoBatchResults, pushUpdateToGoogleSheets]);
 
   // Subir o tomar foto de ficha física (Formulario 01) con compresión en Canvas para OCR rápido
-  const handleUploadFichaImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUploadFichaImage = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    appendToExisting = false
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setIsScanningFicha(true);
@@ -1634,7 +1678,7 @@ export default function App() {
             };
             img.onload = () => {
               try {
-                const maxDim = 1600;
+                const maxDim = 1280;
                 let width = img.naturalWidth || img.width;
                 let height = img.naturalHeight || img.height;
                 if (width > maxDim || height > maxDim) {
@@ -1656,7 +1700,7 @@ export default function App() {
                   return;
                 }
                 ctx.drawImage(img, 0, 0, width, height);
-                const compressedUrl = canvas.toDataURL('image/jpeg', 0.85);
+                const compressedUrl = canvas.toDataURL('image/jpeg', 0.78);
                 const base64 = compressedUrl.split(',')[1] || '';
                 resolve({ dataUrl: compressedUrl, base64, mimeType: 'image/jpeg' });
               } catch {
@@ -1682,23 +1726,58 @@ export default function App() {
       });
       const data = await res.json();
       if (data?.ok && Array.isArray(data.rows) && data.rows.length > 0) {
-        const enrichedRows: FichaEscaneadaRow[] = data.rows.map((r: FichaEscaneadaRow) => {
-          const matched = buscarCandidatoDeFichaEnPadron(r, rawContacts);
-          const fallbackBarrio = r.barrio || matched?.barrio || 'Palermo';
-          const barrioInferido =
-            inferirBarrioDesdeTextoCABA(r.domicilio, fallbackBarrio) || fallbackBarrio;
-          return {
-            ...r,
-            barrio: barrioInferido,
-            telefono: r.telefono || matched?.telRaw || '',
-            partido: r.partido || 'Regeneración',
-          };
+        const enrichedRows: FichaEscaneadaRow[] = data.rows.map(
+          (r: FichaEscaneadaRow, rIdx: number) => {
+            const matched = buscarCandidatoDeFichaEnPadron(r, rawContacts);
+            const fallbackBarrio = (r.barrio || matched?.barrio || 'Palermo').toUpperCase();
+            const barrioInferido = (
+              inferirBarrioDesdeTextoCABA(r.domicilio, fallbackBarrio) || fallbackBarrio
+            ).toUpperCase();
+            return {
+              ...r,
+              id: `scan-${Date.now()}-${rIdx + 1}`,
+              apellidoYNombre: String(r.apellidoYNombre || '').toUpperCase(),
+              nombrePadre: String(r.nombrePadre || '').toUpperCase(),
+              nombreMadre: String(r.nombreMadre || '').toUpperCase(),
+              dni: String(r.dni || '').replace(/[^\d]/g, ''),
+              domicilio: String(r.domicilio || '').toUpperCase(),
+              lugarYFecha: String(r.lugarYFecha || '').toUpperCase(),
+              barrio: barrioInferido,
+              telefono: String(r.telefono || matched?.telRaw || '').toUpperCase(),
+              partido: String(r.partido || 'REGENERACIÓN').toUpperCase(),
+            };
+          }
+        );
+        setScannedRows((prev) => {
+          const nonEmptyPrev = prev.filter(
+            (p) => p.apellidoYNombre.trim() || p.dni.trim() || p.domicilio.trim()
+          );
+          return appendToExisting && nonEmptyPrev.length > 0
+            ? [...nonEmptyPrev, ...enrichedRows]
+            : enrichedRows;
         });
-        setScannedRows(enrichedRows);
-        const engineLabel = data.engine === 'windows-ocr' ? 'OCR Local' : 'IA Vision';
-        const msg = `✅ Formulario 01 leído (${engineLabel}): se detectaron ${enrichedRows.length} ficha(s). Revisá y confirmá abajo.`;
-        setScanModalFeedback({ type: 'ok', text: msg });
-        showNotice(msg, 'ok');
+        const extractedAny = enrichedRows.some(
+          (r) =>
+            Boolean(r.apellidoYNombre?.trim()) ||
+            Boolean(r.dni?.trim()) ||
+            Boolean(r.domicilio?.trim())
+        );
+        if (extractedAny) {
+          const engineLabel =
+            data.mode === 'gemini'
+              ? 'IA Vision'
+              : data.mode === 'cloud_handwriting_ocr'
+              ? 'OCR Manuscrito'
+              : 'OCR Local';
+          const msg = `✅ Formulario 01 leído (${engineLabel}): revisá los campos extraídos y confirmá abajo.`;
+          setScanModalFeedback({ type: 'ok', text: msg });
+          showNotice(msg, 'ok');
+        } else {
+          const warnMsg =
+            '⚠️ No se pudo leer el texto manuscrito automáticamente. Completá los campos abajo o configurá la clave Gemini Vision.';
+          setScanModalFeedback({ type: 'warn', text: warnMsg });
+          showNotice(warnMsg, 'warn');
+        }
       } else {
         const warnMsg =
           data?.message ||
@@ -1717,7 +1796,7 @@ export default function App() {
   };
 
   // Confirmar e impactar las filas escaneadas de una ficha física (Formulario 01)
-  const handleConfirmScannedRows = async () => {
+  const handleConfirmScannedRows = async (keepOpenForNextScan = false) => {
     const validRows = scannedRows.filter(
       (r) =>
         r.apellidoYNombre.trim().length > 0 ||
@@ -1736,11 +1815,11 @@ export default function App() {
         inferirBarrioDesdeTextoCABA(row.domicilio, fallbackBarrio) || fallbackBarrio;
 
       const notaFicha = [
-        row.dni ? `Matrícula/DNI: ${row.dni}` : '',
-        row.domicilio ? `Domicilio DNI: ${row.domicilio}` : '',
-        row.nombrePadre ? `Padre: ${row.nombrePadre}` : '',
-        row.nombreMadre ? `Madre: ${row.nombreMadre}` : '',
-        row.lugarYFecha ? `Fecha ficha: ${row.lugarYFecha}` : '',
+        row.dni ? `Matrícula/DNI: ${row.dni.toUpperCase()}` : '',
+        row.domicilio ? `Domicilio DNI: ${row.domicilio.toUpperCase()}` : '',
+        row.nombrePadre ? `Padre: ${row.nombrePadre.toUpperCase()}` : '',
+        row.nombreMadre ? `Madre: ${row.nombreMadre.toUpperCase()}` : '',
+        row.lugarYFecha ? `Fecha ficha: ${row.lugarYFecha.toUpperCase()}` : '',
         row.observaciones || '',
       ]
         .filter(Boolean)
@@ -1751,7 +1830,7 @@ export default function App() {
           adhirio: 'Sí',
           rsp: 'Sí',
           estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
-          calleOCruce: row.domicilio || existing.calleOCruce,
+          calleOCruce: row.domicilio.toUpperCase() || existing.calleOCruce,
           barrio: barrioResuelto || existing.barrio,
           comentario: existing.comentario
             ? `${existing.comentario} | ${notaFicha}`
@@ -1760,10 +1839,10 @@ export default function App() {
         actualizados++;
       } else {
         await handleCreateContact({
-          nombre: row.apellidoYNombre.trim() || 'Firmante Formulario 01',
+          nombre: row.apellidoYNombre.trim().toUpperCase() || 'FIRMANTE FORMULARIO 01',
           barrio: barrioResuelto || 'Palermo',
           telRaw: row.telefono.trim(),
-          calleOCruce: row.domicilio.trim(),
+          calleOCruce: row.domicilio.trim().toUpperCase(),
           comentario: notaFicha || 'Cargado desde escáner de Formulario 01',
           adhirio: 'Sí',
           rsp: 'Sí',
@@ -1772,8 +1851,16 @@ export default function App() {
       }
     }
 
-    setShowScannerModal(false);
     setScannedRows([createEmptyFichaRow(1)]);
+    setScanPreviewUrl(null);
+    if (keepOpenForNextScan) {
+      setScanModalFeedback({
+        type: 'ok',
+        text: `✅ Ficha guardada en Padrón (${actualizados} actualizados, ${creados} nuevos). Ahora podés tomar foto o elegir imagen de la siguiente ficha.`,
+      });
+    } else {
+      setShowScannerModal(false);
+    }
     showNotice(
       `🎉 Formulario 01 guardado en SQLite y padrón: ${actualizados} contactos marcados como firmados y ${creados} nuevos agregados.`,
       'ok'
@@ -2779,31 +2866,49 @@ export default function App() {
               )}
 
               <div className="space-y-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="text-xs font-black uppercase text-[#323232]">
                     Fichas Formulario 01 Detectadas / A Confirmar ({scannedRows.length})
                   </h4>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setScannedRows((prev) => [...prev, createEmptyFichaRow(prev.length + 1)])
-                    }
-                    className="px-2.5 py-1 rounded-lg bg-[#FFF06B] border border-[#323232] text-[11px] font-black text-[#323232] inline-flex items-center gap-1"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span>Agregar Ficha</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <label className="px-2.5 py-1 rounded-lg bg-[#323232] text-[#FFF06B] border border-[#323232] text-[11px] font-black cursor-pointer inline-flex items-center gap-1 shadow-[1px_1px_0px_#323232]">
+                      <Camera className="w-3 h-3" />
+                      <span>📷 Escanear otra ficha</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleUploadFichaImage(e, true)}
+                        disabled={isScanningFicha}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setScannedRows((prev) => [...prev, createEmptyFichaRow(prev.length + 1)])
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-[#FFF06B] border border-[#323232] text-[11px] font-black text-[#323232] inline-flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>+ Fila Manual</span>
+                    </button>
+                  </div>
                 </div>
 
                 {scannedRows.map((row, idx) => {
                   const matchedContact = buscarCandidatoDeFichaEnPadron(row, rawContacts);
+                  const domUpper = (row.domicilio || '').trim().toUpperCase();
+                  const barrioUpper = (row.barrio || matchedContact?.barrio || '').trim().toUpperCase();
                   const direccionFormatoDNI = [
-                    row.domicilio.trim(),
-                    (row.barrio || matchedContact?.barrio || '').trim(),
-                    'Ciudad Autónoma de Buenos Aires',
+                    domUpper,
+                    barrioUpper && !domUpper.includes(barrioUpper) ? barrioUpper : '',
+                    !/CIUDAD.*BUENOS\s+AIRES|CABA/i.test(domUpper)
+                      ? 'CIUDAD DE BUENOS AIRES'
+                      : '',
                   ]
                     .filter(Boolean)
-                    .join(', ');
+                    .join(', ')
+                    .toUpperCase();
 
                   return (
                     <div
@@ -2821,13 +2926,13 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* Fila 1: Apellido y Nombre, Matrícula (DNI) y Domicilio (campos principales del Formulario 01) */}
+                      {/* Fila 1: Apellido y Nombre, Matrícula (DNI) y Domicilio (campos principales del Formulario 01 — SIEMPRE EN MAYÚSCULAS) */}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <input
                           type="text"
-                          value={row.apellidoYNombre}
+                          value={(row.apellidoYNombre || '').toUpperCase()}
                           onChange={(e) => {
-                            const val = e.target.value;
+                            const val = e.target.value.toUpperCase();
                             setScannedRows((prev) =>
                               prev.map((r, i) => {
                                 if (i !== idx) return r;
@@ -2835,14 +2940,14 @@ export default function App() {
                                 const m = buscarCandidatoDeFichaEnPadron(nextRow, rawContacts);
                                 return {
                                   ...nextRow,
-                                  barrio: nextRow.barrio || m?.barrio || '',
-                                  telefono: nextRow.telefono || m?.telRaw || '',
+                                  barrio: (nextRow.barrio || m?.barrio || '').toUpperCase(),
+                                  telefono: (nextRow.telefono || m?.telRaw || '').toUpperCase(),
                                 };
                               })
                             );
                           }}
-                          placeholder="Apellido y Nombre (Formulario 01) *"
-                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white font-semibold"
+                          placeholder="APELLIDO Y NOMBRE (FORMULARIO 01) *"
+                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white font-semibold uppercase"
                         />
                         <input
                           type="text"
@@ -2853,18 +2958,19 @@ export default function App() {
                               prev.map((r, i) => (i === idx ? { ...r, dni: val } : r))
                             );
                           }}
-                          placeholder="Matrícula / DNI (sin puntos) *"
-                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white font-mono"
+                          placeholder="MATRÍCULA / DNI (SIN PUNTOS) *"
+                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white font-mono uppercase"
                         />
                         <input
                           type="text"
-                          value={row.domicilio}
+                          value={(row.domicilio || '').toUpperCase()}
                           onChange={(e) => {
-                            const val = e.target.value;
-                            const barrioAuto =
+                            const val = e.target.value.toUpperCase();
+                            const barrioAuto = (
                               inferirBarrioDesdeTextoCABA(val, row.barrio || 'Palermo') ||
                               row.barrio ||
-                              'Palermo';
+                              'Palermo'
+                            ).toUpperCase();
                             setScannedRows((prev) =>
                               prev.map((r, i) =>
                                 i === idx
@@ -2877,77 +2983,77 @@ export default function App() {
                               )
                             );
                           }}
-                          placeholder="Domicilio (calle, altura, piso/depto) *"
-                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white"
+                          placeholder="DOMICILIO (CALLE, ALTURA, PISO/DEPTO) *"
+                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white uppercase"
                         />
                       </div>
 
-                      {/* Fila 2: Nombre del Padre, Nombre de la Madre y Lugar + Fecha (Formulario 01) */}
+                      {/* Fila 2: Nombre del Padre, Nombre de la Madre y Lugar + Fecha (Formulario 01 — SIEMPRE EN MAYÚSCULAS) */}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <input
                           type="text"
-                          value={row.nombrePadre || ''}
+                          value={(row.nombrePadre || '').toUpperCase()}
                           onChange={(e) => {
-                            const val = e.target.value;
+                            const val = e.target.value.toUpperCase();
                             setScannedRows((prev) =>
                               prev.map((r, i) => (i === idx ? { ...r, nombrePadre: val } : r))
                             );
                           }}
-                          placeholder="Nombre del Padre (nombre y apellido)"
-                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white"
+                          placeholder="NOMBRE DEL PADRE (NOMBRE Y APELLIDO)"
+                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white uppercase"
                         />
                         <input
                           type="text"
-                          value={row.nombreMadre || ''}
+                          value={(row.nombreMadre || '').toUpperCase()}
                           onChange={(e) => {
-                            const val = e.target.value;
+                            const val = e.target.value.toUpperCase();
                             setScannedRows((prev) =>
                               prev.map((r, i) => (i === idx ? { ...r, nombreMadre: val } : r))
                             );
                           }}
-                          placeholder="Nombre de la Madre (nombre y apellido)"
-                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white"
+                          placeholder="NOMBRE DE LA MADRE (NOMBRE Y APELLIDO)"
+                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white uppercase"
                         />
                         <input
                           type="text"
-                          value={row.lugarYFecha || ''}
+                          value={(row.lugarYFecha || '').toUpperCase()}
                           onChange={(e) => {
-                            const val = e.target.value;
+                            const val = e.target.value.toUpperCase();
                             setScannedRows((prev) =>
                               prev.map((r, i) => (i === idx ? { ...r, lugarYFecha: val } : r))
                             );
                           }}
-                          placeholder="Lugar y Fecha (Fecha + CABA)"
-                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white"
+                          placeholder="LUGAR Y FECHA (CABA + FECHA)"
+                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white uppercase"
                         />
                       </div>
 
-                      {/* Fila 3: Barrio CABA y Teléfono (auto-completados desde el padrón o domicilio) */}
+                      {/* Fila 3: Barrio CABA y Teléfono (auto-completados desde el padrón o domicilio — SIEMPRE EN MAYÚSCULAS) */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <input
                           type="text"
-                          value={row.barrio}
+                          value={(row.barrio || '').toUpperCase()}
                           onChange={(e) => {
-                            const val = e.target.value;
+                            const val = e.target.value.toUpperCase();
                             setScannedRows((prev) =>
                               prev.map((r, i) => (i === idx ? { ...r, barrio: val } : r))
                             );
                           }}
-                          placeholder="Barrio CABA (inferido del domicilio o padrón)"
-                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white"
+                          placeholder="BARRIO CABA (INFERIDO DEL DOMICILIO O PADRÓN)"
+                          className="px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white uppercase"
                         />
                         <div className="flex gap-1.5">
                           <input
                             type="text"
-                            value={row.telefono}
+                            value={(row.telefono || '').toUpperCase()}
                             onChange={(e) => {
-                              const val = e.target.value;
+                              const val = e.target.value.toUpperCase();
                               setScannedRows((prev) =>
                                 prev.map((r, i) => (i === idx ? { ...r, telefono: val } : r))
                               );
                             }}
-                            placeholder="Teléfono (opcional / auto-vinculado del padrón)"
-                            className="flex-1 px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white"
+                            placeholder="TELÉFONO (OPCIONAL / AUTO-VINCULADO DEL PADRÓN)"
+                            className="flex-1 px-2.5 py-1.5 text-xs border border-[#323232] rounded-lg bg-white uppercase"
                           />
                           {scannedRows.length > 1 && (
                             <button
@@ -2966,13 +3072,13 @@ export default function App() {
                       {/* Botones rápidos para pegar en el Formulario Oficial de Carga de Adhesiones */}
                       <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[10px]">
                         <span className="font-bold text-[#323232]/75">
-                          Copiar rápido:
+                          Copiar rápido (MAYÚSCULAS):
                         </span>
                         <button
                           type="button"
                           onClick={() => {
-                            navigator.clipboard.writeText(row.apellidoYNombre);
-                            showNotice('📋 Apellido y Nombre copiado al portapapeles.', 'info');
+                            navigator.clipboard.writeText((row.apellidoYNombre || '').toUpperCase());
+                            showNotice('📋 Apellido y Nombre copiado en MAYÚSCULAS.', 'info');
                           }}
                           className="px-2 py-0.5 rounded bg-white border border-[#323232]/40 font-bold hover:bg-[#FFF06B]"
                         >
@@ -2981,7 +3087,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => {
-                            navigator.clipboard.writeText(row.dni);
+                            navigator.clipboard.writeText((row.dni || '').toUpperCase());
                             showNotice('📋 Matrícula / DNI sin puntos copiado.', 'info');
                           }}
                           className="px-2 py-0.5 rounded bg-white border border-[#323232]/40 font-bold hover:bg-[#FFF06B]"
@@ -3005,8 +3111,8 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => {
-                              navigator.clipboard.writeText(row.nombrePadre || '');
-                              showNotice('📋 Nombre del Padre copiado.', 'info');
+                              navigator.clipboard.writeText((row.nombrePadre || '').toUpperCase());
+                              showNotice('📋 Nombre del Padre copiado en MAYÚSCULAS.', 'info');
                             }}
                             className="px-2 py-0.5 rounded bg-white border border-[#323232]/40 font-bold hover:bg-[#FFF06B]"
                           >
@@ -3017,8 +3123,8 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => {
-                              navigator.clipboard.writeText(row.nombreMadre || '');
-                              showNotice('📋 Nombre de la Madre copiado.', 'info');
+                              navigator.clipboard.writeText((row.nombreMadre || '').toUpperCase());
+                              showNotice('📋 Nombre de la Madre copiado en MAYÚSCULAS.', 'info');
                             }}
                             className="px-2 py-0.5 rounded bg-white border border-[#323232]/40 font-bold hover:bg-[#FFF06B]"
                           >
@@ -3051,11 +3157,20 @@ export default function App() {
                   </a>
                   <button
                     type="button"
-                    onClick={handleConfirmScannedRows}
+                    onClick={() => handleConfirmScannedRows(true)}
+                    className="px-3.5 py-2 rounded-xl bg-[#FFF06B] border-2 border-[#323232] text-[#323232] text-xs font-black inline-flex items-center gap-1.5 shadow-[2px_2px_0px_#323232] hover:bg-[#ffe838]"
+                    title="Guarda esta ficha en el Padrón y deja lista la ventana para escanear otra ficha"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>Guardar y Escanear Otra</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmScannedRows(false)}
                     className="px-4 py-2 rounded-xl bg-[#323232] text-[#FFF06B] text-xs font-black inline-flex items-center gap-1.5 shadow-[2px_2px_0px_#2988FF]"
                   >
                     <UserCheck className="w-4 h-4" />
-                    <span>Confirmar Firmas en Padrón (SQLite + Sheets)</span>
+                    <span>Confirmar y Cerrar</span>
                   </button>
                 </div>
               </div>

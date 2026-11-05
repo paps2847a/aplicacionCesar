@@ -23,7 +23,15 @@ interface ContactRowDb {
   referidos_caba_ya_enviado: number;
   ultimo_mensaje_corte_enviado_at: string | null;
   alerta_vencido_oculta_fecha: string | null;
+  dias_encuentro?: string | null;
+  hora_inicio?: string | null;
+  hora_fin?: string | null;
+  horario_encuentro?: string | null;
   calle_o_cruce: string | null;
+  piso_depto?: string | null;
+  fichas_extras_cantidad?: string | null;
+  retiro_confirmado?: number | null;
+  fecha_estado_punto_sede?: string | null;
   vocativo_override: string | null;
   fecha_adhesion: string | null;
   asignado_a?: string | null;
@@ -37,7 +45,12 @@ function mapDbToContact(row: ContactRowDb): RawContactRow {
     id: row.id,
     nombre: row.nombre || '',
     vocativoOverride: row.vocativo_override || undefined,
+    diasEncuentro: row.dias_encuentro || undefined,
+    horaInicio: row.hora_inicio || undefined,
+    horaFin: row.hora_fin || undefined,
+    horarioEncuentro: row.horario_encuentro || undefined,
     calleOCruce: row.calle_o_cruce || undefined,
+    pisoDepto: row.piso_depto || undefined,
     barrio: row.barrio || '',
     telRaw: row.tel_raw || '',
     tel: row.tel_norm || (row.tel_raw ? String(row.tel_raw).replace(/\D+/g, '') : undefined),
@@ -45,6 +58,9 @@ function mapDbToContact(row: ContactRowDb): RawContactRow {
     rsp: (row.rsp as any) || 'Nuevo',
     adhirio: (row.adhirio as any) || 'Pendiente',
     comentario: row.comentario || '',
+    fichasExtrasCantidad: row.fichas_extras_cantidad || undefined,
+    retiroConfirmado: Boolean(row.retiro_confirmado),
+    fechaEstadoPuntoSede: row.fecha_estado_punto_sede || undefined,
     enSheets: Boolean(row.en_sheets),
     fechaAgregado: row.fecha_agregado || undefined,
     ultimoContacto: row.ultimo_contacto || undefined,
@@ -141,14 +157,18 @@ export function upsertContact(c: RawContactRow): RawContactRow {
       fecha_primer_contacto, estado_flujo, estado_flujo_etiqueta,
       actualizado_en_app_at, referidos_caba_ya_enviado,
       ultimo_mensaje_corte_enviado_at, alerta_vencido_oculta_fecha,
-      calle_o_cruce, vocativo_override, fecha_adhesion, asignado_a, asignado_fecha, updated_at
+      dias_encuentro, hora_inicio, hora_fin, horario_encuentro,
+      calle_o_cruce, piso_depto, fichas_extras_cantidad, retiro_confirmado, fecha_estado_punto_sede,
+      vocativo_override, fecha_adhesion, asignado_a, asignado_fecha, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?,
       ?, ?,
-      ?, ?, ?, ?, ?, datetime('now')
+      ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, datetime('now')
     )
     ON CONFLICT(id) DO UPDATE SET
       nombre = excluded.nombre,
@@ -171,7 +191,15 @@ export function upsertContact(c: RawContactRow): RawContactRow {
       referidos_caba_ya_enviado = excluded.referidos_caba_ya_enviado,
       ultimo_mensaje_corte_enviado_at = COALESCE(excluded.ultimo_mensaje_corte_enviado_at, contacts.ultimo_mensaje_corte_enviado_at),
       alerta_vencido_oculta_fecha = COALESCE(excluded.alerta_vencido_oculta_fecha, contacts.alerta_vencido_oculta_fecha),
+      dias_encuentro = COALESCE(excluded.dias_encuentro, contacts.dias_encuentro),
+      hora_inicio = COALESCE(excluded.hora_inicio, contacts.hora_inicio),
+      hora_fin = COALESCE(excluded.hora_fin, contacts.hora_fin),
+      horario_encuentro = COALESCE(excluded.horario_encuentro, contacts.horario_encuentro),
       calle_o_cruce = COALESCE(excluded.calle_o_cruce, contacts.calle_o_cruce),
+      piso_depto = COALESCE(excluded.piso_depto, contacts.piso_depto),
+      fichas_extras_cantidad = COALESCE(excluded.fichas_extras_cantidad, contacts.fichas_extras_cantidad),
+      retiro_confirmado = excluded.retiro_confirmado,
+      fecha_estado_punto_sede = COALESCE(excluded.fecha_estado_punto_sede, contacts.fecha_estado_punto_sede),
       vocativo_override = COALESCE(excluded.vocativo_override, contacts.vocativo_override),
       fecha_adhesion = COALESCE(excluded.fecha_adhesion, contacts.fecha_adhesion),
       asignado_a = COALESCE(excluded.asignado_a, contacts.asignado_a),
@@ -201,7 +229,15 @@ export function upsertContact(c: RawContactRow): RawContactRow {
     c.referidosCabaYaEnviado ? 1 : 0,
     c.ultimoMensajeCorteEnviadoAt || null,
     c.alertaVencidoOcultaFecha || null,
+    c.diasEncuentro ?? '',
+    c.horaInicio ?? '',
+    c.horaFin ?? '',
+    c.horarioEncuentro ?? '',
     c.calleOCruce ?? '',
+    c.pisoDepto ?? '',
+    c.fichasExtrasCantidad ?? '',
+    c.retiroConfirmado ? 1 : 0,
+    c.fechaEstadoPuntoSede || null,
     c.vocativoOverride ?? '',
     c.fechaAdhesion || null,
     c.asignadoA || 'cesar',

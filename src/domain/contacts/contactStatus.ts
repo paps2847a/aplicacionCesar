@@ -146,8 +146,8 @@ export const ESTADOS_FLUJO_CATALOGO: {
   },
   {
     value: 'PREFIERE_CAFE_HUB_O_SEDE',
-    label: '3c. Prefiere Punto / Café / Sede',
-    shortLabel: '3c. Prefiere Punto / Café / Sede',
+    label: '3c. Prefiere Punto / Sede',
+    shortLabel: '3c. Prefiere Punto / Sede',
     colorClass: 'bg-amber-50 text-amber-900 border-amber-300',
   },
   {
@@ -872,13 +872,232 @@ export function inferirEstadoFlujo(
 }
 
 
+/**
+ * Desglosa un comentario heredado en los nuevos campos estructurados:
+ * - `diasEncuentro` (ej: "04/11", "04/11 al 06/11", "21/10, 22/10", "Martes a jueves")
+ * - `horaInicio`, `horaFin`, `horarioEncuentro` (ej: "15:00", "16:00 a 19:00", "Desde las 15:00")
+ * - `calleOCruce`, `pisoDepto` (ej: "Perú al 100", "Zapiola 2129")
+ * - `fichasExtrasCantidad` (ej: 1, 2, 3)
+ * - `comentario` (estrictamente nota interna para consumo humano; vacío si sólo contenía agenda/dirección o notas automáticas)
+ */
+export function desglosarComentarioEnCamposEstructurados(raw: {
+  comentario?: string;
+  calleOCruce?: string;
+  pisoDepto?: string;
+  diasEncuentro?: string;
+  horaInicio?: string;
+  horaFin?: string;
+  horarioEncuentro?: string;
+  fichasExtrasCantidad?: string | number;
+  retiroConfirmado?: boolean;
+  estadoFlujo?: EstadoFlujo;
+}): {
+  diasEncuentro: string;
+  horaInicio: string;
+  horaFin: string;
+  horarioEncuentro: string;
+  calleOCruce: string;
+  pisoDepto: string;
+  fichasExtrasCantidad?: string | number;
+  retiroConfirmado?: boolean;
+  comentarioInterno: string;
+} {
+  const comOriginal = String(raw.comentario || '').trim();
+  // Limpiar etiquetas automáticas de sistema ([1er msj auto enviado ...], etc.)
+  const sinNotasSistema = comOriginal
+    .replace(/\[(?:1er\s*(?:mensaje|msj|contacto)|Intento auto|Enviado|Reintentar|Modificado el)[^\]]*\]/gi, '')
+    .replace(/1er\s*(?:mensaje|msj|contacto)\s*(?:auto\s*)?enviado[^·;\n\]]*/gi, '')
+    .trim();
+
+  let calleOCruce = String(raw.calleOCruce || '').trim() || extraerCalleOCruce(sinNotasSistema);
+  let pisoDepto = String(raw.pisoDepto || '').trim();
+
+  // Si la calle tiene coma con timbre/piso/depto (ej: "Zapiola 2129, timbre 4"), separarlo opcionalmente
+  const matchPisoTimbre = calleOCruce.match(/^([^,]+),\s*((?:timbre|piso|depto|dpto|dto|pb|uf)\b.*)$/i);
+  if (matchPisoTimbre && !pisoDepto) {
+    calleOCruce = matchPisoTimbre[1].trim();
+    pisoDepto = matchPisoTimbre[2].trim();
+  }
+
+  // Extraer cantidad de fichas extra (X1, X2, X3)
+  let fichasExtrasCantidad = raw.fichasExtrasCantidad;
+  if (fichasExtrasCantidad === undefined) {
+    const matchX = sinNotasSistema.match(/\bx\s*([1-9])\b/i);
+    if (matchX) {
+      fichasExtrasCantidad = parseInt(matchX[1], 10);
+    } else if (/buscar\s+fichas/i.test(sinNotasSistema) || raw.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS') {
+      fichasExtrasCantidad = 1;
+    }
+  }
+
+  let retiroConfirmado = raw.retiroConfirmado;
+  if (retiroConfirmado === undefined && (raw.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' || /buscar\s+fichas/i.test(sinNotasSistema))) {
+    retiroConfirmado = /\[confirmado|retiro\s+confirmado/i.test(sinNotasSistema);
+  }
+
+  // Extraer Día(s)
+  let diasEncuentro = String(raw.diasEncuentro || '').trim();
+  if (!diasEncuentro && sinNotasSistema) {
+    // Rango explícito "del DD al DD/MM" o "DD/MM al DD/MM"
+    const matchRangoExplicit = sinNotasSistema.match(
+      /(?:del\s+|entre\s+el\s+)?(\d{1,2})(?:\/(\d{1,2}))?\s+(?:al|a)\s+(\d{1,2})\/(\d{1,2})/i
+    );
+    if (matchRangoExplicit) {
+      const d1 = matchRangoExplicit[1].padStart(2, '0');
+      const m2 = matchRangoExplicit[4].padStart(2, '0');
+      const m1 = (matchRangoExplicit[2] || m2).padStart(2, '0');
+      const d2 = matchRangoExplicit[3].padStart(2, '0');
+      diasEncuentro = `${d1}/${m1} al ${d2}/${m2}`;
+    } else if (/luego\s+del\s+(\d{1,2}\/\d{1,2})/i.test(sinNotasSistema)) {
+      const m = sinNotasSistema.match(/luego\s+del\s+(\d{1,2}\/\d{1,2})/i)!;
+      const [dd, mm] = m[1].split('/');
+      diasEncuentro = `Desde ${dd.padStart(2, '0')}/${mm.padStart(2, '0')}`;
+    } else {
+      const fechas = extraerFechasMencionadas(sinNotasSistema);
+      if (fechas.length === 1) {
+        diasEncuentro = fechas[0];
+      } else if (fechas.length > 1) {
+        diasEncuentro = fechas.join(', ');
+      } else if (/\bmartes\s+a\s+jueves\b/i.test(sinNotasSistema)) {
+        diasEncuentro = 'Martes a jueves';
+      } else if (/\bmartes\s+o\s+jueves\b/i.test(sinNotasSistema)) {
+        diasEncuentro = 'Martes o jueves';
+      } else if (/\blunes\s+a\s+viernes\b/i.test(sinNotasSistema)) {
+        diasEncuentro = 'Lunes a viernes';
+      } else if (/\bcualquier\s+d[ií]a\b/i.test(sinNotasSistema) && /visita/i.test(sinNotasSistema)) {
+        diasEncuentro = 'Cualquier día';
+      }
+    }
+  }
+
+  // Extraer Horario (`horaInicio`, `horaFin`, `horarioEncuentro`)
+  let horaInicio = String(raw.horaInicio || '').trim();
+  let horaFin = String(raw.horaFin || '').trim();
+  let horarioEncuentro = String(raw.horarioEncuentro || '').trim();
+
+  if (horarioEncuentro) {
+    const mPuntual = horarioEncuentro.match(/^(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+    const mRango = horarioEncuentro.match(/^(\d{1,2}):(\d{2})\s*(?:a|-)\s*(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+    const mDesde = horarioEncuentro.match(/^(?:desde(?:\s+las)?)\s*(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+    const mHasta = horarioEncuentro.match(/^(?:hasta(?:\s+las)?)\s*(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+    if (mPuntual) {
+      horaInicio = `${mPuntual[1].padStart(2, '0')}:${mPuntual[2]}`;
+      horaFin = '';
+      horarioEncuentro = horaInicio;
+    } else if (mRango) {
+      horaInicio = `${mRango[1].padStart(2, '0')}:${mRango[2]}`;
+      horaFin = `${mRango[3].padStart(2, '0')}:${mRango[4]}`;
+      horarioEncuentro = `${horaInicio} a ${horaFin}`;
+    } else if (mDesde) {
+      horaInicio = `${mDesde[1].padStart(2, '0')}:${mDesde[2]}`;
+      horaFin = '';
+    } else if (mHasta) {
+      horaInicio = '';
+      horaFin = `${mHasta[1].padStart(2, '0')}:${mHasta[2]}`;
+    }
+  } else if (!horarioEncuentro && !horaInicio && !horaFin && sinNotasSistema) {
+    const sinEtiquetasPropuesta = sinNotasSistema
+      .replace(/\[(?:Propuesta|Confirmado|Reprogramado|Modalidad)[^\]]*\]/gi, '')
+      .trim();
+    const disp = analizarDisponibilidadColumnaG(sinEtiquetasPropuesta);
+    // Rango "entre las X y Y hs" / "de X a Y hs" / "X:00 a Y:00"
+    const matchEntre = sinEtiquetasPropuesta.match(
+      /\b(?:entre(?:\s+las?)?|de)\s*(\d{1,2})(?::(\d{2}))?\s*(?:hs?)?\s*(?:y|a|-)\s*(?:las?\s*)?(\d{1,2})(?::(\d{2}))?(?:\s*hs?)?\b/i
+    );
+    const matchDirectRange = sinEtiquetasPropuesta.match(
+      /\b(\d{1,2}):(\d{2})\s*(?:a|-)\s*(\d{1,2}):(\d{2})\b/i
+    );
+    const matchDespues = sinEtiquetasPropuesta.match(
+      /\b(?:despu[eé]s|luego|a\s+partir)\s+de\s+las\s+(\d{1,2})(?::(\d{2}))?\b/i
+    );
+    const matchAntes = sinEtiquetasPropuesta.match(
+      /\bantes\s+de\s+las\s+(\d{1,2})(?::(\d{2}))?\b/i
+    );
+
+    if (matchDirectRange) {
+      horaInicio = `${matchDirectRange[1].padStart(2, '0')}:${matchDirectRange[2]}`;
+      horaFin = `${matchDirectRange[3].padStart(2, '0')}:${matchDirectRange[4]}`;
+      horarioEncuentro = `${horaInicio} a ${horaFin}`;
+    } else if (matchEntre) {
+      const h1 = parseInt(matchEntre[1], 10);
+      const m1 = matchEntre[2] || '00';
+      const h2 = parseInt(matchEntre[3], 10);
+      const m2 = matchEntre[4] || '00';
+      if (h1 >= 6 && h1 <= 23 && h2 >= 7 && h2 <= 24) {
+        horaInicio = `${String(h1).padStart(2, '0')}:${m1}`;
+        horaFin = `${String(h2).padStart(2, '0')}:${m2}`;
+        horarioEncuentro = `${horaInicio} a ${horaFin}`;
+      }
+    } else if (disp.horaPuntualPactada && !disp.esVentanaAmplia) {
+      horaInicio = disp.horaPuntualPactada;
+      horarioEncuentro = disp.horaPuntualPactada;
+    } else if (matchDespues) {
+      horaInicio = `${matchDespues[1].padStart(2, '0')}:${matchDespues[2] || '00'}`;
+      horarioEncuentro = `Desde las ${horaInicio}`;
+    } else if (matchAntes) {
+      horaFin = `${matchAntes[1].padStart(2, '0')}:${matchAntes[2] || '00'}`;
+      horarioEncuentro = `Hasta las ${horaFin}`;
+    } else if (/\bpor\s+la\s+ma[ñn]ana\b/i.test(sinEtiquetasPropuesta)) {
+      horarioEncuentro = 'Mañana';
+    } else if (/\bal\s+mediod[ií]a\b/i.test(sinEtiquetasPropuesta)) {
+      horarioEncuentro = 'Mediodía';
+    } else if (/\bpor\s+la\s+tarde\b/i.test(sinEtiquetasPropuesta)) {
+      horarioEncuentro = 'Tarde';
+    }
+  } else if (!horarioEncuentro) {
+    if (horaInicio && horaFin) horarioEncuentro = `${horaInicio} a ${horaFin}`;
+    else if (horaInicio) horarioEncuentro = horaInicio;
+    else if (horaFin) horarioEncuentro = `Hasta ${horaFin}`;
+  }
+
+  // Determinar qué queda como `comentarioInterno` (nota interna para consumo humano)
+  let comentarioInterno = sinNotasSistema;
+  if (comentarioInterno) {
+    const esFraseAgendaOBuscarFichas =
+      /^(?:confirmar\s+)?visita\b/i.test(comentarioInterno) ||
+      /^(?:coordinar\s+para\s+)?buscar\s+fichas\b/i.test(comentarioInterno) ||
+      /^\([^)]+\)\.?$/.test(comentarioInterno);
+
+    if (esFraseAgendaOBuscarFichas) {
+      // Quitar la cláusula de "Visita ... (Calle)" o "Buscar fichas ... (Calle)" y conservar sólo notas adicionales (ej: "Tiene 2 personas más.")
+      const resto = comentarioInterno
+        .replace(/^(?:confirmar\s+)?visita\s+con[sc]ertada\.?/i, '')
+        .replace(/^(?:confirmar\s+)?visita[^.(]*\([^)]*\)\s*\.?/i, '')
+        .replace(/^(?:coordinar\s+para\s+)?buscar\s+fichas[^.(]*(?:\([^)]*\))?\s*(?:por\s+su\s+casa)?\s*\.?/i, '')
+        .replace(/^\([^)]+\)\s*\.?/, '')
+        .replace(/\[(?:Confirmado|Reprogramado|Propuesta enviada)[^\]]*\]/gi, '')
+        .replace(/^[·—\-,;:\s]+|[·—\-,;:\s]+$/g, '')
+        .trim();
+      comentarioInterno = resto;
+    } else {
+      // Limpiar etiquetas de sistema como [Confirmado ...]
+      comentarioInterno = comentarioInterno
+        .replace(/\[(?:Confirmado|Reprogramado|Propuesta enviada)[^\]]*\]/gi, '')
+        .replace(/^[·—\-,;:\s]+|[·—\-,;:\s]+$/g, '')
+        .trim();
+    }
+  }
+
+  return {
+    diasEncuentro,
+    horaInicio,
+    horaFin,
+    horarioEncuentro,
+    calleOCruce,
+    pisoDepto,
+    fichasExtrasCantidad,
+    retiroConfirmado,
+    comentarioInterno,
+  };
+}
+
 export function procesarContacto(
   rawInput: RawContactRow,
   profile: VoiceProfile = DEFAULT_VOICE_PROFILE,
   ahoraMs: number = Date.now()
 ): Contact {
   const rawDesfasado = repararContactoDesfasado(rawInput);
-  // Si la dirección en Columna G ("Comentario") no coincide con el barrio de la Columna C,
+  // Si la dirección no coincide con el barrio de la Columna C,
   // auto-corregir automáticamente al barrio real correspondiente a esa dirección/punto.
   const raw = sincronizarBarrioConDireccionComentario(rawDesfasado);
 
@@ -897,13 +1116,54 @@ export function procesarContacto(
   const rsp = (raw.rsp || '').toLowerCase();
   const enSheets = raw.enSheets !== undefined ? raw.enSheets : raw.rsp !== 'Nuevo';
 
-  const calleOCruce = (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
+  const tieneCamposEstructurados =
+    raw.diasEncuentro !== undefined ||
+    raw.horarioEncuentro !== undefined ||
+    raw.horaInicio !== undefined ||
+    raw.horaFin !== undefined;
+
+  const desglose = desglosarComentarioEnCamposEstructurados(raw);
+  const calleOCruce = tieneCamposEstructurados
+    ? (raw.calleOCruce || '').trim()
+    : (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
+  const pisoDepto = (raw.pisoDepto ?? desglose.pisoDepto ?? '').trim();
+  const diasEncuentro = tieneCamposEstructurados
+    ? (raw.diasEncuentro || '').trim()
+    : desglose.diasEncuentro;
+  const horaInicio = tieneCamposEstructurados
+    ? (raw.horaInicio || desglose.horaInicio || '').trim()
+    : desglose.horaInicio;
+  const esHorarioPuntualExplicito = /^\d{1,2}:\d{2}(?:\s*hs)?$/i.test(
+    (raw.horarioEncuentro || '').trim()
+  );
+  const horaFin = tieneCamposEstructurados
+    ? esHorarioPuntualExplicito
+      ? ''
+      : (raw.horaFin ?? desglose.horaFin ?? '').trim()
+    : desglose.horaFin;
+  const horarioEncuentro = tieneCamposEstructurados
+    ? (raw.horarioEncuentro || '').trim() ||
+      (horaInicio && horaFin ? `${horaInicio} a ${horaFin}` : horaInicio || (horaFin ? `Hasta ${horaFin}` : ''))
+    : desglose.horarioEncuentro;
+  const fichasExtrasCantidad = raw.fichasExtrasCantidad ?? desglose.fichasExtrasCantidad;
+  const retiroConfirmado = raw.retiroConfirmado ?? desglose.retiroConfirmado;
+
   const tieneDireccionRealEnComentario = calleOCruce.trim().length > 0;
-  const comentarioParaAgenda = (raw.comentario || '')
-    .replace(/\[(?:1er\s*(?:mensaje|msj|contacto)|Intento auto|Enviado|Reintentar)[^\]]*\]/gi, '')
-    .replace(/1er\s*(?:mensaje|msj|contacto)\s*(?:auto\s*)?enviado[^·;\n]*/gi, '');
-  const fechasMencionadas = extraerFechasMencionadas(comentarioParaAgenda);
-  const franjaHoraria = analizarFranjaHoraria(comentarioParaAgenda);
+  // Si el contacto ya usa campos estructurados (`diasEncuentro`, `horarioEncuentro`),
+  // NUNCA extraer fechas ni horarios desde `raw.comentario` (que es exclusivamente para consumo interno).
+  const textoAgendaEfectivo = tieneCamposEstructurados
+    ? [diasEncuentro, horarioEncuentro].filter(Boolean).join(' ')
+    : [
+        diasEncuentro,
+        horarioEncuentro,
+        (raw.comentario || '')
+          .replace(/\[(?:1er\s*(?:mensaje|msj|contacto)|Intento auto|Enviado|Reintentar)[^\]]*\]/gi, '')
+          .replace(/1er\s*(?:mensaje|msj|contacto)\s*(?:auto\s*)?enviado[^·;\n]*/gi, ''),
+      ]
+        .filter(Boolean)
+        .join(' ');
+  const fechasMencionadas = extraerFechasMencionadas(textoAgendaEfectivo);
+  const franjaHoraria = analizarFranjaHoraria(textoAgendaEfectivo);
   const geo = geocodificarContactoLocal(calleOCruce, raw.barrio, raw.id);
 
   const adhirioPreviamente = yaAdhirioAntes(raw);
@@ -925,10 +1185,12 @@ export function procesarContacto(
     ? 72
     : Math.max(0, Math.round((ahoraMs - fechaRefMs) / (1000 * 60 * 60)));
 
-  const tieneNuevaInfoEnColumnaG = tieneNuevaInformacionEnColumnaG(raw.comentario);
+  const tieneNuevaInfoEnColumnaG =
+    Boolean(calleOCruce || diasEncuentro || horarioEncuentro) ||
+    tieneNuevaInformacionEnColumnaG(raw.comentario);
   const visitaCompleta = tieneVisitaConcretadaConDatosCompletos({
     adhirio: adhirioPreviamente ? 'Sí' : raw.adhirio,
-    comentario: raw.comentario,
+    comentario: tieneCamposEstructurados ? textoAgendaEfectivo : raw.comentario,
     calleOCruce,
     fechasMencionadas,
     estadoFlujo,
@@ -949,6 +1211,20 @@ export function procesarContacto(
       estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
       estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') &&
     !esRetiroFichas;
+
+  // Seguimiento de 7 días para 3c. Prefiere Punto / Sede
+  let diasDesdeEstadoPuntoSede: number | undefined;
+  let requiereSeguimientoPuntoSede7d = false;
+  if (estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE') {
+    const fechaPuntoRef = raw.fechaEstadoPuntoSede || raw.ultimoContacto || raw.fechaAgregado;
+    if (fechaPuntoRef) {
+      const msPunto = new Date(fechaPuntoRef).getTime();
+      if (!Number.isNaN(msPunto)) {
+        diasDesdeEstadoPuntoSede = Math.max(0, Math.floor((ahoraMs - msPunto) / (1000 * 60 * 60 * 24)));
+        requiereSeguimientoPuntoSede7d = diasDesdeEstadoPuntoSede >= 7;
+      }
+    }
+  }
 
   let situacion: SituacionContacto = 'SEGUIMIENTO_CAMBIO_CHIP';
   let modalidadSugerida: Contact['modalidadSugerida'] = 'CAFE_HUB';
@@ -1014,7 +1290,7 @@ export function procesarContacto(
     situacion = 'VISITA_AGENDADA';
     modalidadSugerida = 'PUERTA_A_PUERTA';
     motivoEstrategico = `Visita concretada con datos completos (${calleOCruce || raw.barrio} · ${
-      fechasMencionadas.join('/') || franjaHoraria
+      diasEncuentro || fechasMencionadas.join('/') || horarioEncuentro || franjaHoraria
     }).`;
     prioridadCorte = 1;
   } else if (com.includes('pidió más info') || com.includes('mas info') || estadoFlujo === 'PIDIO_MAS_INFO_ENVIADA') {
@@ -1029,7 +1305,9 @@ export function procesarContacto(
   ) {
     situacion = 'PREFIERE_PUNTO';
     modalidadSugerida = 'CAFE_HUB';
-    motivoEstrategico = 'Visita/Café propuesto o prefiere acercarse a un punto: esperando confirmación de horario/lugar.';
+    motivoEstrategico = requiereSeguimientoPuntoSede7d
+      ? `Pasaron ${diasDesdeEstadoPuntoSede} días en Punto/Sede: enviar mensaje de seguimiento semanal.`
+      : 'Prefiere acercarse a un Punto o Sede: seguimiento semanal.';
     prioridadCorte = 2;
   } else if (
     estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
@@ -1039,7 +1317,7 @@ export function procesarContacto(
     situacion = 'SEGUIMIENTO_CAMBIO_CHIP';
     modalidadSugerida = calleOCruce ? 'PUERTA_A_PUERTA' : 'CAFE_HUB';
     motivoEstrategico = tieneNuevaInfoEnColumnaG
-      ? `Datos pasados en Comentario (${raw.comentario}): proponer o confirmar visita de 2 min o café cercano.`
+      ? `Datos registrados (${[calleOCruce, diasEncuentro, horarioEncuentro].filter(Boolean).join(' · ') || raw.comentario}): proponer o confirmar visita de 2 min.`
       : `Respondió Sí: validar DNI en CABA y pedir esquina/zona y disponibilidad.`;
     prioridadCorte = 1;
   } else {
@@ -1047,7 +1325,7 @@ export function procesarContacto(
     modalidadSugerida = 'CAFE_HUB';
     motivoEstrategico = sinNombre
       ? `1er mensaje enviado (esperando que responda su nombre y apellido + disponibilidad).`
-      : `En Sheets sin respuesta tras ${horasDesdeUltimoContacto}h: hacer seguimiento suave proponiendo pasar por su zona o café cercano.`;
+      : `En Sheets sin respuesta tras ${horasDesdeUltimoContacto}h: hacer seguimiento suave proponiendo pasar por su zona.`;
     prioridadCorte = 3;
   }
 
@@ -1072,7 +1350,7 @@ export function procesarContacto(
         : raw.adhirio;
 
   // Regla Card 3 ("RSP: SÍ"): respondieron según Columna E ("RSP" = "Sí"), no adhirieron aún,
-  // no tienen todavía ninguna nueva información cargada en Columna G ("Comentario") y no se les envió confirmación de encuentro.
+  // no tienen todavía ninguna nueva información cargada y no se les envió confirmación de encuentro.
   const esRspSiSinInfoColG =
     primerContactoEnviado &&
     !procesoCompletadoSinMensajes &&
@@ -1084,7 +1362,7 @@ export function procesarContacto(
     estadoFlujo !== 'ENCUENTRO_CONFIRMADO' &&
     estadoFlujo !== 'RECORDATORIO_DIA_ENVIADO';
 
-  // Regla Card 4 ("SIN RSP +48H"): marca temporal +48h sin respuesta en Col. E o con dato insuficiente en Col. G
+  // Regla Card 4 ("SIN RSP +48H"): marca temporal +48h sin respuesta en Col. E o con dato insuficiente
   const diagnostico48h =
     procesoCompletadoSinMensajes || esCerradoOArchivadoSinDniCaba
       ? undefined
@@ -1095,7 +1373,7 @@ export function procesarContacto(
             barrio: raw.barrio,
             rsp: rsp === 'sí' || rsp === 'si' ? 'Sí' : sinPrimerContacto ? 'Nuevo' : 'No',
             adhirio: adhirioEfectivo === 'Sí' ? 'Sí' : 'Pendiente',
-            comentario: raw.comentario,
+            comentario: tieneCamposEstructurados ? textoAgendaEfectivo : raw.comentario,
             calleOCruce,
             franjaHoraria,
             fechasMencionadas,
@@ -1108,6 +1386,11 @@ export function procesarContacto(
             tieneNuevaInfoEnColumnaG,
             lat: geo.lat,
             lng: geo.lng,
+            ultimoContacto: raw.ultimoContacto,
+            fechaPrimerContacto: raw.fechaPrimerContacto,
+            ultimoMensajeCorteEnviadoAt: raw.ultimoMensajeCorteEnviadoAt,
+            actualizadoEnAppAt: raw.actualizadoEnAppAt,
+            enviadoEnSesion: raw.enviadoEnSesion,
           },
           profile,
           ahoraMs
@@ -1128,7 +1411,10 @@ export function procesarContacto(
     situacion,
     calleOCruce,
     tieneDireccionRealEnComentario,
-    comentario: raw.comentario,
+    comentario: tieneCamposEstructurados ? '' : raw.comentario,
+    diasEncuentro,
+    fechasMencionadas,
+    retiroConfirmado,
   });
 
   const alertaVencido =
@@ -1140,7 +1426,9 @@ export function procesarContacto(
             primerNombre,
             barrio: raw.barrio,
             calleOCruce,
-            comentario: raw.comentario,
+            comentario: tieneCamposEstructurados ? '' : raw.comentario,
+            diasEncuentro,
+            horarioEncuentro,
             franjaHoraria,
             fechasMencionadas,
             situacion,
@@ -1149,6 +1437,12 @@ export function procesarContacto(
             horasDesdeUltimoContacto,
             lat: geo.lat,
             lng: geo.lng,
+            alertaVencidoOcultaFecha: raw.alertaVencidoOcultaFecha,
+            ultimoContacto: raw.ultimoContacto,
+            fechaPrimerContacto: raw.fechaPrimerContacto,
+            ultimoMensajeCorteEnviadoAt: raw.ultimoMensajeCorteEnviadoAt,
+            actualizadoEnAppAt: raw.actualizadoEnAppAt,
+            enviadoEnSesion: raw.enviadoEnSesion,
           },
           profile,
           ahoraMs
@@ -1161,22 +1455,41 @@ export function procesarContacto(
     motivoEstrategico = `⏱️ ${diagnostico48h.etiquetaCorta}: ${diagnostico48h.motivoDetallado}`;
   }
 
+  const comentarioParaPlantilla = tieneCamposEstructurados
+    ? [
+        diasEncuentro ? `Visita ${diasEncuentro}` : '',
+        horarioEncuentro ? `a las ${horarioEncuentro}` : '',
+        calleOCruce ? `(${calleOCruce})` : '',
+        fichasExtrasCantidad ? `X${fichasExtrasCantidad}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ') || raw.comentario
+    : raw.comentario;
+
   const msgObj = generarMensajeContextual(
     {
       sinNombre,
       primerNombre,
       barrio: raw.barrio,
       calleOCruce,
-      comentario: raw.comentario,
+      comentario: comentarioParaPlantilla,
       franjaHoraria,
       fechasMencionadas,
       situacion,
       estadoFlujo,
       lat: geo.lat,
       lng: geo.lng,
+      ultimoContacto: raw.ultimoContacto,
+      fechaPrimerContacto: raw.fechaPrimerContacto,
+      ultimoMensajeCorteEnviadoAt: raw.ultimoMensajeCorteEnviadoAt,
+      actualizadoEnAppAt: raw.actualizadoEnAppAt,
+      enviadoEnSesion: raw.enviadoEnSesion,
+      fechaEstadoPuntoSede: raw.fechaEstadoPuntoSede,
+      requiereSeguimientoPuntoSede7d,
     },
     profile,
-    alertaVencido?.activa ? 'disculpas_y_reprogramacion' : 'auto'
+    alertaVencido?.activa ? 'disculpas_y_reprogramacion' : 'auto',
+    { ahoraMs }
   );
 
   const mensajeSugeridoFinal = alertaVencido?.activa
@@ -1220,6 +1533,15 @@ export function procesarContacto(
     horasDesdeUltimoContacto,
     intentos: intentosEfectivos,
     calleOCruce,
+    pisoDepto,
+    diasEncuentro,
+    horaInicio,
+    horaFin,
+    horarioEncuentro,
+    fichasExtrasCantidad,
+    retiroConfirmado,
+    requiereSeguimientoPuntoSede7d,
+    diasDesdeEstadoPuntoSede,
     tieneDireccionRealEnComentario,
     tienePuntoEncuentroDeterminado,
     tieneNuevaInfoEnColumnaG,
@@ -1249,18 +1571,26 @@ export function procesarContacto(
 
 /**
  * Resuelve la fecha operativa objetivo (DD/MM) de un contacto respecto del día actual (`ahoraMs`):
- * - Si el contacto tiene varias fechas en Columna G (ej. "20 o 21/10", "21 o 22/10", "21 o 23/10"),
+ * - Si el contacto tiene varias fechas (ej. "20 o 21/10", "04/11 al 06/11"),
  *   prioriza HOY (`hoyBA.ddmm`) si está incluida, o la próxima fecha futura operativa más cercana.
  * - Si no tiene fecha numérica pero menciona días de la semana ("martes a jueves", "martes o jueves")
  *   sin postergación a otra semana futura, la vincula con el día operativo coincidente.
  */
 export function resolverFechaObjetivoContacto(
-  c: { fechasMencionadas: string[]; comentario: string },
+  c: { fechasMencionadas: string[]; comentario: string; diasEncuentro?: string; horarioEncuentro?: string },
   ahoraMs: number = Date.now()
 ): string | undefined {
   const diasProx = [0, 1, 2, 3, 4, 5, 6, 7].map((offset) => sumarDiasAFechaBA(ahoraMs, offset));
   const diasSemanaCompleta = [0, 1, 2, 3, 4, 5, 6, 7].map((offset) => sumarDiasAFechaBA(ahoraMs, offset));
   const hoyBA = diasProx[0];
+  const tieneEstructurados = Boolean(
+    (c.diasEncuentro && c.diasEncuentro.trim()) ||
+      (c.horarioEncuentro && c.horarioEncuentro.trim())
+  );
+  const textoAgenda = [c.diasEncuentro, c.horarioEncuentro, tieneEstructurados ? '' : c.comentario]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
   const comLow = (c.comentario || '').toLowerCase();
 
   // Las reuniones en Chile 1408 son los miércoles
@@ -1291,9 +1621,9 @@ export function resolverFechaObjetivoContacto(
     return c.fechasMencionadas[c.fechasMencionadas.length - 1];
   }
 
-  if (!comLow || comLow.includes('semana del ')) return undefined;
+  if (!textoAgenda || textoAgenda.includes('semana del ')) return undefined;
 
-  const dispRango = analizarDisponibilidadColumnaG(c.comentario);
+  const dispRango = analizarDisponibilidadColumnaG(textoAgenda);
   const minActualHoy = hoyBA.hour * 60 + hoyBA.minute;
   const yaPasoVentanaHoy =
     dispRango.minFinVentana !== undefined
@@ -1301,13 +1631,13 @@ export function resolverFechaObjetivoContacto(
       : minActualHoy >= 18 * 60;
   const diasBusquedaRango = yaPasoVentanaHoy ? diasProx.slice(1, 4) : diasProx.slice(0, 3);
 
-  if (comLow.includes('martes a jueves')) {
+  if (textoAgenda.includes('martes a jueves')) {
     const matchDia = diasBusquedaRango.find((d) =>
       ['martes', 'miércoles', 'miercoles', 'jueves'].includes(d.nombreDia.toLowerCase())
     );
     if (matchDia) return matchDia.ddmm;
   }
-  if (comLow.includes('martes o jueves')) {
+  if (textoAgenda.includes('martes o jueves')) {
     const matchDia = diasBusquedaRango.find((d) =>
       ['martes', 'jueves'].includes(d.nombreDia.toLowerCase())
     );
@@ -1322,7 +1652,13 @@ export function obtenerRangoHorarioEfectivoContacto(c: Contact): {
   horaPuntualMin?: number;
   turno: 'AM' | 'PM' | 'FLEX';
 } {
-  const disp = analizarDisponibilidadColumnaG(c.comentario);
+  const horarioEstructurado =
+    c.horarioEncuentro ||
+    (c.horaInicio && c.horaFin ? `${c.horaInicio} a ${c.horaFin}` : c.horaInicio || '');
+  const textoHorario =
+    horarioEstructurado ||
+    (c.diasEncuentro && c.diasEncuentro.trim() ? '' : c.comentario);
+  const disp = analizarDisponibilidadColumnaG(textoHorario);
   if (disp.horaPuntualPactada && !disp.esVentanaAmplia) {
     const min = horaAMinutosDelDia(disp.horaPuntualPactada);
     return {

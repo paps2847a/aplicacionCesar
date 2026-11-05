@@ -50,6 +50,7 @@ import {
 } from '../calendar/calendarEvents';
 import { construirMicroClusters } from './clustering';
 import {
+  aplicarReglaSaludoMismoDia,
   corregirPelonesDiaSemanaEnTexto,
   postProcesarMensajeAntiPelonesYSaludo,
 } from '../messaging/greetingsAndTone';
@@ -60,13 +61,42 @@ import { calcularResumenKPIsPadron } from '../tasks/dailyTasks';
 import { diagnosticarYGenerarMensajeSeguimiento48h, generarMensajeContextual } from '../messaging/messageTemplates';
 import { actualizarDatosContactoEnApp } from '../sync/dataMerging';
 
+function obtenerTextoHorarioAgendaContacto(c: {
+  diasEncuentro?: string;
+  horarioEncuentro?: string;
+  horaInicio?: string;
+  horaFin?: string;
+  comentario?: string;
+}): string {
+  const horario =
+    c.horarioEncuentro ||
+    (c.horaInicio && c.horaFin ? `${c.horaInicio} a ${c.horaFin}` : c.horaInicio || '');
+  const tieneEstructurados = Boolean(
+    (c.diasEncuentro && c.diasEncuentro.trim()) || horario.trim()
+  );
+  return [c.diasEncuentro, horario, tieneEstructurados ? '' : c.comentario]
+    .filter(Boolean)
+    .join(' ');
+}
+
 export function esContactoConfirmadoEnLista1a1(contact: Contact): boolean {
   if (
     contact.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
-    contact.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
-    contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE'
+    contact.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO'
   ) {
     return true;
+  }
+  if (
+    contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' &&
+    Boolean(contact.retiroConfirmado || /\[confirmado|retiro\s+confirmado/i.test(contact.comentario || ''))
+  ) {
+    return true;
+  }
+  if (
+    contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+    contact.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR'
+  ) {
+    return false;
   }
   const com = (contact.comentario || '').toLowerCase();
   if (
@@ -216,7 +246,7 @@ export function calcularHojaDeRuta(
       const cand = pendientes[i];
       const ubiCand = obtenerUbicacionEncuentroContacto(cand);
       const d = distanciaHaversineMetros(actualLat, actualLng, ubiCand.lat, ubiCand.lng);
-      const disp = analizarDisponibilidadColumnaG(cand.comentario);
+      const disp = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(cand));
       const esConfirmado1a1 = esContactoConfirmadoEnLista1a1(cand);
       let refMinutos = 15 * 60;
       let bonusPuntual = esConfirmado1a1 ? -400 : 0;
@@ -226,7 +256,7 @@ export function calcularHojaDeRuta(
       } else if (disp.minInicioVentana !== undefined && disp.minFinVentana !== undefined) {
         refMinutos = Math.round(disp.minInicioVentana * 0.45 + disp.minFinVentana * 0.55);
         // Priorizar ventanas numéricas explícitas (ej. "entre las 15:30 y las 19:00" o "de 15 a 19") sobre "a la tarde" genérico
-        if (/\b(?:entre\s+(?:las\s+)?\d|de\s+(?:las\s+)?\d{1,2}\s+a\s+\d)/i.test(cand.comentario || '')) {
+        if (/\b(?:entre\s+(?:las\s+)?\d|de\s+(?:las\s+)?\d{1,2}\s+a\s+\d|\d{1,2}:\d{2}\s*(?:a|-)\s*\d)/i.test(obtenerTextoHorarioAgendaContacto(cand))) {
           bonusPuntual -= 320;
         }
       } else if (cand.franjaHoraria === 'Mañana') {
@@ -268,7 +298,7 @@ export function calcularHojaDeRuta(
       const destLat = ubiDestino.lat;
       const destLng = ubiDestino.lng;
 
-      const dispColG = analizarDisponibilidadColumnaG(c.comentario);
+      const dispColG = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(c));
       const horaPactadaExplicita = dispColG.esVentanaAmplia ? undefined : dispColG.horaPuntualPactada;
 
       let trasladoActual = calcularMinutosTrasladoCABA(origenLat, origenLng, destLat, destLng);
@@ -277,6 +307,10 @@ export function calcularHojaDeRuta(
 
       let horaSalida = cursorHora;
       let notaHorarioConveniente: string | undefined;
+
+      const pactadaExactaMin = horaPactadaExplicita ? horaAMinutosDelDia(horaPactadaExplicita) : null;
+      const esConfirmadoConHoraExacta =
+        esContactoConfirmadoEnLista1a1(c) && pactadaExactaMin !== null;
 
       // Verificar si un tramo [iniSalidaMin, finVisitaMin] se superpone con algún evento de Google Calendar.
       // IMPORTANTE: No duplicar tiempos de traslado después del evento; cuando el evento termina en `evFin`,
@@ -298,22 +332,27 @@ export function calcularHojaDeRuta(
           const evFin = horaAMinutosDelDia(ev.endTime);
           const esVirtual = esEventoVirtualCalendar(ev);
           const geoEv = geocodificarEventoCalendar(ev, profile);
+          const tieneDirFisica = Boolean(
+            ev.location && ev.location.trim() && ev.location.trim().toUpperCase() !== 'CABA'
+          );
           const trasladoHaciaEv = esVirtual
             ? { minutos: 0, modo: 'WALKING' as const, distanciaMetros: 0, cuadras: 0 }
-            : calcularMinutosTrasladoCABA(stopLat, stopLng, geoEv.lat, geoEv.lng);
-          const margenHaciaEv = esVirtual ? 5 : Math.min(25, trasladoHaciaEv.minutos + 2);
+            : tieneDirFisica
+            ? calcularMinutosTrasladoCABA(stopLat, stopLng, geoEv.lat, geoEv.lng)
+            : { minutos: 20, modo: 'TRANSIT' as const, distanciaMetros: 1500, cuadras: 15 };
+          const margenHaciaEv = esVirtual
+            ? 5
+            : pactadaExactaMin !== null
+            ? 20
+            : Math.max(20, Math.min(25, trasladoHaciaEv.minutos + 2));
           const margenPostEv = esVirtual ? 2 : 0;
 
           if (iniSalidaMin < evFin + margenPostEv && finVisitaMin + margenHaciaEv > evIni) {
-            return { ev, geoEv, trasladoEv: trasladoHaciaEv, evIni, evFin, esVirtual };
+            return { ev, geoEv, trasladoEv: trasladoHaciaEv, evIni, evFin, esVirtual, margenHaciaEv, margenPostEv };
           }
         }
         return null;
       };
-
-      const pactadaExactaMin = horaPactadaExplicita ? horaAMinutosDelDia(horaPactadaExplicita) : null;
-      const esConfirmadoConHoraExacta =
-        esContactoConfirmadoEnLista1a1(c) && pactadaExactaMin !== null;
       const ventanaColGYaVencidaHoy =
         esRutaDeHoy &&
         dispColG.minFinVentana !== undefined &&
@@ -395,19 +434,27 @@ export function calcularHojaDeRuta(
         trasladoActual = calcularMinutosTrasladoCABA(origenLat, origenLng, destLat, destLng);
         minutosViaje = trasladoActual.minutos;
         modoTraslado = trasladoActual.modo;
+        if (
+          pactadaExactaMin !== null &&
+          (esConfirmadoConHoraExacta || citaPuntualYaVencidaHoy || i === 0)
+        ) {
+          horaSalida = sumarMinutosAHora('00:00', Math.max(8 * 60, pactadaExactaMin - minutosViaje));
+        }
       }
 
       // 3. BUCLE ESTRICTO ANTI-CHOQUE CALENDAR:
       // Si el tramo [horaSalida, horaFinVisita] choca con CUALQUIER evento de Google Calendar (ej. Dentista 11:30-13:00,
       // Almuerzo con Frima 13:15-14:15, Terapia 14:30-15:20 o Reunión virtual 16:00-17:00), avanzar iterativamente
-      // hasta el primer hueco libre posterior a todos los eventos encadenados.
+      // hasta el hueco libre más cercano (antes o después si pidió hora fija).
+      // IMPORTANTE: Si la cita ya fue CONFIRMADA con hora exacta (`esConfirmadoConHoraExacta`), respetar estrictamente la hora confirmada.
       const eventosSaltados: CalendarEventItem[] = [];
       let guardIter = 0;
-      while (guardIter < 12 && !citaPuntualYaVencidaHoy) {
+      const duracionVisitaParaChoque = pactadaExactaMin !== null ? 10 : bufferEfectivo;
+      while (guardIter < 12 && !citaPuntualYaVencidaHoy && !esConfirmadoConHoraExacta) {
         guardIter++;
         const salMin = horaAMinutosDelDia(horaSalida);
         const llegMin = salMin + minutosViaje;
-        const finMin = llegMin + bufferEfectivo;
+        const finMin = llegMin + duracionVisitaParaChoque;
         const choque = chequearChoqueTramoConCalendar(salMin, finMin, destLat, destLng);
         if (!choque) break;
 
@@ -415,7 +462,32 @@ export function calcularHojaDeRuta(
           eventosSaltados.push(choque.ev);
         }
 
-        const nuevaSalidaMin = choque.evFin + (choque.esVirtual ? 2 : 0);
+        // Si el vecino fijó una hora puntual (no un rango), evaluar también el hueco inmediatamente ANTERIOR al evento
+        // para sugerirle el horario más cercano posible (antes o después) a su hora pedida.
+        const nuevaSalidaDespuesMin = choque.evFin + (choque.esVirtual ? 2 : 0);
+        const llegadaDespuesMin = nuevaSalidaDespuesMin + minutosViaje;
+
+        if (pactadaExactaMin !== null && guardIter === 1) {
+          const finAntesMin = Math.floor((choque.evIni - choque.margenHaciaEv) / 5) * 5;
+          const llegadaAntesMin = finAntesMin - duracionVisitaParaChoque;
+          const salidaAntesMin = llegadaAntesMin - minutosViaje;
+          const respetaParadaPrevia =
+            finVisitaParadaAnteriorMin === null || salidaAntesMin >= finVisitaParadaAnteriorMin;
+          const respetaHoraActual =
+            !esRutaDeHoy || salidaAntesMin >= minutosActualesBA || minutosActualesBA < 8 * 60 + 30;
+          if (
+            salidaAntesMin >= 8 * 60 + 30 &&
+            respetaParadaPrevia &&
+            respetaHoraActual &&
+            !chequearChoqueTramoConCalendar(salidaAntesMin, finAntesMin, destLat, destLng) &&
+            Math.abs(pactadaExactaMin - llegadaAntesMin) < Math.abs(llegadaDespuesMin - pactadaExactaMin)
+          ) {
+            horaSalida = sumarMinutosAHora('00:00', salidaAntesMin);
+            break;
+          }
+        }
+
+        const nuevaSalidaMin = nuevaSalidaDespuesMin;
         if (nuevaSalidaMin + minutosViaje + bufferEfectivo > 20 * 60 + 15) {
           break;
         }
@@ -446,7 +518,10 @@ export function calcularHojaDeRuta(
       if (dispColG.esVentanaAmplia && dispColG.etiquetaVentana) {
         if (eventosSaltados.length > 0) {
           const resumenEvs = eventosSaltados
-            .map((e) => `"${e.summary}" (${e.startTime}-${e.endTime})`)
+            .map((e) => {
+              const dirEv = e.location && e.location.trim().toUpperCase() !== 'CABA' ? ` en ${e.location.split(',')[0]}` : '';
+              return `"${e.summary}" (${e.startTime}-${e.endTime}${dirEv})`;
+            })
             .join(', ');
           notaHorarioConveniente = `Franja amplia en Col. G (${dispColG.etiquetaVentana}): se reubicó automáticamente a las ${horaLlegada} hs para no superponerse con ${resumenEvs}.`;
         } else {
@@ -492,7 +567,13 @@ export function calcularHojaDeRuta(
       if (eventosSaltados.length > 0) {
         const evPrincipal = eventosSaltados[eventosSaltados.length - 1];
         const resumenTodosEvs = eventosSaltados
-          .map((e) => `"${e.summary}" (${e.startTime}-${e.endTime})`)
+          .map((e) => {
+            const dirEv =
+              e.location && e.location.trim().toUpperCase() !== 'CABA'
+                ? ` en ${e.location.split(',')[0]}`
+                : '';
+            return `"${e.summary}" (${e.startTime}-${e.endTime}${dirEv})`;
+          })
           .join(' + ');
         const desfasajePactada =
           pactadaMin !== null && Math.abs(llegadaVisitaMin - pactadaMin) >= 15;
@@ -535,7 +616,9 @@ export function calcularHojaDeRuta(
               prevP.contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE';
             if (ambosEnMismoCafeHub) continue;
 
-            const prevDisp = analizarDisponibilidadColumnaG(prevP.contact.comentario);
+            const prevDisp = analizarDisponibilidadColumnaG(
+              obtenerTextoHorarioAgendaContacto(prevP.contact)
+            );
             const prevPactadaMin = prevDisp.esVentanaAmplia
               ? null
               : prevDisp.horaPuntualPactada
@@ -595,7 +678,9 @@ export function calcularHojaDeRuta(
                 c.barrio === otro.barrio;
               if (ambosEnMismoCafeHub) continue;
 
-              const dispOtro = analizarDisponibilidadColumnaG(otro.comentario);
+              const dispOtro = analizarDisponibilidadColumnaG(
+                obtenerTextoHorarioAgendaContacto(otro)
+              );
               if (dispOtro.esVentanaAmplia) continue;
               const otroPactadaMin = dispOtro.horaPuntualPactada
                 ? horaAMinutosDelDia(dispOtro.horaPuntualPactada)
@@ -923,7 +1008,11 @@ export function generarMensajeTerrenoParadaRuta(
     }
   };
 
-  return corregirPelonesDiaSemanaEnTexto(construirTextoTerreno());
+  return aplicarReglaSaludoMismoDia(
+    corregirPelonesDiaSemanaEnTexto(construirTextoTerreno()),
+    c,
+    'AUTO_MISMO_DIA'
+  );
 }
 
 
@@ -989,6 +1078,14 @@ export function generarCorteEstrategicoLocal(
 
   const elegiblesAgendaConLugar = noAdheridosTotales.filter((c) => {
     if (!c.tienePuntoEncuentroDeterminado) return false;
+    // REGLA FEEDBACK-14: Quienes prefieren pasar por un Punto / Sede (3c. PREFIERE_CAFE_HUB_O_SEDE / PREFIERE_PUNTO)
+    // no quieren un encuentro particular y NUNCA deben incluirse en el Planificador & Hoy (salvo reunión sede Chile 1408 de test).
+    if (
+      c.situacion === 'PREFIERE_PUNTO' ||
+      (c.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' && c.situacion !== 'EVENTO_CHILE_1408')
+    ) {
+      return false;
+    }
     // Si el contacto fue puesto explícitamente en "3. Respondió · Falta calle/esquina o día" (o etapas previas sin datos completos),
     // no incluirlo en el Planificador de Ruta hasta que pase a "4. Pasó dirección/horario" o superior.
     if (
@@ -1177,11 +1274,12 @@ export function generarCorteEstrategicoLocal(
     const setCandidatos = new Set<number>();
     if (
       horaBasePreferidaMin >= minInicioOperativo &&
-      horaBasePreferidaMin <= maxFinOperativo - 35
+      horaBasePreferidaMin <= maxFinOperativo - 25
     ) {
       setCandidatos.add(horaBasePreferidaMin);
     }
-    for (let m = minInicioOperativo; m <= maxFinOperativo - 35; m += 15) {
+    const pasoGrilla = horaPuntualPreferida ? 5 : 15;
+    for (let m = minInicioOperativo; m <= maxFinOperativo - 25; m += pasoGrilla) {
       setCandidatos.add(m);
     }
     const todosLosCandidatosMin = Array.from(setCandidatos);
@@ -1232,10 +1330,19 @@ export function generarCorteEstrategicoLocal(
         const evFin = horaAMinutosDelDia(ev.endTime);
         const esVirt = esEventoVirtualCalendar(ev);
         const geoEv = geocodificarEventoCalendar(ev, profile);
+        const tieneDirFisica = Boolean(
+          ev.location && ev.location.trim() && ev.location.trim().toUpperCase() !== 'CABA'
+        );
         const trasladoEv = esVirt
           ? { minutos: 0, modo: 'WALKING' as const }
-          : calcularMinutosTrasladoCABA(latBarrio, lngBarrio, geoEv.lat, geoEv.lng);
-        const margenAntes = esVirt ? 5 : Math.min(25, trasladoEv.minutos + 4);
+          : tieneDirFisica
+          ? calcularMinutosTrasladoCABA(latBarrio, lngBarrio, geoEv.lat, geoEv.lng)
+          : { minutos: 20, modo: 'TRANSIT' as const };
+        const margenAntes = esVirt
+          ? 5
+          : horaPuntualPreferida
+          ? 20
+          : Math.max(20, Math.min(25, trasladoEv.minutos + 4));
         const margenDespues = esVirt ? 2 : Math.min(20, trasladoEv.minutos);
         if (iniMin < evFin + margenDespues && finMin + margenAntes > evIni) {
           return null;
@@ -1244,10 +1351,11 @@ export function generarCorteEstrategicoLocal(
       return { iniMin, finMin };
     };
 
-    // Si el circuito tiene una cita puntual pactada (ej. Laura 10:00 hs), evaluar primero si al menos la 1ra parada
+    // Si el circuito tiene una cita puntual pactada (ej. Laura 10:00 hs o Mariano 17:00 hs), evaluar primero si al menos la 1ra parada
     // entra en su horario puntual; el resto de las paradas se adaptarán dinámicamente en calcularHojaDeRuta.
+    const durMinParaPuntual = Math.min(duracionMin, Math.max(15, trasladoDesdeBase + 10));
     if (horaPuntualPreferida) {
-      const okPuntual = evaluarCandidato(horaBasePreferidaMin, Math.min(duracionMin, 28));
+      const okPuntual = evaluarCandidato(horaBasePreferidaMin, durMinParaPuntual);
       if (okPuntual) {
         const horaElegida = sumarMinutosAHora('00:00', okPuntual.iniMin);
         const evRef = eventos[0];
@@ -1262,7 +1370,7 @@ export function generarCorteEstrategicoLocal(
     }
 
     for (const candMin of todosLosCandidatosMin) {
-      const ok = evaluarCandidato(candMin, duracionMin);
+      const ok = evaluarCandidato(candMin, horaPuntualPreferida ? durMinParaPuntual : duracionMin);
       if (ok) {
         const horaElegida = sumarMinutosAHora('00:00', ok.iniMin);
         const evRef = eventos[0];
@@ -1496,7 +1604,7 @@ export function generarCorteEstrategicoLocal(
     let iniMinReal = horaAMinutosDelDia(horaInicioReal);
     let finMinReal = Math.max(iniMinReal + 25, horaAMinutosDelDia(horaFinReal));
     const tieneContactoConfirmadoConHoraExacta = contactosGrupo.some((c) => {
-      const disp = analizarDisponibilidadColumnaG(c.comentario);
+      const disp = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(c));
       return esContactoConfirmadoEnLista1a1(c) && Boolean(disp.horaPuntualPactada && !disp.esVentanaAmplia);
     });
 
@@ -1786,7 +1894,7 @@ export function generarCorteEstrategicoLocal(
 
     for (const c of miembrosSub) {
       conteoF[c.franjaHoraria] = (conteoF[c.franjaHoraria] || 0) + 1;
-      const disp = analizarDisponibilidadColumnaG(c.comentario);
+      const disp = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(c));
       if (disp.horaPuntualPactada && !disp.esVentanaAmplia) {
         if (
           !horaPuntual ||
@@ -1904,12 +2012,17 @@ export function generarCorteEstrategicoLocal(
         comLow.includes('declinó café') ||
         comLow.includes('declino cafe') ||
         comLow.includes('pasa a puerta a puerta') ||
-        comLow.includes('visita puerta a puerta');
+        comLow.includes('visita puerta a puerta') ||
+        comLow.includes('visita confirmada puerta a puerta') ||
+        /confirmado\s+1-a-1[^\]]*puerta\s+a\s+puerta/i.test(comLow);
       const pidioCafe =
         c.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
         comLow.includes('prefiere punto de encuentro') ||
         comLow.includes('prefiere café hub') ||
-        (c.estadoFlujo === 'ENCUENTRO_CONFIRMADO' && comLow.includes('café'));
+        (c.estadoFlujo === 'ENCUENTRO_CONFIRMADO' &&
+          /encuentro\s+confirmado\s+en\s+caf[eé]\s*hub|confirm[oó]\s+caf[eé]\s*hub|confirmado\s+1-a-1[^\]]*caf[eé]\s*hub/i.test(
+            comLow
+          ));
       const confirmoDomicilio =
         c.estadoFlujo === 'ENCUENTRO_CONFIRMADO' && !pidioCafe && (declinoCafe || Boolean(c.calleOCruce));
 
@@ -2128,7 +2241,7 @@ export function generarCorteEstrategicoLocal(
     });
   }
 
-  circuitosParaAgendar.slice(0, 16).forEach((circ, idx) => {
+  circuitosParaAgendar.slice(0, 30).forEach((circ, idx) => {
     const matchDiaExplicito = circ.fechaExplicita
       ? diasOperativos.find((d) => d.diaBA.ddmm === circ.fechaExplicita)
       : undefined;
@@ -2742,7 +2855,7 @@ export function generarMensajePropuestaBloqueAgenda(
     .trim();
 
   // Si es Puerta a Puerta y tenemos la parada calculada para este vecino, ofrecer su horario conveniente calculado según la agenda del día
-  const dispColG = analizarDisponibilidadColumnaG(contact.comentario);
+  const dispColG = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(contact));
   const detalleHoraPuntual =
     paradaVecino && modalidadEfectiva === 'PUERTA_A_PUERTA'
       ? dispColG.esVentanaAmplia && dispColG.etiquetaVentana
@@ -2752,55 +2865,66 @@ export function generarMensajePropuestaBloqueAgenda(
 
   const notaFichas =
     contact.situacion === 'RETIRO_FICHAS'
-      ? ' Además te llevo las fichas extras en blanco que me pediste para tus contactos de CABA.'
+      ? ' Además aprovecho para retirar las fichas firmadas que tenés listas.'
       : '';
 
   const introDisculpas = contact.alertaVencido?.activa
     ? `Te pido disculpas antes que nada porque no pude cumplir con nuestro compromiso anterior para los 2 minutos de tu firma de adhesión. `
     : '';
 
-  // Si tenía una HORA PUNTUAL RÍGIDA en Columna G que verdaderamente chocó con Google Calendar
-  if (paradaVecino?.conflictoCalendar && paradaVecino.mensajeReprogramacionCalendar) {
-    if (tieneCafeGrupal) {
-      return paradaVecino.mensajeReprogramacionCalendar;
+  const construirPropuesta = (): string => {
+    // Si tenía una HORA PUNTUAL RÍGIDA en Columna G que verdaderamente chocó con Google Calendar
+    if (paradaVecino?.conflictoCalendar && paradaVecino.mensajeReprogramacionCalendar) {
+      if (tieneCafeGrupal) {
+        return paradaVecino.mensajeReprogramacionCalendar;
+      }
+      return paradaVecino.mensajeReprogramacionCalendar
+        .replace(/Quería proponerte dos opciones:\s*\n1\.\s*/i, 'Quería proponerte ')
+        .replace(/\n2\.\s*O bien encontrarnos unos minutos en el café[^\n]*/i, '')
+        .replace(/¿Cuál de las dos te queda mejor\?/i, '¿Te queda bien ese horario?');
     }
-    return paradaVecino.mensajeReprogramacionCalendar
-      .replace(/Quería proponerte dos opciones:\s*\n1\.\s*/i, 'Quería proponerte ')
-      .replace(/\n2\.\s*O bien encontrarnos unos minutos en el café[^\n]*/i, '')
-      .replace(/¿Cuál de las dos te queda mejor\?/i, '¿Te queda bien ese horario?');
-  }
 
-  if (
-    modalidadEfectiva === 'EVENTO_SEDE' ||
-    modalidadEfectiva === 'ENCUENTRO_SEDE' ||
-    comLow.includes('chile 1408') ||
-    comLow.includes('sede popurrí') ||
-    comLow.includes('sede central')
-  ) {
-    return `${saludo}\n\n${introDisculpas}Te escribo por el encuentro en la sede de *${profile.sedeCentral}* para *${diaLimpio}* (${franjaLimpia}), así charlamos y sumamos tu firma de adhesión en 2 minutos con tu DNI físico de CABA.${notaFichas}\n\n¿Me confirmás si podés acercarte en ese horario o preferís que coordinemos pasar 2 minutos por *${dirVecino}*?`;
-  }
+    if (
+      modalidadEfectiva === 'EVENTO_SEDE' ||
+      modalidadEfectiva === 'ENCUENTRO_SEDE' ||
+      comLow.includes('chile 1408') ||
+      comLow.includes('sede popurrí') ||
+      comLow.includes('sede central')
+    ) {
+      return `${saludo}\n\n${introDisculpas}Te escribo por el encuentro en la sede de *${profile.sedeCentral}* para *${diaLimpio}* (${franjaLimpia}), así charlamos y sumamos tu firma de adhesión en 2 minutos con tu DNI físico de CABA.${notaFichas}\n\n¿Me confirmás si podés acercarte en ese horario o preferís que coordinemos pasar 2 minutos por *${dirVecino}*?`;
+    }
 
-  if (
-    (modalidadEfectiva === 'CAFE_HUB' ||
-      modalidadEfectiva === 'PUNTO_ADHESION' ||
-      modalidadEfectiva === 'SEGUIMIENTO_PUNTO_ADHESION') &&
-    infoCafe.incluirCafe
-  ) {
-    const sugerenciaHorarioDomicilio = paradaVecino?.horaLlegada
-      ? ` (por ejemplo pasando cerca de las *${paradaVecino.horaLlegada} hs*)`
-      : '';
-    return `${saludo}\n\n${introDisculpas}Para *${diaLimpio}* entre las *${franjaLimpia}* voy a estar por *${contact.barrio}* y quería proponerte si te queda cómodo que nos encontremos 2 minutos en ${infoCafe.fraseCafe}, para firmar la ficha de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te viene bien pasar por *${infoCafe.cafeNombre}* en esa franja, o preferís que pase 2 minutos por *${dirVecino}*${sugerenciaHorarioDomicilio}? Gracias.`;
-  }
+    if (
+      (modalidadEfectiva === 'CAFE_HUB' ||
+        modalidadEfectiva === 'PUNTO_ADHESION' ||
+        modalidadEfectiva === 'SEGUIMIENTO_PUNTO_ADHESION') &&
+      infoCafe.incluirCafe
+    ) {
+      const sugerenciaHorarioDomicilio = paradaVecino?.horaLlegada
+        ? ` (por ejemplo pasando cerca de las *${paradaVecino.horaLlegada} hs*)`
+        : '';
+      return `${saludo}\n\n${introDisculpas}Para *${diaLimpio}* entre las *${franjaLimpia}* voy a estar por *${contact.barrio}* y quería proponerte si te queda cómodo que nos encontremos 2 minutos en ${infoCafe.fraseCafe}, para firmar la ficha de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te viene bien pasar por *${infoCafe.cafeNombre}* en esa franja, o preferís que pase 2 minutos por *${dirVecino}*${sugerenciaHorarioDomicilio}? Gracias.`;
+    }
 
-  // Modalidad PUERTA_A_PUERTA: propone el horario conveniente según la agenda del día en orden cronológico,
-  // y sólo menciona el café alternativo si el bloque agrupa a varias personas ya contactadas (>= 2)
-  return infoCafe.incluirCafe
-    ? `${saludo}\n\n${introDisculpas}Estoy organizando el recorrido por *${contact.barrio}* para *${diaLimpio}*${
-        detalleHoraPuntual || ` en la franja de *${franjaLimpia}*`
-      }, y quería proponerte pasar 2 minutos por *${dirVecino}* para firmar la ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano).${notaFichas}\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en ese horario, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.`
-    : `${saludo}\n\n${introDisculpas}Estoy organizando el recorrido por *${contact.barrio}* para *${diaLimpio}*${
-        detalleHoraPuntual || ` en la franja de *${franjaLimpia}*`
-      }, y quería proponerte pasar 2 minutos por *${dirVecino}* para firmar la ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano).${notaFichas}\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en ese horario? Gracias.`;
+    // Modalidad PUERTA_A_PUERTA
+    return infoCafe.incluirCafe
+      ? `${saludo}\n\n${introDisculpas}Estoy organizando el recorrido por *${contact.barrio}* para *${diaLimpio}*${
+          detalleHoraPuntual || ` en la franja de *${franjaLimpia}*`
+        }, y quería proponerte pasar 2 minutos por *${dirVecino}* para ${
+          contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
+            ? 'retirar las fichas firmadas'
+            : 'firmar la ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano)'
+        }.\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en ese horario, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.`
+      : `${saludo}\n\n${introDisculpas}Estoy organizando el recorrido por *${contact.barrio}* para *${diaLimpio}*${
+          detalleHoraPuntual || ` en la franja de *${franjaLimpia}*`
+        }, y quería proponerte pasar 2 minutos por *${dirVecino}* para ${
+          contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
+            ? 'retirar las fichas firmadas'
+            : 'firmar la ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano)'
+        }.\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en ese horario? Gracias.`;
+  };
+
+  return aplicarReglaSaludoMismoDia(construirPropuesta(), contact, 'AUTO_MISMO_DIA');
 }
 
 /**
@@ -2868,20 +2992,24 @@ export function generarMensajePersonalizadoCircuitoMapa(
   const dirVecino = contact.calleOCruce || `tu domicilio en ${contact.barrio}`;
   const notaFichas =
     contact.situacion === 'RETIRO_FICHAS'
-      ? ' Además te llevo las fichas extras que me pediste.'
+      ? ' Además aprovecho para retirar las fichas extras.'
       : '';
 
-  if (modalidad === 'EVENTO_SEDE' || modalidad === 'ENCUENTRO_SEDE') {
-    return `${saludo}\n\nTe escribo por la reunión de los miércoles en la sede de *${profile.sedeCentral}* (${fechaTexto} · ${franjaTexto}) así compartimos un rato y firmás tu ficha de adhesión en papel con tu DNI físico de CABA.${notaFichas}\n\n¿Te viene bien acercarte el miércoles a Chile 1408 o preferís que coordinemos por *${contact.barrio}*?`;
-  }
+  const construirMsgMapa = (): string => {
+    if (modalidad === 'EVENTO_SEDE' || modalidad === 'ENCUENTRO_SEDE') {
+      return `${saludo}\n\nTe escribo por la reunión de los miércoles en la sede de *${profile.sedeCentral}* (${fechaTexto} · ${franjaTexto}) así compartimos un rato y firmás tu ficha de adhesión en papel con tu DNI físico de CABA.${notaFichas}\n\n¿Te viene bien acercarte el miércoles a Chile 1408 o preferís que coordinemos por *${contact.barrio}*?`;
+    }
 
-  if (modalidad === 'PUERTA_A_PUERTA' || !infoCafe.incluirCafe) {
-    return infoCafe.incluirCafe
-      ? `${saludo}\n\nSiguiendo lo que conversamos (${fechaTexto}), estoy armando el recorrido por *${contact.barrio}* (${franjaTexto}) para pasar 2 minutos por *${dirVecino}* y que firmemos tu ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano).${notaFichas}\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en esa franja, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.`
-      : `${saludo}\n\nSiguiendo lo que conversamos (${fechaTexto}), estoy armando el recorrido por *${contact.barrio}* (${franjaTexto}) para pasar 2 minutos por *${dirVecino}* y que firmemos tu ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano).${notaFichas}\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en esa franja? Gracias.`;
-  }
+    if (modalidad === 'PUERTA_A_PUERTA' || !infoCafe.incluirCafe) {
+      return infoCafe.incluirCafe
+        ? `${saludo}\n\nSiguiendo lo que conversamos (${fechaTexto}), estoy armando el recorrido por *${contact.barrio}* (${franjaTexto}) para pasar 2 minutos por *${dirVecino}* y que firmemos tu ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano).${notaFichas}\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en esa franja, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.`
+        : `${saludo}\n\nSiguiendo lo que conversamos (${fechaTexto}), estoy armando el recorrido por *${contact.barrio}* (${franjaTexto}) para pasar 2 minutos por *${dirVecino}* y que firmemos tu ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano).${notaFichas}\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en esa franja? Gracias.`;
+    }
 
-  return `${saludo}\n\nPara *${fechaTexto}* (${franjaTexto}) voy a estar por *${contact.barrio}* y quería proponerte pasar o encontrarnos 2 minutos en ${infoCafe.fraseCafe}, para recibir tu firma de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te queda cómodo acercarte a *${infoCafe.cafeNombre}* en esa franja, o preferís que pase 2 minutos por *${dirVecino}*? Gracias.`;
+    return `${saludo}\n\nPara *${fechaTexto}* (${franjaTexto}) voy a estar por *${contact.barrio}* y quería proponerte pasar o encontrarnos 2 minutos en ${infoCafe.fraseCafe}, para recibir tu firma de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te queda cómodo acercarte a *${infoCafe.cafeNombre}* en esa franja, o preferís que pase 2 minutos por *${dirVecino}*? Gracias.`;
+  };
+
+  return aplicarReglaSaludoMismoDia(construirMsgMapa(), contact, 'AUTO_MISMO_DIA');
 }
 
 
@@ -2905,6 +3033,7 @@ export function aplicarRespuestaPropuestaAgenda(
     nuevoCafe?: string;
     notaAdicional?: string;
     confirmarEncuentro?: boolean;
+    mantenerComentarioInterno?: boolean;
   },
   profile: VoiceProfile = DEFAULT_VOICE_PROFILE
 ): RawContactRow {
@@ -2925,7 +3054,7 @@ export function aplicarRespuestaPropuestaAgenda(
       ? manianaBA.ddmm
       : fechaCandidata;
 
-  const franjaEfectiva = opciones?.nuevaFranja || analizarFranjaHoraria(raw.comentario);
+  const franjaEfectiva = opciones?.nuevaFranja || analizarFranjaHoraria(obtenerTextoHorarioAgendaContacto(raw));
   const horarioPuntualLimpio = opciones?.nuevoHorarioPuntual?.trim() || '';
   const notaExtra = opciones?.notaAdicional?.trim() ? ` · ${opciones.notaAdicional.trim()}` : '';
 
@@ -2953,8 +3082,8 @@ export function aplicarRespuestaPropuestaAgenda(
     ? etiquetaFranjaElegida(opciones.nuevaFranja)
     : '';
 
-  // Preservar cualquier franja horaria amplia original de Columna G si el usuario no eligió una nueva franja/hora
-  const dispOrig = analizarDisponibilidadColumnaG(raw.comentario);
+  // Preservar cualquier franja horaria amplia original si el usuario no eligió una nueva franja/hora
+  const dispOrig = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(raw));
 
   // Café HUB unificado del bloque (fuente única de verdad entre Pestaña 2 y Pestaña 3)
   const cafePrincipalBloque = bloque.cafesHubOpciones?.[0];
@@ -2991,21 +3120,52 @@ export function aplicarRespuestaPropuestaAgenda(
     return `${bloque.franjaHoraria}`;
   };
 
+  const horaEstructuradaConfirmada =
+    horarioPuntualLimpio.replace(/\s*hs$/i, '') ||
+    (dispOrig.horaPuntualPactada && !dispOrig.esVentanaAmplia ? dispOrig.horaPuntualPactada : '') ||
+    paradaVecino?.horaLlegada ||
+    bloque.horaInicioCalculada ||
+    raw.horarioEncuentro ||
+    '';
+
+  const esRetiroFichas = raw.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS';
+
+  const limpiarAutoConfirmacionDeComentario = (com?: string): string => {
+    if (!com) return '';
+    return com
+      .replace(/Visita confirmada Puerta a Puerta en [^\n·]+/gi, '')
+      .replace(/Encuentro confirmado en Caf[eé] Hub [^\n·]+/gi, '')
+      .replace(/Visita reprogramada para el [^\n·]+/gi, '')
+      .replace(/\[Confirmado 1-a-1[^\]]*\]/gi, '')
+      .replace(/^\s*[·—-]\s*|\s*[·—-]\s*$/g, '')
+      .trim();
+  };
+
+  const comentarioInternoBase = limpiarAutoConfirmacionDeComentario(raw.comentario);
+
   switch (respuesta) {
     case 'CONFIRMO_PROPUESTA': {
       const modalidadEfectiva =
         opciones?.nuevaModalidad ||
         (bloque.modalidad === 'PUERTA_A_PUERTA' ? 'PUERTA_A_PUERTA' : 'CAFE_HUB');
       const horarioIndividualConfirmado = resolverHoraPuntualConfirmada();
-      const nuevoComentario =
-        modalidadEfectiva === 'PUERTA_A_PUERTA'
-          ? `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${horarioIndividualConfirmado}) [Confirmado 1-a-1 · Puerta a Puerta]${notaExtra}`
-          : `Encuentro confirmado en Café Hub ${cafeUnificadoTexto} el ${fechaEfectiva} ${horarioIndividualConfirmado} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeUnificadoTexto}]${notaExtra}`;
+      const tagCafeInterno =
+        modalidadEfectiva === 'CAFE_HUB' ? `[Confirmado 1-a-1 · Café Hub: ${cafeUnificadoTexto}]` : '';
+      const nuevoComentario = opciones?.mantenerComentarioInterno
+        ? [comentarioInternoBase, opciones?.notaAdicional, tagCafeInterno].filter(Boolean).join(' · ')
+        : modalidadEfectiva === 'PUERTA_A_PUERTA'
+        ? `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${horarioIndividualConfirmado}) [Confirmado 1-a-1 · Puerta a Puerta]${notaExtra}`
+        : `Encuentro confirmado en Café Hub ${cafeUnificadoTexto} el ${fechaEfectiva} ${horarioIndividualConfirmado} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeUnificadoTexto}]${notaExtra}`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
-        adhirio: 'Pendiente',
+        adhirio: esRetiroFichas ? 'Sí' : 'Pendiente',
         calleOCruce: direccionEfectiva,
-        estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+        diasEncuentro: fechaEfectiva,
+        horaInicio: horaEstructuradaConfirmada,
+        horaFin: '',
+        horarioEncuentro: horaEstructuradaConfirmada,
+        retiroConfirmado: esRetiroFichas ? true : raw.retiroConfirmado,
+        estadoFlujo: esRetiroFichas ? 'PENDIENTE_RETIRO_FICHAS' : 'ENCUENTRO_CONFIRMADO',
         comentario: nuevoComentario,
       }).actualizado;
     }
@@ -3013,12 +3173,19 @@ export function aplicarRespuestaPropuestaAgenda(
     case 'DECLINO_CAFE_PASA_PUERTA_A_PUERTA': {
       // La persona declinó ir al Café HUB y confirmó que pasemos Puerta a Puerta por su domicilio/esquina
       const franjaTxt = resolverHoraPuntualConfirmada();
-      const nuevoComentario = `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${franjaTxt}) [Confirmado 1-a-1 · Declinó Café Hub -> Pasa a Puerta a Puerta]${notaExtra}`;
+      const nuevoComentario = opciones?.mantenerComentarioInterno
+        ? [comentarioInternoBase, opciones?.notaAdicional].filter(Boolean).join(' · ')
+        : `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${franjaTxt}) [Confirmado 1-a-1 · Declinó Café Hub -> Pasa a Puerta a Puerta]${notaExtra}`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
-        adhirio: 'Pendiente',
+        adhirio: esRetiroFichas ? 'Sí' : 'Pendiente',
         calleOCruce: direccionEfectiva,
-        estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+        diasEncuentro: fechaEfectiva,
+        horaInicio: horaEstructuradaConfirmada,
+        horaFin: '',
+        horarioEncuentro: horaEstructuradaConfirmada,
+        retiroConfirmado: esRetiroFichas ? true : raw.retiroConfirmado,
+        estadoFlujo: esRetiroFichas ? 'PENDIENTE_RETIRO_FICHAS' : 'ENCUENTRO_CONFIRMADO',
         comentario: nuevoComentario,
       }).actualizado;
     }
@@ -3031,12 +3198,25 @@ export function aplicarRespuestaPropuestaAgenda(
         /caf[eé]|bar|havanna|starbucks|martinez|bonafide/i.test(opciones.nuevaDireccion)
           ? opciones.nuevaDireccion.trim()
           : cafeUnificadoTexto);
-      const nuevoComentario = `Encuentro confirmado en Café Hub ${cafeDestino} el ${fechaEfectiva} ${turnoCafeTxt} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeDestino}]${notaExtra}`;
+      const nuevoComentario = opciones?.mantenerComentarioInterno
+        ? [
+            comentarioInternoBase,
+            opciones?.notaAdicional,
+            `[Confirmado 1-a-1 · Café Hub: ${cafeDestino}]`,
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : `Encuentro confirmado en Café Hub ${cafeDestino} el ${fechaEfectiva} ${turnoCafeTxt} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeDestino}]${notaExtra}`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
-        adhirio: 'Pendiente',
+        adhirio: esRetiroFichas ? 'Sí' : 'Pendiente',
         calleOCruce: direccionEfectiva,
-        estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+        diasEncuentro: fechaEfectiva,
+        horaInicio: horaEstructuradaConfirmada,
+        horaFin: '',
+        horarioEncuentro: horaEstructuradaConfirmada,
+        retiroConfirmado: esRetiroFichas ? true : raw.retiroConfirmado,
+        estadoFlujo: esRetiroFichas ? 'PENDIENTE_RETIRO_FICHAS' : 'ENCUENTRO_CONFIRMADO',
         comentario: nuevoComentario,
       }).actualizado;
     }
@@ -3045,11 +3225,14 @@ export function aplicarRespuestaPropuestaAgenda(
       const yaEstabaConfirmado =
         raw.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
         raw.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+        (esRetiroFichas && Boolean(raw.retiroConfirmado)) ||
         /\[Confirmad|Visita confirmada/i.test(raw.comentario || '');
       const quedaConfirmado = Boolean(opciones?.confirmarEncuentro || yaEstabaConfirmado);
       const modalidadEfectiva =
         opciones?.nuevaModalidad ||
         (/caf[eé]\s*hub/i.test(raw.comentario || '') ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
+      const cafeDestinoReprog =
+        opciones?.nuevoCafe?.trim() || cafeUnificadoTexto;
       const franjaTxt =
         textoTurnoElegido ||
         (quedaConfirmado ? resolverHoraPuntualConfirmada() : '') ||
@@ -3057,39 +3240,61 @@ export function aplicarRespuestaPropuestaAgenda(
         'entre 15:30 y 18';
 
       if (quedaConfirmado) {
-        const nuevoComentarioConfirmado =
+        const tagCafeConfirmado =
           modalidadEfectiva === 'CAFE_HUB'
-            ? `Encuentro confirmado en Café Hub ${cafeUnificadoTexto} el ${fechaEfectiva} ${franjaTxt} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeUnificadoTexto}]${notaExtra}`
-            : `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${franjaTxt}) [Confirmado 1-a-1 · Puerta a Puerta]${notaExtra}`;
+            ? `[Confirmado 1-a-1 · Café Hub: ${cafeDestinoReprog}]`
+            : '';
+        const nuevoComentarioConfirmado = opciones?.mantenerComentarioInterno
+          ? [comentarioInternoBase, opciones?.notaAdicional, tagCafeConfirmado]
+              .filter(Boolean)
+              .join(' · ')
+          : modalidadEfectiva === 'CAFE_HUB'
+          ? `Encuentro confirmado en Café Hub ${cafeDestinoReprog} el ${fechaEfectiva} ${franjaTxt} (${direccionEfectiva}) [Confirmado 1-a-1 · Café Hub: ${cafeDestinoReprog}]${notaExtra}`
+          : `Visita confirmada Puerta a Puerta en ${direccionEfectiva} (el ${fechaEfectiva} ${franjaTxt}) [Confirmado 1-a-1 · Puerta a Puerta]${notaExtra}`;
         return actualizarDatosContactoEnApp(raw, {
           rsp: 'Sí',
-          adhirio: 'Pendiente',
+          adhirio: esRetiroFichas ? 'Sí' : 'Pendiente',
           calleOCruce: direccionEfectiva,
-          estadoFlujo: 'ENCUENTRO_CONFIRMADO',
+          diasEncuentro: fechaEfectiva,
+          horaInicio: horaEstructuradaConfirmada,
+          horaFin: '',
+          horarioEncuentro: horaEstructuradaConfirmada,
+          retiroConfirmado: esRetiroFichas ? true : raw.retiroConfirmado,
+          estadoFlujo: esRetiroFichas ? 'PENDIENTE_RETIRO_FICHAS' : 'ENCUENTRO_CONFIRMADO',
           comentario: nuevoComentarioConfirmado,
         }).actualizado;
       }
 
       const baseLugar = direccionEfectiva ? `(${direccionEfectiva})` : '';
-      const nuevoComentario = `Visita reprogramada para el ${fechaEfectiva} ${franjaTxt} ${baseLugar}${
-        comentarioSinFechasViejas && !comentarioSinFechasViejas.includes(direccionEfectiva)
-          ? ` — ${comentarioSinFechasViejas}`
-          : ''
-      }${notaExtra}`.trim();
+      const nuevoComentario = opciones?.mantenerComentarioInterno
+        ? [comentarioInternoBase, opciones?.notaAdicional].filter(Boolean).join(' · ')
+        : `Visita reprogramada para el ${fechaEfectiva} ${franjaTxt} ${baseLugar}${
+            comentarioSinFechasViejas && !comentarioSinFechasViejas.includes(direccionEfectiva)
+              ? ` — ${comentarioSinFechasViejas}`
+              : ''
+          }${notaExtra}`.trim();
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
-        adhirio: 'Pendiente',
+        adhirio: esRetiroFichas ? 'Sí' : 'Pendiente',
         calleOCruce: direccionEfectiva,
-        estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
+        diasEncuentro: fechaEfectiva,
+        horaInicio: horarioPuntualLimpio.replace(/\s*hs$/i, '') || raw.horaInicio,
+        horaFin: horarioPuntualLimpio ? '' : raw.horaFin,
+        horarioEncuentro: horarioPuntualLimpio.replace(/\s*hs$/i, '') || etiquetaFranjaElegida(franjaEfectiva) || raw.horarioEncuentro,
+        retiroConfirmado: esRetiroFichas ? false : raw.retiroConfirmado,
+        estadoFlujo: esRetiroFichas ? 'PENDIENTE_RETIRO_FICHAS' : 'PASO_DATOS_FALTA_CONFIRMAR',
         comentario: nuevoComentario,
       }).actualizado;
     }
 
     case 'YA_ADHIRIO': {
-      const nuevoComentario = `${raw.comentario ? raw.comentario + ' · ' : ''}[Adhesión firmada OK]${notaExtra}`;
+      const nuevoComentario = opciones?.mantenerComentarioInterno
+        ? [raw.comentario, opciones?.notaAdicional].filter(Boolean).join(' · ')
+        : `${raw.comentario ? raw.comentario + ' · ' : ''}[Adhesión firmada OK]${notaExtra}`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
         adhirio: 'Sí',
+        retiroConfirmado: false,
         estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
         comentario: nuevoComentario,
       }).actualizado;
@@ -3098,9 +3303,11 @@ export function aplicarRespuestaPropuestaAgenda(
     case 'POSTERGO_O_BAJA':
     default: {
       const esBaja = /baja|no quiere|descartar/i.test(opciones?.notaAdicional || '');
-      const nuevoComentario = `${raw.comentario ? raw.comentario + ' · ' : ''}[${
-        esBaja ? 'Solicitó baja' : 'Postergó para más adelante'
-      }${notaExtra}]`;
+      const nuevoComentario = opciones?.mantenerComentarioInterno
+        ? [raw.comentario, opciones?.notaAdicional].filter(Boolean).join(' · ')
+        : `${raw.comentario ? raw.comentario + ' · ' : ''}[${
+            esBaja ? 'Solicitó baja' : 'Postergó para más adelante'
+          }${notaExtra}]`;
       return actualizarDatosContactoEnApp(raw, {
         rsp: 'Sí',
         adhirio: esBaja ? 'No' : 'Pendiente',
@@ -3182,10 +3389,15 @@ export function validarDireccionYHorarioContacto(
       const evFin = horaAMinutosDelDia(ev.endTime);
       const esVirt = esEventoVirtualCalendar(ev);
       const geoEv = geocodificarEventoCalendar(ev, profile);
+      const tieneDirFisica = Boolean(
+        ev.location && ev.location.trim() && ev.location.trim().toUpperCase() !== 'CABA'
+      );
       const tr = esVirt
         ? { minutos: 0, modo: 'WALKING' as const }
-        : calcularMinutosTrasladoCABA(geo.lat, geo.lng, geoEv.lat, geoEv.lng);
-      const margen = esVirt ? 5 : tr.minutos;
+        : tieneDirFisica
+        ? calcularMinutosTrasladoCABA(geo.lat, geo.lng, geoEv.lat, geoEv.lng)
+        : { minutos: 20, modo: 'TRANSIT' as const };
+      const margen = esVirt ? 5 : Math.max(20, tr.minutos);
 
       if (minIni < evFin + margen && minFin + margen > evIni) {
         const horaLibreSugerida = sumarMinutosAHora(ev.endTime, margen + 5);
@@ -3205,7 +3417,7 @@ export function validarDireccionYHorarioContacto(
       }
       const fechaOtro = resolverFechaObjetivoContacto(otro, ahoraMs) || otro.fechasMencionadas[0];
       if (fechaOtro !== fechaEval) continue;
-      const dispOtro = analizarDisponibilidadColumnaG(otro.comentario);
+      const dispOtro = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(otro));
       if (dispOtro.esVentanaAmplia) continue;
       const otroIni = dispOtro.horaPuntualPactada
         ? horaAMinutosDelDia(dispOtro.horaPuntualPactada)

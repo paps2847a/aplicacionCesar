@@ -106,7 +106,12 @@ export interface RawContactRow {
   id: string;
   nombre: string;
   vocativoOverride?: string;
+  diasEncuentro?: string;
+  horaInicio?: string;
+  horaFin?: string;
+  horarioEncuentro?: string;
   calleOCruce?: string;
+  pisoDepto?: string;
   barrio: string;
   barrioOriginalSheet?: string;
   barrioCorregidoPorDireccion?: boolean;
@@ -116,6 +121,9 @@ export interface RawContactRow {
   rsp: 'Sí' | 'No' | 'Nuevo';
   adhirio: 'Sí' | 'Pendiente' | 'No';
   comentario: string;
+  fichasExtrasCantidad?: string | number;
+  retiroConfirmado?: boolean;
+  fechaEstadoPuntoSede?: string;
   estadoFlujo?: EstadoFlujo;
   estadoFlujoEtiqueta?: string;
   enSheets?: boolean;
@@ -131,6 +139,7 @@ export interface RawContactRow {
   alertaVencidoOcultaFecha?: string;
   asignadoA?: string;
   asignadoFecha?: string;
+  enviadoEnSesion?: boolean;
 }
 
 export interface SharedAppStateSnapshot {
@@ -233,6 +242,8 @@ export interface Contact extends RawContactRow {
   alertaVencido?: AlertaPendienteVencido;
   seguimiento48h?: DiagnosticoSinRsp48h;
   enviadoEnSesion?: boolean;
+  requiereSeguimientoPuntoSede7d?: boolean;
+  diasDesdeEstadoPuntoSede?: number;
 }
 
 export interface ControlEnvioRegistro {

@@ -14,6 +14,7 @@ import {
   OpcionesCafeMensaje,
 } from '../geo/cafesHub';
 import {
+  aplicarReglaSaludoMismoDia,
   corregirPelonesDiaSemanaEnTexto,
   postProcesarMensajeAntiPelonesYSaludo,
 } from './greetingsAndTone';
@@ -33,6 +34,13 @@ export function generarMensajeContextual(
     fechasMencionadas: string[];
     situacion: SituacionContacto;
     estadoFlujo?: EstadoFlujo;
+    ultimoContacto?: string;
+    fechaPrimerContacto?: string;
+    ultimoMensajeCorteEnviadoAt?: string;
+    actualizadoEnAppAt?: string;
+    enviadoEnSesion?: boolean;
+    fechaEstadoPuntoSede?: string;
+    requiereSeguimientoPuntoSede7d?: boolean;
     lat?: number;
     lng?: number;
   },
@@ -288,9 +296,17 @@ export function generarMensajeContextual(
       ) {
         return {
           tipoUsado: 'convocatoria_cafe_hub',
-          asunto: 'Confirmación Encuentro Semanal de los Miércoles en Chile 1408',
+          asunto: 'Seguimiento Sede Semanal de los Miércoles en Chile 1408',
           objetivo: 'Invitar/confirmar cruce el miércoles de 18:30 a 20:00 hs en la sede de Chile 1408 (Monserrat) y recordar DNI físico.',
           texto: `${saludoConNombre}, ¿cómo estás? Como me habías comentado que te quedaba cómodo acercarte a nuestra sede de *Chile 1408* (Monserrat), te escribo para contarte que nos reunimos todos los miércoles de *18:30 a 20:00 hs*.\n\n¿Te queda bien pasar este miércoles en esa franja así nos conocemos y firmamos la ficha de adhesión en 2 minutos (acordate sólo de traer tu DNI físico con domicilio en CABA)?${posdataSutilNombre}`,
+        };
+      }
+      if (contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE') {
+        return {
+          tipoUsado: 'convocatoria_cafe_hub',
+          asunto: 'Seguimiento Semanal: Prefiere Pasar por Punto o Sede',
+          objetivo: 'Hacer seguimiento a la semana de actualizado a Prefiere Punto / Sede para coordinar punto o pasada rápida.',
+          texto: `${saludoConNombre}, ¿cómo estás? Como hace unos días me comentaste que preferías pasar por un punto de encuentro o por la sede, te escribo cortito para contarte las opciones de esta semana:\n\n• En nuestra sede de *Chile 1408* (Monserrat) estamos todos los miércoles de *18:30 a 20:00 hs*.\n• O si esta semana estás por *${contact.barrio || 'el barrio'}* y te resulta más práctico, decime por qué esquina andás y me acerco yo 2 minutos.\n\n¿Qué opción te queda más cómoda (acordate sólo de tener a mano tu DNI físico con domicilio en CABA)?${posdataSutilNombre}`,
         };
       }
       if (!incluirCafe) {
@@ -303,8 +319,8 @@ export function generarMensajeContextual(
       }
       return {
         tipoUsado: 'convocatoria_cafe_hub',
-        asunto: 'Propuesta de Encuentro en Café del Barrio',
-        objetivo: 'Agrupar firmas de vecinos ya contactados en un café cercano con dirección y tiempo de caminata.',
+        asunto: 'Propuesta de Encuentro en Punto del Barrio',
+        objetivo: 'Agrupar firmas de vecinos ya contactados en un punto cercano con dirección y tiempo de caminata.',
         texto: `${saludoConNombre}, ¿cómo estás? Como esta semana vamos a vernos con varios vecinos de la zona, quería proponerte encontrarnos unos minutos en ${fraseCafe} durante la franja de *${horarioCafe}* para firmar la ficha de adhesión.\n\nPodés pasar en cualquier momento dentro de esa ventana (toma apenas 2 minutos y sólo hace falta llevar el DNI físico con domicilio en CABA). ¿Te queda cómodo pasar por ahí o preferís que me acerque yo un minuto por *${dir}*?${posdataSutilNombre}`,
       };
     }
@@ -543,6 +559,13 @@ export function diagnosticarYGenerarMensajeSeguimiento48h(
     estadoFlujo: EstadoFlujo;
     esVisitaConcretadaORetiro: boolean;
     tieneNuevaInfoEnColumnaG: boolean;
+    ultimoContacto?: string;
+    fechaPrimerContacto?: string;
+    ultimoMensajeCorteEnviadoAt?: string;
+    actualizadoEnAppAt?: string;
+    enviadoEnSesion?: boolean;
+    fechaEstadoPuntoSede?: string;
+    requiereSeguimientoPuntoSede7d?: boolean;
     lat?: number;
     lng?: number;
   },
@@ -550,6 +573,19 @@ export function diagnosticarYGenerarMensajeSeguimiento48h(
   ahoraMs: number = Date.now(),
   opcionesCafe?: OpcionesCafeMensaje
 ): DiagnosticoSinRsp48h | undefined {
+  const wrapDiag = (res: DiagnosticoSinRsp48h | undefined): DiagnosticoSinRsp48h | undefined => {
+    if (!res) return undefined;
+    return {
+      ...res,
+      mensajePersonalizado48h: aplicarReglaSaludoMismoDia(
+        res.mensajePersonalizado48h,
+        params,
+        'AUTO_MISMO_DIA',
+        ahoraMs
+      ),
+    };
+  };
+  const inner = (): DiagnosticoSinRsp48h | undefined => {
   const adh = (params.adhirio || '').toLowerCase().trim();
   if (
     !params.primerContactoEnviado ||
@@ -769,6 +805,8 @@ export function diagnosticarYGenerarMensajeSeguimiento48h(
   }
 
   return undefined;
+  };
+  return wrapDiag(inner());
 }
 
 /**
@@ -800,18 +838,21 @@ export function adaptarMensajeConRespuestaVecinoLocal(
   const posdataNombre = contact.sinNombre
     ? '\n\n_(De paso, recordame por acá tu nombre y apellido así te agendo bien en la planilla)_.'
     : '';
+  const finalizar = (txt: string) => aplicarReglaSaludoMismoDia(txt, contact, 'AUTO_MISMO_DIA');
 
   // 1) Si pide acortar en 2-3 líneas directas
   if (/acort[aá]r|m[aá]s\s+corto|2-3\s+l[ií]neas|2\s+oraciones|breves|resum/i.test(instruccion)) {
     if (contact.alertaVencido?.activa) {
-      return `${saludo} Te pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}*. ¿Qué día y franja horaria de esta semana te queda cómodo para reprogramar esos 2 minutos con tu DNI físico de CABA?${posdataNombre}`;
+      return finalizar(`${saludo} Te pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}*. ¿Qué día y franja horaria de esta semana te queda cómodo para reprogramar esos 2 minutos con tu DNI físico de CABA?${posdataNombre}`);
     }
     if (contact.tienePuntoEncuentroDeterminado) {
-      return infoCafe.incluirCafe
-        ? `${saludo} Estoy organizando el recorrido por ${contact.barrio}: ¿te queda bien que pase 2 minutos por *${lugar}* o preferís que nos veamos en ${infoCafe.fraseCafe}? Recordá tener a mano el DNI físico de CABA.${posdataNombre}`
-        : `${saludo} Estoy organizando el recorrido por ${contact.barrio}: ¿en qué día y horario te queda cómodo que pase 2 minutos por *${lugar}* para la firma de adhesión con tu DNI físico de CABA?${posdataNombre}`;
+      return finalizar(
+        infoCafe.incluirCafe
+          ? `${saludo} Estoy organizando el recorrido por ${contact.barrio}: ¿te queda bien que pase 2 minutos por *${lugar}* o preferís que nos veamos en ${infoCafe.fraseCafe}? Recordá tener a mano el DNI físico de CABA.${posdataNombre}`
+          : `${saludo} Estoy organizando el recorrido por ${contact.barrio}: ¿en qué día y horario te queda cómodo que pase 2 minutos por *${lugar}* para la firma de adhesión con tu DNI físico de CABA?${posdataNombre}`
+      );
     }
-    return `${saludo} Soy ${profile.nombrePromotor} (${profile.espacioPolitico}). Para coordinar los 2 minutos de tu firma de adhesión en ${contact.barrio} con DNI físico de CABA, ¿por qué calle/esquina y en qué franja horaria te queda más cómodo?${posdataNombre}`;
+    return finalizar(`${saludo} Soy ${profile.nombrePromotor} (${profile.espacioPolitico}). Para coordinar los 2 minutos de tu firma de adhesión en ${contact.barrio} con DNI físico de CABA, ¿por qué calle/esquina y en qué franja horaria te queda más cómodo?${posdataNombre}`);
   }
 
   // 2) Analizar qué respondió o pidió la persona en `instruccion`
@@ -856,13 +897,15 @@ export function adaptarMensajeConRespuestaVecinoLocal(
     : '';
 
   if (pideDisculpasCompromiso) {
-    return infoCafe.incluirCafe && !prefiereDomicilio
-      ? `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que lo reprogramemos para ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} pasando 2 minutos por *${lugar}*, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.${posdataNombre}`
-      : `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que pase 2 minutos por *${lugar}* ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''}? Gracias.${posdataNombre}`;
+    return finalizar(
+      infoCafe.incluirCafe && !prefiereDomicilio
+        ? `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que lo reprogramemos para ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} pasando 2 minutos por *${lugar}*, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.${posdataNombre}`
+        : `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que pase 2 minutos por *${lugar}* ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''}? Gracias.${posdataNombre}`
+    );
   }
 
   if (prefiereCafe && infoCafe.incluirCafe) {
-    return `${saludo}\n\nPerfecto, gracias por avisarme. Agendamos entonces para vernos ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} en ${infoCafe.fraseCafe} (son sólo 2 minutos con tu DNI físico con domicilio en CABA). Te escribo un ratito antes de estar ahí. Gracias.${posdataNombre}`;
+    return finalizar(`${saludo}\n\nPerfecto, gracias por avisarme. Agendamos entonces para vernos ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} en ${infoCafe.fraseCafe} (son sólo 2 minutos con tu DNI físico con domicilio en CABA). Te escribo un ratito antes de estar ahí. Gracias.${posdataNombre}`);
   }
 
   if (
@@ -876,14 +919,14 @@ export function adaptarMensajeConRespuestaVecinoLocal(
     mencionaSabado ||
     mencionaLunes
   ) {
-    return `${saludo}\n\nBuenísimo, gracias por confirmarme. Te agendo entonces para pasar 2 minutos por *${lugar}* ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} (acordate de tener a mano tu DNI físico con domicilio en CABA). Te aviso por acá un ratito antes de llegar. Gracias.${posdataNombre}`;
+    return finalizar(`${saludo}\n\nBuenísimo, gracias por confirmarme. Te agendo entonces para pasar 2 minutos por *${lugar}* ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} (acordate de tener a mano tu DNI físico con domicilio en CABA). Te aviso por acá un ratito antes de llegar. Gracias.${posdataNombre}`);
   }
 
   if (instruccion) {
-    return `${saludo}\n\nGracias por responderme (${instruccion}). Te propongo entonces pasar 2 minutos por *${lugar}* en el día y horario que te quede más cómodo con tu DNI físico con domicilio en CABA${infoCafe.incluirCafe ? `, o bien vernos en ${infoCafe.fraseCafe}` : ''}. Avisame qué te resulta mejor y lo dejamos agendado.${posdataNombre}`;
+    return finalizar(`${saludo}\n\nGracias por responderme (${instruccion}). Te propongo entonces pasar 2 minutos por *${lugar}* en el día y horario que te quede más cómodo con tu DNI físico con domicilio en CABA${infoCafe.incluirCafe ? `, o bien vernos en ${infoCafe.fraseCafe}` : ''}. Avisame qué te resulta mejor y lo dejamos agendado.${posdataNombre}`);
   }
 
-  return baseMsg;
+  return finalizar(baseMsg);
 }
 
 /**

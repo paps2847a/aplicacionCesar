@@ -39,11 +39,19 @@ import {
   adaptarMensajeConRespuestaVecinoLocal,
   generarMensajeContextual,
 } from '../../domain/messaging/messageTemplates';
-import { crearEnlaceWhatsApp } from '../../domain/messaging/greetingsAndTone';
+import {
+  crearEnlaceWhatsApp,
+  quitarSaludoInicialMismoDia,
+  yaSeHabloConContactoHoy,
+} from '../../domain/messaging/greetingsAndTone';
 import { validarDireccionYHorarioContacto } from '../../domain/routing/routingEngine';
 import { inferirBarrioDesdeDireccionOComentario } from '../../domain/geo/cabaLocations';
 import { marcarEntregaFichasExtra } from '../../domain/sync/dataMerging';
 import { DEFAULT_VOICE_PROFILE } from '../../data/estatusPopurriData';
+import {
+  ScheduleAndAddressPicker,
+  type ScheduleAndAddressValues,
+} from './ScheduleAndAddressPicker';
 
 function formatTimestampSutil(isoOrDate?: string): string {
   if (!isoOrDate || isoOrDate === '2025-05-14') return '';
@@ -104,7 +112,7 @@ export const LISTA_PLANTILLAS_WA_COMPLETA: { value: TipoPlantillaWA; label: stri
   { value: 'seguimiento_24h_falta_dato', label: '4. Seguimiento +24h: Falta dirección o franja horaria' },
   { value: 'seguimiento_24h_falta_confirmar', label: '5. Seguimiento +24h: Falta confirmar propuesta de cita' },
   { value: 'propuesta_bloque_agenda', label: '6. Propuesta de Encuentro (Domicilio o Café del circuito)' },
-  { value: 'convocatoria_cafe_hub', label: '7. Convocatoria a Café de Cercanía (Vecinos del barrio)' },
+  { value: 'convocatoria_cafe_hub', label: '7. Seguimiento Punto / Sede (1 semana después)' },
   { value: 'confirmacion_visita', label: '8. Confirmación de Encuentro Agendado / Chile 1408' },
   { value: 'recordatorio_maniana_encuentro', label: '9. Recordatorio por la Mañana (Antes de salir al recorrido)' },
   { value: 'en_camino', label: '10. En Camino (Aviso 10-15 min antes de llegar)' },
@@ -164,8 +172,8 @@ export const LISTA_ESTADOS_FLUJO_UNIFICADOS: {
   },
   {
     value: 'PREFIERE_CAFE_HUB_O_SEDE',
-    label: '3c. Prefiere Punto / Café / Sede',
-    shortLabel: '3c. Prefiere Punto/Café',
+    label: '3c. Prefiere Punto / Sede',
+    shortLabel: '3c. Prefiere Punto/Sede',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
@@ -304,7 +312,14 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   const [editNombre, setEditNombre] = useState(contact.nombre || '');
   const [editVocativo, setEditVocativo] = useState(contact.vocativoOverride || contact.primerNombre || '');
   const [editTel, setEditTel] = useState(contact.telRaw || contact.tel || contact.telWA || '');
+  const [editDiasEncuentro, setEditDiasEncuentro] = useState(
+    contact.diasEncuentro || (contact.fechasMencionadas?.join(', ') ?? '')
+  );
+  const [editHoraInicio, setEditHoraInicio] = useState(contact.horaInicio || '');
+  const [editHoraFin, setEditHoraFin] = useState(contact.horaFin || '');
+  const [editHorarioEncuentro, setEditHorarioEncuentro] = useState(contact.horarioEncuentro || '');
   const [editCalle, setEditCalle] = useState(contact.calleOCruce || '');
+  const [editPisoDepto, setEditPisoDepto] = useState(contact.pisoDepto || '');
   const [editBarrio, setEditBarrio] = useState(contact.barrio || 'Palermo');
   const [editComentario, setEditComentario] = useState(
     (contact.comentario || '')
@@ -331,10 +346,16 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   const [showFichasMenu, setShowFichasMenu] = useState<boolean>(false);
 
   useEffect(() => {
+    if (isEditingInline) return;
     setEditNombre(contact.nombre || '');
     setEditVocativo(contact.vocativoOverride || contact.primerNombre || '');
     setEditTel(contact.telRaw || contact.tel || contact.telWA || '');
+    setEditDiasEncuentro(contact.diasEncuentro || (contact.fechasMencionadas?.join(', ') ?? ''));
+    setEditHoraInicio(contact.horaInicio || '');
+    setEditHoraFin(contact.horaFin || '');
+    setEditHorarioEncuentro(contact.horarioEncuentro || '');
     setEditCalle(contact.calleOCruce || '');
+    setEditPisoDepto(contact.pisoDepto || '');
     setEditBarrio(contact.barrio || 'Palermo');
     setEditComentario(
       (contact.comentario || '')
@@ -344,7 +365,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     );
     setEditEstadoFlujo(contact.estadoFlujo || 'SIN_CONTACTAR_1ER_MSJ');
     setQuickFullName(contact.nombre || '');
-  }, [contact]);
+  }, [contact, isEditingInline]);
 
   useEffect(() => {
     if (!isExpanded) return;
@@ -358,9 +379,14 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     }
   }, [isExpanded, selectedTemplate, contact, voiceProfile]);
 
+  const habloHoy = useMemo(() => yaSeHabloConContactoHoy(contact), [contact]);
+
   // Validación en vivo de dirección y horario mientras se edita
   const validacionEnVivo = useMemo(() => {
     if (!isEditingInline) return null;
+    const sintesisAgenda = [editDiasEncuentro, editHorarioEncuentro, editComentario]
+      .filter(Boolean)
+      .join(' · ');
     return validarDireccionYHorarioContacto(
       {
         id: contact.id,
@@ -370,7 +396,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
         lng: contact.lng,
       },
       editCalle,
-      editComentario,
+      sintesisAgenda,
       allContacts,
       calendarEvents,
       voiceProfile
@@ -385,6 +411,8 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     editNombre,
     editBarrio,
     editCalle,
+    editDiasEncuentro,
+    editHorarioEncuentro,
     editComentario,
     allContacts,
     calendarEvents,
@@ -420,7 +448,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     setIsSavingEdit(true);
     try {
       const barrioInferido = editCalle.trim()
-        ? inferirBarrioDesdeDireccionOComentario(editCalle.trim(), `${editCalle} ${editComentario}`)
+        ? inferirBarrioDesdeDireccionOComentario(editCalle.trim(), editCalle.trim())
         : null;
       const barrioFinal = barrioInferido || editBarrio.trim() || contact.barrio || 'Palermo';
 
@@ -430,9 +458,14 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
 
       await onUpdateContact(contact.id, {
         nombre: editNombre.trim(),
-        vocativoOverride: editVocativo.trim() || undefined,
+        vocativoOverride: editVocativo.trim(),
         telRaw: editTel.trim(),
+        diasEncuentro: editDiasEncuentro.trim(),
+        horaInicio: editHoraInicio.trim(),
+        horaFin: editHoraFin.trim(),
+        horarioEncuentro: editHorarioEncuentro.trim(),
         calleOCruce: editCalle.trim(),
+        pisoDepto: editPisoDepto.trim(),
         barrio: barrioFinal,
         comentario: editComentario.trim(),
         estadoFlujo: editEstadoFlujo,
@@ -446,6 +479,54 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     } finally {
       setIsSavingEdit(false);
     }
+  };
+
+  const handleSaveRetiroCoordination = async (
+    nextValues?: ScheduleAndAddressValues,
+    confirmarEnRuta?: boolean
+  ) => {
+    if (!onUpdateContact) return;
+    const v = nextValues || {
+      diasEncuentro: editDiasEncuentro,
+      horaInicio: editHoraInicio,
+      horaFin: editHoraFin,
+      horarioEncuentro: editHorarioEncuentro,
+      calleOCruce: editCalle,
+      pisoDepto: editPisoDepto,
+      barrio: editBarrio,
+      comentario: editComentario,
+    };
+    const barrioInferido = v.calleOCruce.trim()
+      ? inferirBarrioDesdeDireccionOComentario(v.calleOCruce.trim(), v.calleOCruce.trim())
+      : null;
+    await onUpdateContact(contact.id, {
+      diasEncuentro: v.diasEncuentro.trim(),
+      horaInicio: v.horaInicio.trim(),
+      horaFin: v.horaFin.trim(),
+      horarioEncuentro: v.horarioEncuentro.trim(),
+      calleOCruce: v.calleOCruce.trim() || contact.calleOCruce,
+      pisoDepto: v.pisoDepto.trim(),
+      barrio: barrioInferido || v.barrio || contact.barrio,
+      comentario: v.comentario.trim(),
+      estadoFlujo: 'PENDIENTE_RETIRO_FICHAS',
+      retiroConfirmado:
+        confirmarEnRuta !== undefined ? confirmarEnRuta : Boolean(contact.retiroConfirmado),
+    });
+    setSavedBadgeVisible(true);
+    setTimeout(() => setSavedBadgeVisible(false), 3000);
+  };
+
+  const handleCompleteRetiroFichas = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onUpdateContact) return;
+    await onUpdateContact(contact.id, {
+      adhirio: 'Sí',
+      rsp: 'Sí',
+      retiroConfirmado: false,
+      estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+    });
+    setSavedBadgeVisible(true);
+    setTimeout(() => setSavedBadgeVisible(false), 3000);
   };
 
   const handleSaveQuickName = async (e: React.MouseEvent) => {
@@ -535,6 +616,10 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
       rsp: actualizado.rsp,
       adhirio: actualizado.adhirio,
       estadoFlujo: 'PENDIENTE_RETIRO_FICHAS',
+      calleOCruce: actualizado.calleOCruce || contact.calleOCruce,
+      diasEncuentro: actualizado.diasEncuentro,
+      fichasExtrasCantidad: xCant,
+      retiroConfirmado: false,
       comentario: actualizado.comentario,
       fechaAdhesion: actualizado.fechaAdhesion,
     });
@@ -653,7 +738,9 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   return (
     <div
       className={`relative rounded-2xl border-2 bg-white transition-all duration-150 ${
-        showStageMenu ? 'z-40' : 'z-0'
+        showStageMenu || isEditingInline || contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
+          ? 'z-40'
+          : 'z-0'
       } ${
         contact.alertaVencido?.activa
           ? 'border-[#FF2C00] shadow-[4px_4px_0px_#FF2C00]'
@@ -674,182 +761,169 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
         {isEditingInline ? (
           <div
             onClick={(e) => e.stopPropagation()}
-            className="space-y-3 w-full min-w-0"
+            className="space-y-3.5 w-full min-w-0"
           >
-            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3.5 sm:gap-4 w-full min-w-0">
-              {/* 1. Identidad, Vocativo y Teléfono editables en su misma columna */}
-              <div className="w-full min-w-0 lg:w-1/3 lg:min-w-[220px] space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-lg bg-[#323232] px-2 py-0.5 font-mono text-xs font-bold text-[#FFF06B] shrink-0">
-                    #{contact.id}
-                  </span>
-                  <input
-                    type="text"
-                    value={editNombre}
-                    onChange={(e) => setEditNombre(e.target.value)}
-                    placeholder="Nombre y Apellido"
-                    className="w-full min-w-0 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#323232] focus:outline-hidden focus:ring-2 focus:ring-[#FFF06B]"
-                  />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase text-[#5A5955] mb-0.5">
-                      Vocativo (Saludo WA)
-                    </label>
-                    <input
-                      type="text"
-                      value={editVocativo}
-                      onChange={(e) => setEditVocativo(e.target.value)}
-                      placeholder="Ej. Laura"
-                      className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-semibold text-[#323232]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase text-[#5A5955] mb-0.5">
-                      Teléfono WA
-                    </label>
-                    <input
-                      type="text"
-                      value={editTel}
-                      onChange={(e) => setEditTel(e.target.value)}
-                      placeholder="54 9 11 1234-5678"
-                      className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-mono font-semibold text-[#323232]"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* 2. Barrio y Calle/Esquina editables en su misma columna */}
-              <div className="w-full min-w-0 lg:w-1/4 lg:min-w-[180px] space-y-2">
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-[#5A5955] mb-0.5">
-                    Barrio CABA (Auto)
-                  </label>
-                  <input
-                    type="text"
-                    value={editBarrio}
-                    onChange={(e) => setEditBarrio(e.target.value)}
-                    placeholder="Ej. Palermo, Caballito..."
-                    className="w-full rounded-xl border-2 border-[#323232] bg-[#DFF4FF]/60 px-2.5 py-1 text-xs font-bold text-[#323232]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold uppercase text-[#5A5955] mb-0.5">
-                    Calle, Altura o Esquina
-                  </label>
-                  <input
-                    type="text"
-                    value={editCalle}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setEditCalle(val);
-                      const inf = inferirBarrioDesdeDireccionOComentario(val, `${val} ${editComentario}`);
-                      if (inf) setEditBarrio(inf);
-                    }}
-                    placeholder="Ej. Charcas 3702 o Vidal y García del Río"
-                    className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-semibold text-[#323232]"
-                  />
-                </div>
-              </div>
-
-              {/* 3. Comentario editable en su mismo recuadro */}
-              <div className="w-full min-w-0 lg:w-1/4 lg:min-w-[180px]">
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-[#5A5955] mb-0.5 font-display">
-                  Comentario (Día, horario o dirección):
+            {/* Fila superior de Edición: Nombre, Vocativo, Teléfono, Barrio, Estado Operativo y Acciones */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end">
+              <div className="md:col-span-4">
+                <label className="block text-[10px] font-black uppercase text-[#5A5955] mb-0.5">
+                  #{contact.id} · Nombre y Apellido
                 </label>
-                <div className="rounded-xl border-2 border-[#323232] bg-[#F5F4F0] focus-within:bg-white overflow-hidden">
-                  <textarea
-                    rows={3}
-                    value={editComentario}
-                    onChange={(e) => setEditComentario(e.target.value)}
-                    placeholder="Ej. Visita 23/10 entre 15 y 18 (Charcas 3702)"
-                    className="w-full border-0 bg-transparent p-2 text-xs font-semibold text-[#323232] leading-relaxed resize-y focus:outline-hidden block"
-                  />
-                </div>
+                <input
+                  type="text"
+                  value={editNombre}
+                  onChange={(e) => setEditNombre(e.target.value)}
+                  placeholder="Nombre y Apellido"
+                  className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                />
               </div>
 
-              {/* 4. Selector de Estado Operativo + Guardar / Cancelar en la misma columna derecha */}
-              <div className="w-full lg:w-auto flex flex-wrap lg:flex-col items-start lg:items-end justify-between gap-2 shrink-0 min-w-0">
-                <div className="w-full lg:w-64">
-                  <label className="block text-[10px] font-bold uppercase text-[#5A5955] mb-0.5 lg:text-right">
-                    Estado Operativo
-                  </label>
-                  <select
-                    value={editEstadoFlujo}
-                    onChange={(e) => setEditEstadoFlujo(e.target.value as EstadoFlujo)}
-                    className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] shadow-[2px_2px_0px_#323232]"
-                  >
-                    {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((st) => (
-                      <option key={st.value} value={st.value}>
-                        {st.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                  {canDeleteContact && onDeleteContact && (
-                    confirmingDelete ? (
-                      <div className="inline-flex items-center gap-1 rounded-xl border-2 border-[#FF2C00] bg-[#F5817F]/20 px-2 py-1">
-                        <span className="text-[10px] font-bold text-[#FF2C00]">¿Borrar #{contact.id}?</span>
-                        <button
-                          type="button"
-                          disabled={isDeleting}
-                          onClick={async () => {
-                            setIsDeleting(true);
-                            try {
-                              await onDeleteContact(contact.id);
-                            } finally {
-                              setIsDeleting(false);
-                              setConfirmingDelete(false);
-                            }
-                          }}
-                          className="rounded-lg bg-[#FF2C00] px-2 py-0.5 text-[10px] font-bold text-white hover:bg-red-700"
-                        >
-                          {isDeleting ? '...' : 'Sí, borrar'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmingDelete(false)}
-                          className="rounded-lg bg-white border border-[#323232] px-1.5 py-0.5 text-[10px] font-bold text-[#323232]"
-                        >
-                          No
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmingDelete(true)}
-                        className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#F5817F]/30 px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#F5817F] transition shadow-[2px_2px_0px_#323232]"
-                        title="Eliminar contacto (Solo Admin)"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-[#FF2C00]" />
-                        <span>Eliminar</span>
-                      </button>
-                    )
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setConfirmingDelete(false);
-                      setIsEditingInline(false);
-                    }}
-                    className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232]"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                    <span>Cancelar</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveInlineEdit}
-                    disabled={isSavingEdit}
-                    className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3.5 py-1.5 text-xs font-bold font-display text-[#323232] shadow-[2px_2px_0px_#323232] hover:bg-[#ffe838] transition"
-                  >
-                    <Save className="h-3.5 w-3.5" />
-                    <span>{isSavingEdit ? 'Guardando...' : 'Guardar Cambios'}</span>
-                  </button>
-                </div>
+              <div className="md:col-span-2">
+                <label className="block text-[10px] font-black uppercase text-[#5A5955] mb-0.5">
+                  Vocativo WA
+                </label>
+                <input
+                  type="text"
+                  value={editVocativo}
+                  onChange={(e) => setEditVocativo(e.target.value)}
+                  placeholder="Ej: Laura"
+                  className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#323232]"
+                />
               </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-[10px] font-black uppercase text-[#5A5955] mb-0.5">
+                  Teléfono WA
+                </label>
+                <input
+                  type="text"
+                  value={editTel}
+                  onChange={(e) => setEditTel(e.target.value)}
+                  placeholder="54911..."
+                  className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-mono font-semibold text-[#323232]"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-[10px] font-black uppercase text-[#5A5955] mb-0.5">
+                  Barrio CABA (Auto)
+                </label>
+                <input
+                  type="text"
+                  value={editBarrio}
+                  onChange={(e) => setEditBarrio(e.target.value)}
+                  placeholder="Palermo"
+                  className="w-full rounded-xl border-2 border-[#323232] bg-[#DFF4FF]/60 px-2.5 py-1.5 text-xs font-bold text-[#323232]"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-[10px] font-black uppercase text-[#5A5955] mb-0.5">
+                  Estado Operativo
+                </label>
+                <select
+                  value={editEstadoFlujo}
+                  onChange={(e) => setEditEstadoFlujo(e.target.value as EstadoFlujo)}
+                  className="w-full rounded-xl border-2 border-[#323232] bg-white px-2 py-1.5 text-xs font-bold text-[#323232]"
+                >
+                  {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((st) => (
+                    <option key={st.value} value={st.value}>
+                      {st.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Selector Estructurado de Día(s) (Rango o Días sueltos), Horario, Dirección con Maps y Comentario Interno */}
+            <div className="rounded-xl border-2 border-[#323232] bg-[#F5F4F0] p-3">
+              <ScheduleAndAddressPicker
+                values={{
+                  diasEncuentro: editDiasEncuentro,
+                  horaInicio: editHoraInicio,
+                  horaFin: editHoraFin,
+                  horarioEncuentro: editHorarioEncuentro,
+                  calleOCruce: editCalle,
+                  pisoDepto: editPisoDepto,
+                  barrio: editBarrio,
+                  comentario: editComentario,
+                }}
+                onChange={(next) => {
+                  setEditDiasEncuentro(next.diasEncuentro);
+                  setEditHoraInicio(next.horaInicio);
+                  setEditHoraFin(next.horaFin);
+                  setEditHorarioEncuentro(next.horarioEncuentro);
+                  setEditCalle(next.calleOCruce);
+                  setEditPisoDepto(next.pisoDepto);
+                  setEditBarrio(next.barrio);
+                  setEditComentario(next.comentario);
+                }}
+                showInternalComment={true}
+              />
+            </div>
+
+            {/* Botones de Acción de Edición */}
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {canDeleteContact && onDeleteContact && (
+                confirmingDelete ? (
+                  <div className="inline-flex items-center gap-1 rounded-xl border-2 border-[#FF2C00] bg-[#F5817F]/20 px-2 py-1">
+                    <span className="text-[10px] font-bold text-[#FF2C00]">¿Borrar #{contact.id}?</span>
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={async () => {
+                        setIsDeleting(true);
+                        try {
+                          await onDeleteContact(contact.id);
+                        } finally {
+                          setIsDeleting(false);
+                          setConfirmingDelete(false);
+                        }
+                      }}
+                      className="rounded-lg bg-[#FF2C00] px-2 py-0.5 text-[10px] font-bold text-white hover:bg-red-700"
+                    >
+                      {isDeleting ? '...' : 'Sí, borrar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingDelete(false)}
+                      className="rounded-lg bg-white border border-[#323232] px-1.5 py-0.5 text-[10px] font-bold text-[#323232]"
+                    >
+                      No
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingDelete(true)}
+                    className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#F5817F]/30 px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#F5817F] transition shadow-[2px_2px_0px_#323232]"
+                    title="Eliminar contacto (Solo Admin)"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-[#FF2C00]" />
+                    <span>Eliminar</span>
+                  </button>
+                )
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  setIsEditingInline(false);
+                }}
+                className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232]"
+              >
+                <X className="h-3.5 w-3.5" />
+                <span>Cancelar</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveInlineEdit}
+                disabled={isSavingEdit}
+                className="inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3.5 py-1.5 text-xs font-bold font-display text-[#323232] shadow-[2px_2px_0px_#323232] hover:bg-[#ffe838] transition"
+              >
+                <Save className="h-3.5 w-3.5" />
+                <span>{isSavingEdit ? 'Guardando...' : 'Guardar'}</span>
+              </button>
             </div>
 
             {/* Alertas de validación geoespacial y de choques horarios en tiempo real */}
@@ -873,11 +947,164 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 </div>
               )}
           </div>
+        ) : contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ? (
+          /* =========================================================
+             FICHA ESPECIAL DEDICADA: COORDINACIÓN DE RETIRO DE FICHAS EXTRA
+             ========================================================= */
+          <div onClick={(e) => e.stopPropagation()} className="space-y-3 w-full min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b-2 border-[#323232]/15">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="rounded-lg bg-[#323232] px-2 py-0.5 font-mono text-xs font-bold text-[#FFF06B]">
+                  #{contact.id}
+                </span>
+                <h4 className="text-base font-black font-display text-[#323232] break-words">
+                  {fullName}
+                </h4>
+                <span className="inline-flex items-center gap-1 rounded-lg bg-[#FFF06B] px-2.5 py-0.5 text-xs font-black text-[#323232] border-2 border-[#323232] shadow-[1px_1px_0px_#323232]">
+                  <FilePlus2 className="h-3.5 w-3.5" />
+                  📦 Retiro de Fichas ({contact.fichasExtrasCantidad || 'X2'})
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-lg bg-[#DFF4FF] px-2 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]">
+                  <MapPin className="h-3 w-3" />
+                  {editBarrio || contact.barrio || 'CABA'}
+                </span>
+                {contact.retiroConfirmado ? (
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-200 px-2.5 py-0.5 text-xs font-black text-emerald-950 border border-[#323232]">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-800" />
+                    ✓ Encuentro Confirmado (En Ruta)
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-950 border border-amber-400">
+                    ⏳ Por coordinar retiro (En Planificador)
+                  </span>
+                )}
+                {savedBadgeVisible && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-[#323232] bg-emerald-200 px-2 py-0.5 text-[10px] font-black text-emerald-950">
+                    ✓ Guardado
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                {phone && (
+                  <button
+                    type="button"
+                    onClick={handleCopyPhone}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[#323232]/40 bg-[#F5F4F0] px-2 py-1 text-[11px] font-mono font-bold text-[#323232] hover:bg-[#FFF06B]"
+                  >
+                    <span>{phone}</span>
+                    {copiedPhone ? <Check className="h-3 w-3 text-emerald-700" /> : <Copy className="h-3 w-3" />}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsEditingInline(true)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                  title="Editar datos generales o cambiar estado"
+                >
+                  <Edit3 className="h-3 w-3" />
+                  <span>Ficha completa</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Coordinador directo de Nuevo Encuentro para Retiro (Día/s, Horario y Dirección previa por defecto) */}
+            <div className="rounded-xl border-2 border-[#323232] bg-[#FFFDF5] p-3">
+              <ScheduleAndAddressPicker
+                compact={true}
+                showInternalComment={true}
+                addressLabel="Dirección de Retiro (sostiene por defecto la dirección anterior)"
+                values={{
+                  diasEncuentro: editDiasEncuentro,
+                  horaInicio: editHoraInicio,
+                  horaFin: editHoraFin,
+                  horarioEncuentro: editHorarioEncuentro,
+                  calleOCruce: editCalle,
+                  pisoDepto: editPisoDepto,
+                  barrio: editBarrio,
+                  comentario: editComentario,
+                }}
+                onChange={(next) => {
+                  setEditDiasEncuentro(next.diasEncuentro);
+                  setEditHoraInicio(next.horaInicio);
+                  setEditHoraFin(next.horaFin);
+                  setEditHorarioEncuentro(next.horarioEncuentro);
+                  setEditCalle(next.calleOCruce);
+                  setEditPisoDepto(next.pisoDepto);
+                  setEditBarrio(next.barrio);
+                  setEditComentario(next.comentario);
+                }}
+              />
+            </div>
+
+            {/* Botonera de Coordinación de Retiro -> Planificador & Hoy -> Ruta -> Fichas Retiradas */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveRetiroCoordination(undefined, undefined)}
+                  className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3 py-1.5 text-xs font-black text-[#323232] hover:bg-[#ffe838] shadow-[2px_2px_0px_#323232] cursor-pointer"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  <span>Guardar Agenda Retiro</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    void handleSaveRetiroCoordination(undefined, !contact.retiroConfirmado)
+                  }
+                  className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-black transition shadow-[2px_2px_0px_#323232] cursor-pointer ${
+                    contact.retiroConfirmado
+                      ? 'bg-white text-[#323232] hover:bg-stone-100'
+                      : 'bg-[#29B8FF] text-[#323232] hover:bg-[#1aa8f0]'
+                  }`}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>
+                    {contact.retiroConfirmado
+                      ? '↺ Pasar a Por Confirmar'
+                      : '✓ Confirmar Retiro (Sumar a Ruta)'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCompleteRetiroFichas}
+                  className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-200 px-3 py-1.5 text-xs font-black text-emerald-950 hover:bg-emerald-300 shadow-[2px_2px_0px_#323232] cursor-pointer"
+                  title="Marcar que ya retiraste las fichas y cerrar como Ya Firmó"
+                >
+                  <UserCheck className="h-3.5 w-3.5 text-emerald-800" />
+                  <span>✅ Fichas Retiradas</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTemplate('retiro_fichas');
+                  if (onToggleExpand) onToggleExpand(contact);
+                  else onSelect(contact);
+                }}
+                className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] cursor-pointer ${
+                  isExpanded
+                    ? 'bg-[#29B8FF] text-[#323232]'
+                    : 'bg-white text-[#323232] hover:bg-[#FFF06B]'
+                }`}
+              >
+                <MessageSquare className="h-3.5 w-3.5" />
+                <span>{isExpanded ? 'Ocultar Msj' : 'Msj Retiro WA'}</span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                />
+              </button>
+            </div>
+          </div>
         ) : (
-          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3.5 sm:gap-4 w-full min-w-0">
+          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3 sm:gap-4 w-full min-w-0">
             {/* 1. Identidad, Vocativo y Teléfono */}
-            <div className="w-full min-w-0 lg:w-1/3 lg:min-w-[220px] space-y-1.5">
-              <div className="flex items-center gap-2 flex-wrap">
+            <div className="w-full min-w-0 lg:w-1/3 lg:min-w-[210px] space-y-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="rounded-lg bg-[#323232] px-2 py-0.5 font-mono text-xs font-bold text-[#FFF06B]">
                   #{contact.id}
                 </span>
@@ -897,7 +1124,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 {savedBadgeVisible && (
                   <span className="inline-flex items-center gap-1 rounded-md border border-[#323232] bg-emerald-200 px-2 py-0.5 text-[10px] font-black text-emerald-950 shadow-[1px_1px_0px_#323232]">
                     <CheckCircle2 className="h-3 w-3 text-emerald-700" />
-                    ✓ Guardado en App y Sheets
+                    ✓ Guardado
                   </span>
                 )}
               </div>
@@ -940,27 +1167,25 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
               </div>
             </div>
 
-            {/* 2. Barrio, Dirección y Alertas Vencidas */}
+            {/* 2. Barrio, Día(s), Horario, Dirección y Alertas */}
             <div className="w-full min-w-0 lg:w-1/4 lg:min-w-[180px] space-y-1.5">
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 rounded-lg bg-[#DFF4FF] px-2.5 py-1 text-xs font-bold text-[#323232] border border-[#323232]">
+                <span className="inline-flex items-center gap-1 rounded-lg bg-[#DFF4FF] px-2.5 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]">
                   <MapPin className="h-3.5 w-3.5 text-[#323232]" />
                   {contact.barrio || 'CABA'}
                 </span>
 
-                {contact.barrioCorregidoPorDireccion && contact.barrioOriginalSheet && (
-                  <span
-                    className="rounded-md bg-[#FFF06B] px-1.5 py-0.5 text-[10px] font-bold text-[#323232] border border-[#323232]/40"
-                    title={`En Sheet decía ${contact.barrioOriginalSheet}; se corrigió por su dirección`}
-                  >
-                    Corregido (era {contact.barrioOriginalSheet})
+                {(contact.diasEncuentro || contact.fechasMencionadas.length > 0) && (
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-[#FFF06B] px-2 py-0.5 text-xs font-black text-[#323232] border border-[#323232]">
+                    📅 {contact.diasEncuentro || contact.fechasMencionadas.join(', ')}
                   </span>
                 )}
 
-                {contact.franjaHoraria && contact.franjaHoraria !== 'Flexible' && (
-                  <span className="inline-flex items-center gap-1 rounded-lg bg-[#ECEAE2] px-2 py-0.5 text-xs font-bold text-[#323232]">
+                {(contact.horarioEncuentro ||
+                  (contact.franjaHoraria && contact.franjaHoraria !== 'Flexible')) && (
+                  <span className="inline-flex items-center gap-1 rounded-lg bg-[#ECEAE2] px-2 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]/30">
                     <Clock className="h-3 w-3" />
-                    {contact.franjaHoraria}
+                    {contact.horarioEncuentro || contact.franjaHoraria}
                   </span>
                 )}
               </div>
@@ -968,7 +1193,10 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
               {contact.calleOCruce ? (
                 <p className="text-xs font-bold text-[#323232] flex items-center gap-1.5 break-words">
                   <span className="h-2 w-2 rounded-full bg-[#29B8FF] border border-[#323232] shrink-0" />
-                  <span>{contact.calleOCruce}</span>
+                  <span>
+                    {contact.calleOCruce}
+                    {contact.pisoDepto ? ` (${contact.pisoDepto})` : ''}
+                  </span>
                 </p>
               ) : (
                 <p className="text-[11px] text-[#5A5955] italic">
@@ -981,33 +1209,57 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                   <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                   <span>
                     {contact.alertaVencido.fechaVencida
-                      ? `Vencido (${contact.alertaVencido.fechaVencida}) · Reprogramar`
+                      ? `Vencido ${contact.alertaVencido.fechaVencida.replace(/\(([^()]+)\)/g, '· $1')} · Reprogramar`
                       : 'Cita vencida · Reprogramar'}
                   </span>
                 </div>
               )}
 
-              {(contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
-                contact.situacion === 'RETIRO_FICHAS') && (
-                <div className="inline-flex items-center gap-1.5 rounded-lg bg-[#FFF06B] px-2.5 py-1 text-xs font-bold text-[#323232] border border-[#323232]">
-                  <FilePlus2 className="h-3.5 w-3.5 shrink-0" />
-                  <span>Pendiente Retiro de Fichas Extra</span>
+              {contact.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-black border border-[#323232] ${
+                      contact.requiereSeguimientoPuntoSede7d
+                        ? 'bg-[#FFF06B] text-[#323232]'
+                        : 'bg-[#ECEAE2] text-[#323232]'
+                    }`}
+                  >
+                    📍 Prefiere Punto / Sede
+                    {contact.diasDesdeEstadoPuntoSede !== undefined
+                      ? ` (${contact.diasDesdeEstadoPuntoSede}d)`
+                      : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedTemplate('convocatoria_cafe_hub');
+                      if (!isExpanded) {
+                        if (onToggleExpand) onToggleExpand(contact);
+                        else onSelect(contact);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#DFF4FF] px-2 py-0.5 text-[10px] font-black text-[#323232] hover:bg-[#29B8FF] cursor-pointer"
+                    title="Preparar mensaje de seguimiento a 1 semana para quien prefiere pasar por un Punto o Sede"
+                  >
+                    <span>📩 Seguimiento 7d</span>
+                  </button>
                 </div>
               )}
             </div>
 
-            {/* 3. Comentario */}
-            <div className="w-full min-w-0 lg:w-1/4 lg:min-w-[180px]">
+            {/* 3. Comentario interno (sólo notas y aclaraciones personales) */}
+            <div className="w-full min-w-0 lg:w-1/4 lg:min-w-[170px]">
               {cleanComment ? (
                 <div className="rounded-xl border border-[#323232]/30 bg-[#F5F4F0] p-2.5 text-xs text-[#323232] font-medium break-words">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A5955] block mb-0.5 font-display">
-                    Comentario:
+                    Nota interna:
                   </span>
                   <p className="line-clamp-3 leading-relaxed">&ldquo;{cleanComment}&rdquo;</p>
                 </div>
               ) : (
-                <div className="rounded-xl border border-dashed border-[#323232]/30 p-2.5 text-[11px] text-[#5A5955] text-center italic">
-                  Sin comentario
+                <div className="rounded-xl border border-dashed border-[#323232]/25 p-2 text-[11px] text-[#5A5955] text-center italic">
+                  Sin nota interna
                 </div>
               )}
             </div>
@@ -1118,7 +1370,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                   type="button"
                   onClick={() => setIsEditingInline(true)}
                   className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232]"
-                  title="Editar nombre, dirección, barrio, teléfono o comentario directamente sobre esta fila"
+                  title="Editar día(s), horario, dirección con Maps o nota interna"
                 >
                   <Edit3 className="h-3.5 w-3.5" />
                   <span>Editar</span>
@@ -1141,14 +1393,14 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 <button
                   type="button"
                   onClick={() => (onToggleExpand ? onToggleExpand(contact) : onSelect(contact))}
-                  className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${
+                  className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-2.5 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${
                     isExpanded
                       ? 'bg-[#29B8FF] text-[#323232]'
                       : 'bg-[#FFF06B] text-[#323232] hover:bg-[#ffe838]'
                   }`}
                 >
                   <MessageSquare className="h-3.5 w-3.5" />
-                  <span>{isExpanded ? 'Ocultar Msj' : 'Mensaje WA'}</span>
+                  <span>{isExpanded ? 'Ocultar' : 'Mensaje'}</span>
                   <ChevronDown
                     className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
                   />
@@ -1163,11 +1415,11 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
       {isExpanded && (
         <div
           onClick={(e) => e.stopPropagation()}
-          className="border-t-2 border-[#323232] bg-[#F5F4F0] p-4 sm:p-5 space-y-4 rounded-b-2xl"
+          className="border-t-2 border-[#323232] bg-[#F5F4F0] p-4 sm:p-5 space-y-3.5 rounded-b-2xl"
         >
-          {/* Barra superior del desplegable: Navegación < Anterior | Siguiente > + Abrir Ficha Lateral */}
+          {/* Barra superior del desplegable: Navegación < Anterior | Siguiente > + Botones rápidos */}
           <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#323232]/20">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {onNavigateRelative && (
                 <div className="inline-flex items-center gap-1">
                   <button
@@ -1193,24 +1445,55 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
               <span className="text-xs font-bold text-[#5A5955]">
                 Redactor contextual · #{contact.id} {fullName}
               </span>
+              {habloHoy && (
+                <span className="inline-flex items-center gap-1 rounded-md border border-[#323232]/40 bg-[#DFF4FF] px-2 py-0.5 text-[10px] font-black text-[#323232]">
+                  💬 Hablado hoy (sin saludo repetido)
+                </span>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
+              {/* Botón 1 clic para alternar Saludo Inicial */}
+              <button
+                type="button"
+                onClick={() => {
+                  const trimmed = messageText.trim();
+                  if (/^(?:¡?hola|¡?buen\s+d[ií]a|¡?buenas)/i.test(trimmed)) {
+                    setMessageText(quitarSaludoInicialMismoDia(trimmed));
+                  } else {
+                    const voc = contact.primerNombre || '';
+                    const saludo =
+                      !contact.sinNombre && voc
+                        ? `Hola, ${voc}, ¿cómo estás? `
+                        : 'Hola, ¿cómo estás? ';
+                    setMessageText(`${saludo}${trimmed}`);
+                  }
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#323232] hover:bg-[#FFF06B] cursor-pointer"
+                title="Quitar o agregar el saludo 'Hola...' en 1 clic"
+              >
+                <span>
+                  {/^(?:¡?hola|¡?buen\s+d[ií]a|¡?buenas)/i.test(messageText.trim())
+                    ? '💬 Quitar saludo'
+                    : '👋 Agregar saludo'}
+                </span>
+              </button>
+
               {/* Botón rápido: Entregué Fichas Extra (X1/X2/X3 · Retiro en 1 semana) */}
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setShowFichasMenu((prev) => !prev)}
                   className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#DFF4FF] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#29B8FF]"
-                  title="Registrar que se le dejaron fichas extra para retirar en 1 semana"
+                  title="Registrar que firmó y se le dejaron fichas extra para retirar en 1 semana"
                 >
                   <FilePlus2 className="h-3.5 w-3.5" />
-                  <span>+ Fichas (Retiro 1 sem)</span>
+                  <span>+ Fichas Extra</span>
                 </button>
                 {showFichasMenu && (
                   <div className="absolute right-0 top-full mt-1 z-40 w-56 rounded-xl border-2 border-[#323232] bg-white p-1.5 shadow-[4px_4px_0px_#323232]">
                     <p className="px-2 py-1 text-[10px] font-bold uppercase text-[#5A5955]">
-                      Agendar retiro en 7 días:
+                      Firmó + Dejé fichas (Retiro 7d):
                     </p>
                     {([1, 2, 3] as const).map((cant) => (
                       <button
@@ -1219,7 +1502,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                         onClick={(e) => handleMarkFichasExtra(cant, e)}
                         className="w-full text-left rounded-lg px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]"
                       >
-                        Dejé X{cant} ficha{cant > 1 ? 's' : ''} (Retirar en 1 sem)
+                        Dejé X{cant} ficha{cant > 1 ? 's' : ''} (Abrir ficha retiro)
                       </button>
                     ))}
                   </div>

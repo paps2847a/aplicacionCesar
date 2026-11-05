@@ -434,7 +434,7 @@ export function inferirBarrioDesdeDireccionOComentario(
     return 'Villa Pueyrredón';
   }
 
-  if (/estaci[oó]n coghlan|pedro ignacio rivera [34]\d\d\d|tronador [23]\d\d\d|nahuel huapi [34]\d\d\d/i.test(low)) {
+  if (/estaci[oó]n coghlan|pedro ignacio rivera [34]\d\d\d|tronador [23]\d\d\d|nahuel huapi [34]\d\d\d|holmberg [23]\d\d\d/i.test(low)) {
     return 'Coghlan';
   }
 
@@ -518,10 +518,19 @@ export function esDireccionReconocidaEnCABA(textoDireccion: string): boolean {
 }
 
 export function sincronizarBarrioConDireccionComentario(raw: RawContactRow): RawContactRow {
-  const comLow = `${raw.calleOCruce || ''} ${raw.comentario || ''}`.toLowerCase();
+  const tieneCamposEstructurados =
+    raw.diasEncuentro !== undefined ||
+    raw.horarioEncuentro !== undefined ||
+    raw.horaInicio !== undefined ||
+    raw.horaFin !== undefined ||
+    raw.calleOCruce !== undefined;
+
+  const comLow = tieneCamposEstructurados
+    ? `${raw.calleOCruce || ''}`.toLowerCase()
+    : `${raw.calleOCruce || ''} ${raw.comentario || ''}`.toLowerCase();
   if (
     comLow.includes('chile 1408') ||
-    /reuni[oó]n\s+de\s+los\s+mi[eé]rcoles/i.test(comLow)
+    /reuni[oó]n\s+de\s+los\s+mi[eé]rcoles/i.test(`${raw.calleOCruce || ''} ${raw.comentario || ''}`)
   ) {
     const barrioActualSede = (raw.barrio || '').trim()
       ? normalizarBarrioCABA(raw.barrio)
@@ -532,14 +541,16 @@ export function sincronizarBarrioConDireccionComentario(raw: RawContactRow): Raw
     };
   }
 
-  const calleOCruce = (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
+  const calleOCruce = tieneCamposEstructurados
+    ? (raw.calleOCruce || '').trim()
+    : (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
   if (!calleOCruce) {
     return raw;
   }
 
   const barrioCorrecto = inferirBarrioDesdeDireccionOComentario(
     calleOCruce,
-    `${raw.calleOCruce || ''} ${raw.comentario || ''}`
+    tieneCamposEstructurados ? calleOCruce : `${raw.calleOCruce || ''} ${raw.comentario || ''}`
   );
   if (!barrioCorrecto) {
     return {
@@ -693,13 +704,19 @@ export function tienePuntoEncuentroODireccionDeterminada(input: {
   estadoFlujo?: EstadoFlujo;
   situacion?: SituacionContacto;
   calleOCruce?: string;
+  diasEncuentro?: string;
+  fechasMencionadas?: string[];
+  retiroConfirmado?: boolean;
   tieneDireccionRealEnComentario?: boolean;
   comentario?: string;
 }): boolean {
   const esRetiroFichasConFecha =
     (input.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' || input.situacion === 'RETIRO_FICHAS') &&
     Boolean(input.tieneDireccionRealEnComentario || (input.calleOCruce && input.calleOCruce.trim().length > 0)) &&
-    /\b\d{1,2}\/\d{1,2}\b/.test(input.comentario || '');
+    (Boolean(input.retiroConfirmado) ||
+      Boolean(input.fechasMencionadas && input.fechasMencionadas.length > 0) ||
+      Boolean(input.diasEncuentro && input.diasEncuentro.trim().length > 0) ||
+      /\b\d{1,2}\/\d{1,2}\b/.test(input.comentario || ''));
 
   if (esRetiroFichasConFecha) {
     return true;
@@ -717,6 +734,15 @@ export function tienePuntoEncuentroODireccionDeterminada(input: {
     return false;
   }
 
+  // Quienes prefieren pasar por un Punto o Sede (3c) no quieren encuentro particular a domicilio
+  // y no deben ser considerados en la planificación de ruta/visitas (salvo el bloque legacy de Chile 1408 sin estado explícito)
+  if (
+    input.situacion === 'PREFIERE_PUNTO' ||
+    (input.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' && input.situacion !== 'EVENTO_CHILE_1408')
+  ) {
+    return false;
+  }
+
   if (input.tieneDireccionRealEnComentario || (input.calleOCruce && input.calleOCruce.trim().length > 0)) {
     return true;
   }
@@ -725,16 +751,14 @@ export function tienePuntoEncuentroODireccionDeterminada(input: {
     input.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
     input.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
     input.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
-    input.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
     input.situacion === 'VISITA_AGENDADA' ||
-    input.situacion === 'PREFIERE_PUNTO' ||
     input.situacion === 'EVENTO_CHILE_1408'
   ) {
     return true;
   }
 
   const com = (input.comentario || '').toLowerCase();
-  return /\b(chile\s*1408|caf[eé]\s*hub|punto\s*de\s*encuentro|sede|plaza|pza\.|estaci[oó]n|parque|pqe\.|reuni[oó]n\s*de\s*los\s*mi[eé]rcoles|visita)\b/i.test(
+  return /\b(chile\s*1408|plaza|pza\.|estaci[oó]n|parque|pqe\.|reuni[oó]n\s*de\s*los\s*mi[eé]rcoles|visita)\b/i.test(
     com
   );
 }
@@ -815,7 +839,7 @@ export function geocodificarDireccionCABA(
     inferirBarrioDesdeDireccionOComentario(direccionOCalle, barrioHint) ||
     normalizarBarrioCABA(barrioHint) ||
     'Palermo';
-  const geo = geocodificarContactoLocal(barrioEfectivo, direccionOCalle);
+  const geo = geocodificarContactoLocal(direccionOCalle, barrioEfectivo);
   return { lat: geo.lat, lng: geo.lng, exacto: geo.exacta };
 }
 

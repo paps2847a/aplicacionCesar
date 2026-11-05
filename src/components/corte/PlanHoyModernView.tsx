@@ -82,8 +82,31 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   onJumpToCandidate,
   onOpenScannerModal,
 }) => {
-  const bloques = corteResultado.agendaSugeridaDias || [];
-  const alertasVencidos = corteResultado.alertasPendientesVencidos || [];
+  const bloques = useMemo(() => {
+    return (corteResultado.agendaSugeridaDias || [])
+      .filter((b) => b.id !== 'agenda-sede-chile-1408')
+      .map((b) => ({
+        ...b,
+        contactosIncluidos: b.contactosIncluidos.filter(
+          (c) =>
+            c.estadoFlujo !== 'PREFIERE_CAFE_HUB_O_SEDE' && c.situacion !== 'PREFIERE_PUNTO'
+        ),
+        paradasRutaSugerida: (b.paradasRutaSugerida || []).filter(
+          (p) =>
+            p.contact.estadoFlujo !== 'PREFIERE_CAFE_HUB_O_SEDE' &&
+            p.contact.situacion !== 'PREFIERE_PUNTO'
+        ),
+      }))
+      .filter((b) => b.contactosIncluidos.length > 0);
+  }, [corteResultado.agendaSugeridaDias]);
+  const alertasVencidos = useMemo(
+    () =>
+      (corteResultado.alertasPendientesVencidos || []).filter(
+        (c) =>
+          c.estadoFlujo !== 'PREFIERE_CAFE_HUB_O_SEDE' && c.situacion !== 'PREFIERE_PUNTO'
+      ),
+    [corteResultado.alertasPendientesVencidos]
+  );
 
   // Por defecto abrimos en "1. Planificador de Propuestas" para que el usuario envíe propuestas
   // y marque "✓ Confirmó Cita"; en "2. Hoja de Ruta en Terreno" solo aparecen las citas explícitamente confirmadas.
@@ -246,40 +269,38 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   }, [modalContactId, bloques, alertasVencidos]);
 
   const handleQuitarDelPlanificador = async (contact: Contact) => {
-    const comLimpio = (contact.comentario || '')
-      .replace(/\s*\[Confirmado\s+1-a-1[^\]]*\]/gi, '')
-      .replace(/\s*\[Declinó\s+Café\s+Hub[^\]]*\]/gi, '')
-      .replace(/\b([0-3]?\d\/[0-1]?\d)\b/g, '')
-      .trim();
-    const nota = `[Movido a "3. Falta calle/día" desde Planificador]`;
+    const esRetiro = contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS';
     await onUpdateContact(contact.id, {
       rsp: 'Sí',
-      adhirio: 'Pendiente',
-      estadoFlujo: 'RESPONDIO_FALTA_DNI_O_ZONA',
-      comentario: comLimpio ? `${comLimpio} · ${nota}` : nota,
+      adhirio: esRetiro ? 'Sí' : 'Pendiente',
+      diasEncuentro: '',
+      horarioEncuentro: '',
+      horaInicio: '',
+      horaFin: '',
+      retiroConfirmado: false,
+      estadoFlujo: esRetiro ? 'PENDIENTE_RETIRO_FICHAS' : 'RESPONDIO_FALTA_DNI_O_ZONA',
+      comentario: contact.comentario || '',
     });
     triggerToast(
-      `✓ #${contact.id} ${contact.primerNombre || contact.nombre}: Quitado del Planificador (pasó a 3. Falta calle/día)`
+      `✓ #${contact.id} ${contact.primerNombre || contact.nombre}: Quitado del Planificador`
     );
   };
 
   const handleMarcarReprogramacionVencido = async (contact: Contact) => {
-    const comSinFechasVencidas = (contact.comentario || '')
-      .replace(/\s*\[Confirmado\s+1-a-1[^\]]*\]/gi, '')
-      .replace(/\b([0-3]?\d\/[0-1]?\d)\b/g, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    const notaReprog = `[Reprogramación enviada · esperando nuevo día/hora]`;
+    const esRetiro = contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS';
     await onUpdateContact(contact.id, {
       rsp: 'Sí',
-      adhirio: 'Pendiente',
-      estadoFlujo: 'RESPONDIO_FALTA_DNI_O_ZONA',
-      comentario: comSinFechasVencidas
-        ? `${comSinFechasVencidas} · ${notaReprog}`
-        : `${contact.calleOCruce ? `${contact.calleOCruce} · ` : ''}${notaReprog}`,
+      adhirio: esRetiro ? 'Sí' : 'Pendiente',
+      diasEncuentro: '',
+      horarioEncuentro: '',
+      horaInicio: '',
+      horaFin: '',
+      retiroConfirmado: false,
+      estadoFlujo: esRetiro ? 'PENDIENTE_RETIRO_FICHAS' : 'RESPONDIO_FALTA_DNI_O_ZONA',
+      comentario: contact.comentario || '',
     });
     triggerToast(
-      `✓ #${contact.id} ${contact.primerNombre || contact.nombre}: Movido a "3. Falta calle/día" (esperando nuevo horario)`
+      `✓ #${contact.id} ${contact.primerNombre || contact.nombre}: Movido a espera de nuevo día/hora`
     );
   };
 
@@ -294,7 +315,10 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     paradaRef?: ParadaRuta
   ) => {
     const com = contact.comentario || '';
-    const horaEnCom = com.match(/a\s+las\s+(\d{1,2}:\d{2})/i)?.[1];
+    const horaEnCom =
+      contact.horaInicio ||
+      contact.horarioEncuentro ||
+      com.match(/a\s+las\s+(\d{1,2}:\d{2})/i)?.[1];
     const cafeEnCom = com.match(/Caf[eé]\s*Hub:\s*([^\])·]+)/i)?.[1]?.trim();
     const esCafeActual =
       /caf[eé]\s*hub/i.test(com) ||
@@ -312,25 +336,30 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
 
     setReprogFecha((prev) => ({
       ...prev,
-      [contact.id]: prev[contact.id] || contact.fechasMencionadas[0] || bloque.fechaClave || '',
+      [contact.id]:
+        contact.diasEncuentro ||
+        contact.fechasMencionadas[0] ||
+        bloque.fechaClave ||
+        prev[contact.id] ||
+        '',
     }));
     setReprogHora((prev) => ({
       ...prev,
       [contact.id]:
-        prev[contact.id] || horaEnCom || paradaRef?.horaLlegada || bloque.horaInicioCalculada || '',
+        horaEnCom || paradaRef?.horaLlegada || bloque.horaInicioCalculada || prev[contact.id] || '',
     }));
     setReprogDireccion((prev) => ({
       ...prev,
-      [contact.id]: prev[contact.id] || contact.calleOCruce || '',
+      [contact.id]: contact.calleOCruce || prev[contact.id] || '',
     }));
     setReprogModalidad((prev) => ({
       ...prev,
-      [contact.id]: prev[contact.id] || (esCafeActual ? 'CAFE_HUB' : 'PUERTA_A_PUERTA'),
+      [contact.id]: esCafeActual ? 'CAFE_HUB' : 'PUERTA_A_PUERTA',
     }));
     if (cafeDefault) {
       setReprogCafe((prev) => ({
         ...prev,
-        [contact.id]: prev[contact.id] || cafeDefault,
+        [contact.id]: cafeDefault,
       }));
     }
     setEditingConfirmedIds((prev) => ({
@@ -346,6 +375,9 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
 
   // Determina si un vecino fue explícitamente confirmado 1-a-1 para salir a la Hoja de Ruta en Terreno.
   const esConfirmadoParaHojaDeRuta = (contact: Contact): boolean => {
+    if (contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS') {
+      return Boolean(contact.retiroConfirmado) || Boolean(paradaUnlockEnCamino[contact.id]);
+    }
     const com = contact.comentario || '';
     const tieneTagConfirmado =
       /\[confirmado\s+1-a-1|visita\s+confirmada|encuentro\s+confirmado\s+en\s+caf[eé]\s*hub|confirm[oó]\s+caf[eé]\s*hub|\[declin[oó]\s+caf[eé]\s*hub/i.test(
@@ -362,12 +394,6 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
       return false;
     }
     if (paradaUnlockEnCamino[contact.id]) {
-      return true;
-    }
-    if (
-      contact.fechasMencionadas.length > 0 &&
-      contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
-    ) {
       return true;
     }
     return false;
@@ -400,17 +426,11 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
       delete next[contact.id];
       return next;
     });
-    const comLimpio = (contact.comentario || '')
-      .replace(/\s*\[Confirmado\s+1-a-1[^\]]*\]/gi, '')
-      .replace(/\s*\[Declinó\s+Café\s+Hub[^\]]*\]/gi, '')
-      .replace(/Visita\s+confirmada\s+Puerta\s+a\s+Puerta\s+en\s+/gi, 'Visita por confirmar en ')
-      .replace(/Visita\s+confirmada\s+Puerta\s+a\s+Puerta/gi, 'Visita por confirmar')
-      .replace(/Encuentro\s+confirmado\s+en\s+Café\s+Hub/gi, 'Prefiere Café Hub')
-      .replace(/Prefiere\s+punto\s+de\s+encuentro\s+Café\s+Hub\s+confirmado/gi, 'Prefiere Café Hub')
-      .trim();
+    const esRetiro = contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS';
     await onUpdateContact(contact.id, {
-      estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
-      comentario: comLimpio,
+      estadoFlujo: esRetiro ? 'PENDIENTE_RETIRO_FICHAS' : 'PASO_DATOS_FALTA_CONFIRMAR',
+      retiroConfirmado: false,
+      comentario: contact.comentario || '',
     });
     setEditingConfirmedIds((prev) => ({
       ...prev,
@@ -471,8 +491,15 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
         : bloque.cafeElegidoUsuario,
     };
 
+    const horaPuntualContacto =
+      contact.horaInicio && !contact.horaFin
+        ? contact.horaInicio
+        : /^\d{1,2}:\d{2}(?:\s*hs)?$/i.test((contact.horarioEncuentro || '').trim())
+        ? (contact.horarioEncuentro || '').trim().replace(/\s*hs$/i, '')
+        : '';
     const horaSugeridaParada =
       reprogHora[contact.id]?.trim() ||
+      horaPuntualContacto ||
       paradaRef?.horaLlegada ||
       bloque.paradasRutaSugerida?.find((p) => p.contact.id === contact.id)?.horaLlegada;
 
@@ -487,14 +514,35 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
         nuevaModalidad: reprogModalidad[contact.id],
         nuevoCafe: reprogCafe[contact.id],
         confirmarEncuentro: true,
+        mantenerComentarioInterno: true,
       },
       voiceProfile
     );
+
+    const modalidadElegida =
+      reprogModalidad[contact.id] ||
+      (respuesta === 'DECLINO_CAFE_PASA_PUERTA_A_PUERTA'
+        ? 'PUERTA_A_PUERTA'
+        : respuesta === 'PASA_A_CAFE_HUB'
+        ? 'CAFE_HUB'
+        : undefined);
+    if (modalidadElegida) {
+      setBloqueModalidadOverride((prev) => ({
+        ...prev,
+        [bloque.id]: modalidadElegida,
+        [getBloqueOverrideKey(bloque)]: modalidadElegida,
+      }));
+    }
 
     await onUpdateContact(contact.id, {
       rsp: actualizado.rsp,
       adhirio: actualizado.adhirio,
       estadoFlujo: actualizado.estadoFlujo,
+      diasEncuentro: actualizado.diasEncuentro,
+      horaInicio: actualizado.horaInicio,
+      horaFin: actualizado.horaFin,
+      horarioEncuentro: actualizado.horarioEncuentro,
+      retiroConfirmado: actualizado.retiroConfirmado,
       comentario: actualizado.comentario,
       calleOCruce: actualizado.calleOCruce,
     });
@@ -614,15 +662,25 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
           esConfirmadoParaHojaDeRuta(p.contact)
         );
         const mRange = (b.franjaHoraria || '').match(/(\d{1,2}:\d{2})\s*a\s*(\d{1,2}:\d{2})/);
-        const startHHMM = paradasConf[0]?.horaSalida || (mRange ? mRange[1] : '11:00');
-        const endHHMM =
+        const startHHMM =
+          (confirmados.length === 1 && confirmados[0]?.horaInicio) ||
+          paradasConf[0]?.horaLlegada ||
+          paradasConf[0]?.horaSalida ||
+          (mRange ? mRange[1] : '11:00');
+        const rawEndHHMM =
           paradasConf[paradasConf.length - 1]?.horaFinVisita || (mRange ? mRange[2] : '13:00');
         const padHHMM = (s: string) => {
           const [hh, mm] = s.split(':');
           return `${String(hh || '11').padStart(2, '0')}:${String(mm || '00').padStart(2, '0')}`;
         };
         const sTime = padHHMM(startHHMM);
-        const eTime = padHHMM(endHHMM);
+        const [sH, sM] = sTime.split(':').map(Number);
+        const [eH, eM] = padHHMM(rawEndHHMM).split(':').map(Number);
+        const sTotalMin = sH * 60 + sM;
+        const eTotalMin = Math.max(sTotalMin + 20, eH * 60 + eM);
+        const eTime = `${String(Math.floor(eTotalMin / 60)).padStart(2, '0')}:${String(
+          eTotalMin % 60
+        ).padStart(2, '0')}`;
 
         // Extraer DD/MM de diaEtiqueta (ej: "MAÑANA · Martes 03/11")
         const mDate = (b.diaEtiqueta || '').match(/(\d{1,2})\/(\d{1,2})/);
@@ -633,16 +691,32 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
 
         const descLines = confirmados.map((c) => {
           const p = paradasConf.find((pr) => pr.contact.id === c.id);
-          const hora = p ? `${p.horaLlegada} hs: ` : '';
+          const hora = c.horaInicio ? `${c.horaInicio} hs: ` : p ? `${p.horaLlegada} hs: ` : '';
           return `• ${hora}#${c.id} ${c.nombreCompletoCorregido || c.nombre} (${c.calleOCruce || c.barrio})`;
         });
 
+        const modEfectiva = getModalidadOver(b) || b.modalidad;
+        const locationEfectiva =
+          confirmados.length === 1 && confirmados[0].calleOCruce
+            ? `${confirmados[0].calleOCruce} — ${b.barrio}, CABA`
+            : paradasConf.length === 1 && paradasConf[0].destinoNombre
+            ? paradasConf[0].destinoNombre
+            : modEfectiva === 'PUERTA_A_PUERTA'
+            ? confirmados
+                .map((c) => c.calleOCruce)
+                .filter(Boolean)
+                .join(' → ') || `${b.barrio}, CABA`
+            : b.puntoEncuentroODireccion || `${b.barrio}, CABA`;
+
         return {
           id: `route-${fechaISO}-${b.barrio.toLowerCase().replace(/\s+/g, '-')}`,
-          summary: `🏠 Recorrido Puerta a Puerta: ${b.barrio} (${confirmados.length} vecino${
-            confirmados.length === 1 ? '' : 's'
-          } confirmado${confirmados.length === 1 ? '' : 's'})`,
-          location: b.puntoEncuentroODireccion || `${b.barrio}, CABA`,
+          summary:
+            confirmados.length === 1
+              ? `🏠 Visita #${confirmados[0].id} ${
+                  confirmados[0].nombreCompletoCorregido || confirmados[0].nombre
+                } (${confirmados[0].calleOCruce || b.barrio})`
+              : `🏠 Recorrido Puerta a Puerta: ${b.barrio} (${confirmados.length} vecinos confirmados)`,
+          location: locationEfectiva,
           description: `Ruta Casa x Casa en ${b.barrio}:\n${descLines.join('\n')}`,
           fecha: b.diaEtiqueta,
           fechaISO,
@@ -1207,9 +1281,24 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                     <h5 className="text-sm font-bold font-display text-[#323232]">
                                       {contact.nombreCompletoCorregido || contact.nombre}
                                     </h5>
+                                    {contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' && (
+                                      <span className="inline-flex items-center gap-1 rounded-md bg-[#FFF06B] px-2 py-0.5 text-xs font-black text-[#323232] border border-[#323232]">
+                                        📦 Retiro Fichas ({contact.fichasExtrasCantidad || 'X2'})
+                                      </span>
+                                    )}
                                     <span className="rounded-md bg-[#DFF4FF] px-2 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]/40">
                                       📍 {contact.calleOCruce || contact.barrio}
                                     </span>
+                                    {(contact.diasEncuentro || contact.fechasMencionadas.length > 0) && (
+                                      <span className="rounded-md bg-[#ECEAE2] px-2 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]/30">
+                                        📅 {contact.diasEncuentro || contact.fechasMencionadas.join(', ')}
+                                      </span>
+                                    )}
+                                    {(contact.horarioEncuentro || contact.franjaHoraria !== 'Flexible') && (
+                                      <span className="rounded-md bg-[#ECEAE2] px-2 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]/30">
+                                        ⏰ {contact.horarioEncuentro || contact.franjaHoraria}
+                                      </span>
+                                    )}
                                     {paradaRef && (
                                       <span className="rounded-md bg-[#FFF06B] px-2 py-0.5 font-mono text-xs font-bold text-[#323232] border border-[#323232]">
                                         {yaConfirmado ? 'Ruta:' : 'Sugerido:'}{' '}
@@ -1255,9 +1344,20 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                   </div>
                                 </div>
 
-                                <p className="text-xs text-[#5A5955] font-medium">
-                                  Comentario: &ldquo;{contact.comentario || 'Sin comentario'}&rdquo;
-                                </p>
+                                {(() => {
+                                  const notaLimpia = (contact.comentario || '')
+                                    .replace(/Visita confirmada Puerta a Puerta en [^\n·]+/gi, '')
+                                    .replace(/Encuentro confirmado en Caf[eé] Hub [^\n·]+/gi, '')
+                                    .replace(/Visita reprogramada para el [^\n·]+/gi, '')
+                                    .replace(/\[Confirmado 1-a-1[^\]]*\]/gi, '')
+                                    .replace(/^\s*[·—-]\s*|\s*[·—-]\s*$/g, '')
+                                    .trim();
+                                  return notaLimpia ? (
+                                    <p className="text-xs text-[#5A5955] font-medium">
+                                      Nota interna: &ldquo;{notaLimpia}&rdquo;
+                                    </p>
+                                  ) : null;
+                                })()}
 
                                 {yaConfirmado && !isEditingConfirmed ? (
                                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-emerald-700 bg-emerald-100/80 px-3 py-2">
@@ -2037,23 +2137,44 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                       </div>
 
                                       <div className="flex flex-wrap items-center gap-1.5">
-                                        <button
-                                          type="button"
-                                          onClick={async () => {
-                                            await onUpdateContact(c.id, {
-                                              adhirio: 'Sí',
-                                              rsp: 'Sí',
-                                              estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
-                                            });
-                                            triggerToast(
-                                              `🎉 ¡${c.primerNombre || c.nombre} marcado como Ya Firmó!`
-                                            );
-                                          }}
-                                          className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200 shadow-[2px_2px_0px_#323232] cursor-pointer"
-                                        >
-                                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
-                                          <span>✓ Firmó</span>
-                                        </button>
+                                        {c.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ? (
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              await onUpdateContact(c.id, {
+                                                adhirio: 'Sí',
+                                                rsp: 'Sí',
+                                                retiroConfirmado: false,
+                                                estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+                                              });
+                                              triggerToast(
+                                                `✅ ¡Fichas retiradas de ${c.primerNombre || c.nombre}!`
+                                              );
+                                            }}
+                                            className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200 shadow-[2px_2px_0px_#323232] cursor-pointer"
+                                          >
+                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
+                                            <span>✅ Fichas Retiradas</span>
+                                          </button>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              await onUpdateContact(c.id, {
+                                                adhirio: 'Sí',
+                                                rsp: 'Sí',
+                                                estadoFlujo: 'YA_ADHIRIO_FIRMA_OK',
+                                              });
+                                              triggerToast(
+                                                `🎉 ¡${c.primerNombre || c.nombre} marcado como Ya Firmó!`
+                                              );
+                                            }}
+                                            className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200 shadow-[2px_2px_0px_#323232] cursor-pointer"
+                                          >
+                                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
+                                            <span>✓ Firmó</span>
+                                          </button>
+                                        )}
 
                                         {fichasPickerParadaId === c.id ? (
                                           <div className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#DFF4FF] px-2 py-1 text-[11px] font-bold font-display text-[#323232]">

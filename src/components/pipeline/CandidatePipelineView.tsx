@@ -44,6 +44,7 @@ export type QuickOperationalFilter =
   | 'POR_CONFIRMAR'
   | 'CITA_CONFIRMADA'
   | 'RETIRO_FICHAS_1SEM'
+  | 'PUNTO_O_SEDE'
   | 'YA_FIRMARON_FIN'
   | 'SIN_DNI_CABA_O_BAJA';
 
@@ -248,8 +249,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
           );
         case 'POR_CONFIRMAR':
           return (
-            (c.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
-              c.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE') &&
+            c.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' &&
             c.adhirio !== 'Sí'
           );
         case 'CITA_CONFIRMADA':
@@ -261,6 +261,12 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         case 'RETIRO_FICHAS_1SEM':
           return (
             c.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' || c.situacion === 'RETIRO_FICHAS'
+          );
+        case 'PUNTO_O_SEDE':
+          return (
+            (c.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+              c.situacion === 'PREFIERE_PUNTO') &&
+            c.adhirio !== 'Sí'
           );
         case 'YA_FIRMARON_FIN':
           return (
@@ -289,6 +295,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
       POR_CONFIRMAR: 0,
       CITA_CONFIRMADA: 0,
       RETIRO_FICHAS_1SEM: 0,
+      PUNTO_O_SEDE: 0,
       YA_FIRMARON_FIN: 0,
       SIN_DNI_CABA_O_BAJA: 0,
     };
@@ -300,6 +307,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
       if (matchesQuickFilter(c, 'POR_CONFIRMAR')) res.POR_CONFIRMAR++;
       if (matchesQuickFilter(c, 'CITA_CONFIRMADA')) res.CITA_CONFIRMADA++;
       if (matchesQuickFilter(c, 'RETIRO_FICHAS_1SEM')) res.RETIRO_FICHAS_1SEM++;
+      if (matchesQuickFilter(c, 'PUNTO_O_SEDE')) res.PUNTO_O_SEDE++;
       if (matchesQuickFilter(c, 'YA_FIRMARON_FIN')) res.YA_FIRMARON_FIN++;
       if (matchesQuickFilter(c, 'SIN_DNI_CABA_O_BAJA')) res.SIN_DNI_CABA_O_BAJA++;
     }
@@ -526,6 +534,12 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
       label: '📦 Retiro Fichas',
       count: quickFilterCounts.RETIRO_FICHAS_1SEM,
       urgent: quickFilterCounts.RETIRO_FICHAS_1SEM > 0,
+    },
+    {
+      key: 'PUNTO_O_SEDE',
+      label: '📍 Punto / Sede',
+      count: quickFilterCounts.PUNTO_O_SEDE,
+      urgent: contacts.some((c) => Boolean(c.requiereSeguimientoPuntoSede7d)),
     },
     {
       key: 'SIN_RSP_48H',

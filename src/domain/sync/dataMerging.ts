@@ -52,15 +52,16 @@ export function migrarContactosDesde167SinPrimerContacto(
       const comCorregido = comRaw
         .replace(
           /\[Intento auto fallido[^\]]*Tiempo de espera agotado al abrir el chat\]/gi,
-          '[1er msj auto enviado 21/10]'
+          ''
         )
+        .replace(/\[1er msj auto enviado[^\]]*\]/gi, '')
         .trim();
       return {
         ...reparado,
         rsp: 'No',
         adhirio: 'Pendiente',
         primerContactoEnviado: true,
-        comentario: comCorregido || '[1er msj auto enviado 21/10]',
+        comentario: comCorregido,
         estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
         estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo('1ER_MSJ_ENVIADO_SIN_RSP'),
       };
@@ -358,12 +359,21 @@ export function fusionarContactosDesdeSheetsConControl(
       : undefined;
     const baseComparacionSheet = fotoPreviaSheet || (!ultimosVistosEnSheetPorId ? previo : undefined);
 
-    // Detectar si en Google Sheets se modificó el comentario, estado o adhesión respecto de la última foto de Sheets
+    // Detectar si en Google Sheets se modificó el comentario, días, horario, dirección, estado o adhesión respecto de la última foto de Sheets
     const comentarioSheet = (row.comentario || '').trim();
     const comentarioBase = (baseComparacionSheet?.comentario || '').trim();
+    const diasSheet = (row.diasEncuentro || '').trim();
+    const diasBase = (baseComparacionSheet?.diasEncuentro || '').trim();
+    const horarioSheet = (row.horarioEncuentro || '').trim();
+    const horarioBase = (baseComparacionSheet?.horarioEncuentro || '').trim();
+    const calleSheet = (row.calleOCruce || '').trim();
+    const calleBase = (baseComparacionSheet?.calleOCruce || '').trim();
     const cambioRespectoABase =
       Boolean(baseComparacionSheet) &&
       (comentarioSheet !== comentarioBase ||
+        (row.diasEncuentro !== undefined && diasSheet !== diasBase) ||
+        (row.horarioEncuentro !== undefined && horarioSheet !== horarioBase) ||
+        (row.calleOCruce !== undefined && calleSheet !== calleBase) ||
         row.adhirio !== baseComparacionSheet?.adhirio ||
         row.rsp !== baseComparacionSheet?.rsp ||
         (row.estadoFlujo !== undefined && row.estadoFlujo !== baseComparacionSheet?.estadoFlujo) ||
@@ -376,6 +386,9 @@ export function fusionarContactosDesdeSheetsConControl(
     const coincideConPrevioEnApp =
       Boolean(previo) &&
       comentarioSheet === (previo?.comentario || '').trim() &&
+      (row.diasEncuentro === undefined || diasSheet === (previo?.diasEncuentro || '').trim()) &&
+      (row.horarioEncuentro === undefined || horarioSheet === (previo?.horarioEncuentro || '').trim()) &&
+      (row.calleOCruce === undefined || calleSheet === (previo?.calleOCruce || '').trim()) &&
       row.adhirio === previo?.adhirio &&
       row.estadoFlujo === previo?.estadoFlujo;
 
@@ -650,9 +663,15 @@ export function fusionarContactosDesdeSheetsConControl(
     // 2. Si la persona respondió Sí en el Sheet o en la App, o ya tiene información real cargada en Comentario
     const tieneInfoRealEnColG = tieneNuevaInformacionEnColumnaG(comentarioEfectivo);
     if (row.rsp === 'Sí' || previo?.rsp === 'Sí' || tieneInfoRealEnColG) {
-      const calleExtraida = extraerCalleOCruce(comentarioEfectivo);
-      const fechasExtraidas = extraerFechasMencionadas(comentarioEfectivo);
-      const franjaExtraida = analizarFranjaHoraria(comentarioEfectivo);
+      const textoAgendaSheet = [row.diasEncuentro, row.horarioEncuentro, comentarioEfectivo]
+        .filter(Boolean)
+        .join(' ');
+      const calleExtraida =
+        (row.calleOCruce || '').trim() ||
+        (!cambioEnSheetExplicito ? (previo?.calleOCruce || '').trim() : '') ||
+        extraerCalleOCruce(comentarioEfectivo);
+      const fechasExtraidas = extraerFechasMencionadas(textoAgendaSheet);
+      const franjaExtraida = analizarFranjaHoraria(textoAgendaSheet);
       const estadoInferidoDeSheet = inferirEstadoFlujo(
         {
           ...row,
@@ -678,6 +697,18 @@ export function fusionarContactosDesdeSheetsConControl(
       return sincronizarBarrioConDireccionComentario({
         ...row,
         ...metadatosPreservados,
+        diasEncuentro: cambioEnSheetExplicito
+          ? row.diasEncuentro
+          : (row.diasEncuentro ?? previo?.diasEncuentro),
+        horaInicio: cambioEnSheetExplicito
+          ? row.horaInicio
+          : (row.horaInicio ?? previo?.horaInicio),
+        horaFin: cambioEnSheetExplicito
+          ? row.horaFin
+          : (row.horaFin ?? previo?.horaFin),
+        horarioEncuentro: cambioEnSheetExplicito
+          ? row.horarioEncuentro
+          : (row.horarioEncuentro ?? previo?.horarioEncuentro),
         calleOCruce: calleExtraida || undefined,
         rsp: 'Sí',
         adhirio: esComentarioDescartadoONoCaba(comentarioEfectivo, estadoPreservado)
@@ -929,17 +960,38 @@ export function actualizarDatosContactoEnApp(
   const ahoraISO = new Date().toISOString();
   const hoyBA = obtenerPartesFechaHoraBA();
 
-  // Si se editó calleOCruce y aún no figura en comentario, reflejarla en comentario para Google Sheets
+  // Comentario se mantiene estrictamente para notas internas; no se contamina con calleOCruce
   let comentarioCombinado = cambios.comentario !== undefined ? cambios.comentario : rawActual.comentario || '';
   const nuevaCalle = cambios.calleOCruce !== undefined ? cambios.calleOCruce.trim() : (rawActual.calleOCruce || '').trim();
+  const nuevosDias = cambios.diasEncuentro !== undefined ? cambios.diasEncuentro.trim() : (rawActual.diasEncuentro || '').trim();
+  let nuevaHoraIni = cambios.horaInicio !== undefined ? cambios.horaInicio.trim() : (rawActual.horaInicio || '').trim();
+  let nuevaHoraFin = cambios.horaFin !== undefined ? cambios.horaFin.trim() : (rawActual.horaFin || '').trim();
+  let nuevoHorario =
+    cambios.horarioEncuentro !== undefined
+      ? cambios.horarioEncuentro.trim()
+      : (rawActual.horarioEncuentro || '').trim();
+
+  // Si se estableció explícitamente un horario puntual (ej: "17:00") y no se pasó horaFin, limpiar horaFin
   if (
-    cambios.calleOCruce !== undefined &&
-    nuevaCalle &&
-    !comentarioCombinado.toLowerCase().includes(nuevaCalle.toLowerCase())
+    cambios.horarioEncuentro !== undefined &&
+    /^\d{1,2}:\d{2}(?:\s*hs)?$/i.test(nuevoHorario) &&
+    !cambios.horaFin
   ) {
-    comentarioCombinado = comentarioCombinado.trim()
-      ? `${comentarioCombinado.trim()} (${nuevaCalle})`
-      : `(${nuevaCalle})`;
+    const mPuntual = nuevoHorario.match(/^(\d{1,2}):(\d{2})/i);
+    if (mPuntual) {
+      nuevaHoraIni = `${mPuntual[1].padStart(2, '0')}:${mPuntual[2]}`;
+    }
+    nuevaHoraFin = '';
+  }
+
+  if (
+    (cambios.horaInicio !== undefined || cambios.horaFin !== undefined) &&
+    cambios.horarioEncuentro === undefined
+  ) {
+    nuevoHorario =
+      nuevaHoraIni && nuevaHoraFin && nuevaHoraFin !== nuevaHoraIni
+        ? `${nuevaHoraIni} a ${nuevaHoraFin}`
+        : nuevaHoraIni || nuevaHoraFin || '';
   }
 
   const esReversionANuevo =
@@ -963,7 +1015,11 @@ export function actualizarDatosContactoEnApp(
     nombre: (cambiosDefinidos.nombre ?? rawActual.nombre ?? '').trim(),
     barrio: (cambiosDefinidos.barrio ?? rawActual.barrio ?? 'Palermo').trim(),
     telRaw: cambiosDefinidos.telRaw ?? rawActual.telRaw ?? '',
-    calleOCruce: nuevaCalle || undefined,
+    calleOCruce: nuevaCalle,
+    diasEncuentro: nuevosDias,
+    horaInicio: nuevaHoraIni,
+    horaFin: nuevaHoraFin,
+    horarioEncuentro: nuevoHorario,
     comentario: comentarioCombinado,
     enSheets: true,
     actualizadoEnAppAt: esReversionANuevo ? undefined : cambiosDefinidos.actualizadoEnAppAt || ahoraISO,
@@ -1003,6 +1059,7 @@ export function actualizarDatosContactoEnApp(
       conBarrioSincronizado.adhirio = 'Sí';
       conBarrioSincronizado.rsp = 'Sí';
       conBarrioSincronizado.primerContactoEnviado = true;
+      conBarrioSincronizado.retiroConfirmado = false;
       if (
         rawActual.adhirio !== 'Sí' ||
         (rawActual.estadoFlujo !== 'YA_ADHIRIO_FIRMA_OK' &&
@@ -1018,6 +1075,9 @@ export function actualizarDatosContactoEnApp(
       if (rawActual.adhirio !== 'Sí' || !rawActual.fechaAdhesion) {
         conBarrioSincronizado.fechaAdhesion = hoyBA.isoDate;
       }
+      if (!conBarrioSincronizado.fichasExtrasCantidad) {
+        conBarrioSincronizado.fichasExtrasCantidad = 'X2';
+      }
     } else if (
       rawActual.adhirio === 'Sí' &&
       cambios.adhirio === undefined
@@ -1026,6 +1086,12 @@ export function actualizarDatosContactoEnApp(
       // el estatus para poder volver a escribirle, pasa `adhirio` a 'Pendiente' para habilitar el envío.
       conBarrioSincronizado.adhirio = 'Pendiente';
       conBarrioSincronizado.fechaAdhesion = undefined;
+    }
+
+    if (cambios.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE') {
+      if (!conBarrioSincronizado.fechaEstadoPuntoSede) {
+        conBarrioSincronizado.fechaEstadoPuntoSede = hoyBA.isoDate;
+      }
     }
 
     if (cambios.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP') {
@@ -1061,7 +1127,9 @@ export function actualizarDatosContactoEnApp(
       }
       const comLow = (conBarrioSincronizado.comentario || '').toLowerCase();
       estadoFinal =
-        comLow.includes('buscar fichas') || /x\d/i.test(comLow)
+        conBarrioSincronizado.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+        comLow.includes('buscar fichas') ||
+        /x\d/i.test(comLow)
           ? 'PENDIENTE_RETIRO_FICHAS'
           : 'YA_ADHIRIO_FIRMA_OK';
     } else if (
@@ -1072,8 +1140,14 @@ export function actualizarDatosContactoEnApp(
         esCeldaSinNombre(conBarrioSincronizado.nombre) &&
         !conBarrioSincronizado.vocativoOverride?.trim();
       const calle = conBarrioSincronizado.calleOCruce || extraerCalleOCruce(conBarrioSincronizado.comentario);
-      const fechas = extraerFechasMencionadas(conBarrioSincronizado.comentario);
-      const franja = analizarFranjaHoraria(conBarrioSincronizado.comentario);
+      const fechas = extraerFechasMencionadas(
+        [conBarrioSincronizado.diasEncuentro, conBarrioSincronizado.comentario].filter(Boolean).join(' ')
+      );
+      const franja = analizarFranjaHoraria(
+        [conBarrioSincronizado.horarioEncuentro, conBarrioSincronizado.horaInicio, conBarrioSincronizado.comentario]
+          .filter(Boolean)
+          .join(' ')
+      );
       estadoFinal = inferirEstadoFlujo(
         { ...conBarrioSincronizado, estadoFlujo: undefined },
         sinNom,
@@ -1084,13 +1158,23 @@ export function actualizarDatosContactoEnApp(
     }
   } else {
     const sinNom = esCeldaSinNombre(conBarrioSincronizado.nombre) && !conBarrioSincronizado.vocativoOverride?.trim();
-    const calle = conBarrioSincronizado.calleOCruce || extraerCalleOCruce(conBarrioSincronizado.comentario);
-    const fechas = extraerFechasMencionadas(conBarrioSincronizado.comentario);
-    const franja = analizarFranjaHoraria(conBarrioSincronizado.comentario);
-    // Si cargó dirección o día en Comentario o calleOCruce y estaba en sin respuesta, pasar a PASO_DATOS_FALTA_CONFIRMAR y RSP = Sí
-    if (
-      (cambios.comentario !== undefined || cambios.calleOCruce !== undefined) &&
-      (calle.length > 0 || fechas.length > 0) &&
+    const calle = conBarrioSincronizado.calleOCruce || '';
+    const fechas = extraerFechasMencionadas(conBarrioSincronizado.diasEncuentro || '');
+    const franja = analizarFranjaHoraria(
+      [conBarrioSincronizado.horarioEncuentro, conBarrioSincronizado.horaInicio].filter(Boolean).join(' ')
+    );
+    const modificoAgendaODir =
+      cambios.diasEncuentro !== undefined ||
+      cambios.horarioEncuentro !== undefined ||
+      cambios.horaInicio !== undefined ||
+      cambios.horaFin !== undefined ||
+      cambios.calleOCruce !== undefined;
+
+    if (rawActual.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS') {
+      estadoFinal = 'PENDIENTE_RETIRO_FICHAS';
+    } else if (
+      modificoAgendaODir &&
+      (calle.length > 0 || fechas.length > 0 || Boolean(conBarrioSincronizado.horarioEncuentro)) &&
       conBarrioSincronizado.adhirio !== 'Sí' &&
       conBarrioSincronizado.adhirio !== 'No' &&
       conBarrioSincronizado.estadoFlujo !== 'ENCUENTRO_CONFIRMADO' &&
@@ -1107,6 +1191,8 @@ export function actualizarDatosContactoEnApp(
       estadoFinal = conBarrioSincronizado.primerContactoEnviado
         ? '1ER_MSJ_ENVIADO_SIN_RSP'
         : 'SIN_CONTACTAR_1ER_MSJ';
+    } else if (rawActual.estadoFlujo) {
+      estadoFinal = rawActual.estadoFlujo;
     } else {
       estadoFinal = inferirEstadoFlujo(
         { ...conBarrioSincronizado, estadoFlujo: undefined },
@@ -1137,7 +1223,8 @@ export function actualizarDatosContactoEnApp(
 
 /**
  * Marca que al vecino se le dejaron fichas extra (X1/X2/X3) para familiares/amigos
- * y agenda automáticamente el recordatorio de retiro para dentro de 1 semana (7 días).
+ * y agenda automáticamente el recordatorio de retiro para dentro de 1 semana (7 días),
+ * conservando su dirección previa por defecto.
  */
 export function marcarEntregaFichasExtra(
   raw: RawContactRow,
@@ -1147,13 +1234,6 @@ export function marcarEntregaFichasExtra(
   const hoyBA = obtenerPartesFechaHoraBA(ahoraMs);
   const enUnaSemana = sumarDiasAFechaBA(ahoraMs, 7);
   const calle = (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
-  const comPrevio = (raw.comentario || '')
-    .replace(/COORDINAR para buscar fichas\s+X\d[^\n·]*/gi, '')
-    .trim();
-  const notaRetiro = `COORDINAR para buscar fichas ${cantidad} el ${enUnaSemana.ddmm}${
-    calle ? ` (${calle})` : ''
-  }`;
-  const nuevoComentario = comPrevio ? `${comPrevio} · ${notaRetiro}` : notaRetiro;
 
   return sincronizarBarrioConDireccionComentario({
     ...raw,
@@ -1162,7 +1242,10 @@ export function marcarEntregaFichasExtra(
     adhirio: 'Sí',
     primerContactoEnviado: true,
     fechaAdhesion: raw.fechaAdhesion || hoyBA.isoDate,
-    comentario: nuevoComentario,
+    calleOCruce: calle || raw.calleOCruce,
+    diasEncuentro: enUnaSemana.ddmm,
+    fichasExtrasCantidad: cantidad,
+    retiroConfirmado: false,
     estadoFlujo: 'PENDIENTE_RETIRO_FICHAS',
     estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo('PENDIENTE_RETIRO_FICHAS'),
     actualizadoEnAppAt: new Date(ahoraMs).toISOString(),
@@ -1272,7 +1355,7 @@ export function registrarEnvioMensajeContacto(
     estadoNuevo =
       procActual.estadoFlujo === 'ENCUENTRO_CONFIRMADO'
         ? 'ENCUENTRO_CONFIRMADO'
-        : 'PREFIERE_CAFE_HUB_O_SEDE';
+        : 'PASO_DATOS_FALTA_CONFIRMAR';
     rspNuevo = 'Sí';
   } else if (tplEfectiva === 'confirmacion_visita') {
     const esPropuestaPidiendoConfirmar =
@@ -1301,7 +1384,7 @@ export function registrarEnvioMensajeContacto(
     estadoNuevo =
       procActual.estadoFlujo === 'ENCUENTRO_CONFIRMADO'
         ? 'ENCUENTRO_CONFIRMADO'
-        : 'PREFIERE_CAFE_HUB_O_SEDE';
+        : 'PASO_DATOS_FALTA_CONFIRMAR';
     rspNuevo = 'Sí';
   } else if (tplEfectiva === 'seguimiento_sin_respuesta') {
     estadoNuevo = 'SEGUNDO_SEGUIMIENTO_SIN_RSP';
@@ -1334,6 +1417,10 @@ export function registrarEnvioMensajeContacto(
     intentos: (raw.intentos || 0) + 1,
     rsp: rspNuevo,
     adhirio: adhirioNuevo,
+    fechaEstadoPuntoSede:
+      estadoNuevo === 'PREFIERE_CAFE_HUB_O_SEDE'
+        ? raw.fechaEstadoPuntoSede || fechaHoyISO
+        : raw.fechaEstadoPuntoSede,
     estadoFlujo: estadoNuevo,
     estadoFlujoEtiqueta: estadoNuevoEtiqueta,
   });

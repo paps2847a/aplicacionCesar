@@ -658,6 +658,19 @@ class WhatsAppService {
       contact.estadoFlujoEtiqueta ||
       (contact.estadoFlujo ? obtenerEtiquetaEstadoFlujo(contact.estadoFlujo) : '');
     const telDigits = String(contact.telRaw || '').replace(/\D/g, '');
+    const horarioSheet =
+      contact.horarioEncuentro ||
+      (contact.horaInicio && contact.horaFin && contact.horaInicio !== contact.horaFin
+        ? `${contact.horaInicio} a ${contact.horaFin}`
+        : contact.horaInicio || '');
+    const direccionSheet =
+      contact.calleOCruce && contact.pisoDepto && !contact.calleOCruce.includes(contact.pisoDepto)
+        ? `${contact.calleOCruce} (${contact.pisoDepto})`
+        : contact.calleOCruce || '';
+    const notaInternaEfectiva =
+      comentarioNota && !/1er mensaje enviado|Respondió por WhatsApp/i.test(comentarioNota)
+        ? comentarioNota
+        : '';
 
     void pushContactUpdatesToSheet({
       appsScriptUrl: targetUrl,
@@ -670,9 +683,12 @@ class WhatsAppService {
           barrio: String(contact.barrio || ''),
           rsp: contact.rsp || 'No',
           adhirio: contact.adhirio || 'Pendiente',
+          diasEncuentro: contact.diasEncuentro || '',
+          horarioEncuentro: horarioSheet,
+          calleOCruce: direccionSheet,
           estado: estadoEtiqueta,
           comentario: contact.comentario || '',
-          comentarioNota: comentarioNota || '',
+          comentarioNota: notaInternaEfectiva,
           preserveIdentityColumns: true,
         },
       ],

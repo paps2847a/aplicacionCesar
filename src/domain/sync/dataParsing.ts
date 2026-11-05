@@ -190,8 +190,26 @@ export function parsearTSVoCSVContactos(
   const idxTel = tieneColumnaEmailEnD ? 4 : 3;
   const idxRsp = tieneColumnaEmailEnD ? 5 : 4;
   const idxAdhirio = tieneColumnaEmailEnD ? 6 : 5;
-  const idxComentario = tieneColumnaEmailEnD ? 7 : 6;
-  const idxEstado = tieneColumnaEmailEnD ? 8 : 7;
+
+  // Detectar si el archivo / Google Sheets usa el nuevo formato estructurado de 11 columnas:
+  // #, Nombre, Barrio, Tel, RSP, Adhirió, Día(s), Horario, Dirección / Punto, Comentario, Estado
+  const baseAfterAdhirio = idxAdhirio + 1;
+  const tieneFormatoEstructurado =
+    (tieneHeader &&
+      headerNormalizado.some(
+        (h) =>
+          h.includes('día') ||
+          h.includes('dia(s)') ||
+          h.includes('horario') ||
+          h.includes('direcci')
+      )) ||
+    (!tieneHeader && maxColsNorm >= baseAfterAdhirio + 5);
+
+  const idxDias = tieneFormatoEstructurado ? baseAfterAdhirio : -1;
+  const idxHorario = tieneFormatoEstructurado ? baseAfterAdhirio + 1 : -1;
+  const idxDireccion = tieneFormatoEstructurado ? baseAfterAdhirio + 2 : -1;
+  const idxComentario = tieneFormatoEstructurado ? baseAfterAdhirio + 3 : baseAfterAdhirio;
+  const idxEstado = tieneFormatoEstructurado ? baseAfterAdhirio + 4 : baseAfterAdhirio + 1;
 
   const resultado: RawContactRow[] = [];
   const idsUsados = new Set<string>();
@@ -252,25 +270,64 @@ export function parsearTSVoCSVContactos(
 
     const rspRaw = String(cols[idxRsp] || '').trim();
     const adhRaw = String(cols[idxAdhirio] || 'Pendiente').trim();
+    const diasEncuentro = idxDias >= 0 ? String(cols[idxDias] || '').trim() : undefined;
+    const horarioEncuentro = idxHorario >= 0 ? String(cols[idxHorario] || '').trim() : undefined;
+    const calleOCruce = idxDireccion >= 0 ? String(cols[idxDireccion] || '').trim() : undefined;
+    let horaInicioParsed: string | undefined;
+    let horaFinParsed: string | undefined;
+    if (horarioEncuentro !== undefined) {
+      const mPuntual = horarioEncuentro.match(/^(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+      const mRango = horarioEncuentro.match(/^(\d{1,2}):(\d{2})\s*(?:a|-)\s*(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+      const mDesde = horarioEncuentro.match(/^(?:desde(?:\s+las)?)\s*(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+      const mHasta = horarioEncuentro.match(/^(?:hasta(?:\s+las)?)\s*(\d{1,2}):(\d{2})(?:\s*hs)?$/i);
+      if (mPuntual) {
+        horaInicioParsed = `${mPuntual[1].padStart(2, '0')}:${mPuntual[2]}`;
+        horaFinParsed = '';
+      } else if (mRango) {
+        horaInicioParsed = `${mRango[1].padStart(2, '0')}:${mRango[2]}`;
+        horaFinParsed = `${mRango[3].padStart(2, '0')}:${mRango[4]}`;
+      } else if (mDesde) {
+        horaInicioParsed = `${mDesde[1].padStart(2, '0')}:${mDesde[2]}`;
+        horaFinParsed = '';
+      } else if (mHasta) {
+        horaInicioParsed = '';
+        horaFinParsed = `${mHasta[1].padStart(2, '0')}:${mHasta[2]}`;
+      } else {
+        horaInicioParsed = '';
+        horaFinParsed = '';
+      }
+    }
     const comentario = String(cols[idxComentario] || '').trim();
     const estadoCeldaRaw =
       cols.length > idxEstado ? String(cols[idxEstado] || '').trim() : '';
 
-    // Verificar si la celda de Estado en Columna H ya tiene cualquiera de las 14 etiquetas oficiales del catálogo
+    // Verificar si la celda de Estado ya tiene cualquiera de las 14 etiquetas oficiales del catálogo (o versión previa con Café)
     const estadoFlujoParseado = parsearTextoAEstadoFlujo(estadoCeldaRaw);
     const esEtiquetaOficialExplicita =
       Boolean(estadoCeldaRaw) &&
       estadoFlujoParseado !== undefined &&
-      ESTADOS_FLUJO_CATALOGO.some(
+      (ESTADOS_FLUJO_CATALOGO.some(
         (e) => e.label.toLowerCase() === estadoCeldaRaw.toLowerCase()
-      );
+      ) ||
+        estadoCeldaRaw.toLowerCase() === '3c. prefiere punto / café / sede');
+
+    const comentarioCombinadoParaAnalisis = tieneFormatoEstructurado
+      ? [
+          diasEncuentro ? `Visita ${diasEncuentro}` : '',
+          horarioEncuentro ? `a las ${horarioEncuentro}` : '',
+          calleOCruce ? `(${calleOCruce})` : '',
+          comentario,
+        ]
+          .filter(Boolean)
+          .join(' ')
+      : comentario;
 
     const estadoAnalizadoPorEFG = analizarEstadoPorColumnasEFG({
       id,
       nombre,
       rsp: rspRaw,
       adhirio: adhRaw,
-      comentario,
+      comentario: comentarioCombinadoParaAnalisis,
       estadoColH: estadoCeldaRaw,
     });
 
@@ -329,6 +386,11 @@ export function parsearTSVoCSVContactos(
       telRaw,
       rsp: rspFinal,
       adhirio: adhirioFinal,
+      diasEncuentro,
+      horaInicio: horaInicioParsed,
+      horaFin: horaFinParsed,
+      horarioEncuentro,
+      calleOCruce: calleOCruce || undefined,
       comentario,
       estadoFlujo: estadoFlujoFinal,
       estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estadoFlujoFinal),

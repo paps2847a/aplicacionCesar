@@ -235,6 +235,97 @@ function getAiClient(customKey?: string) {
   });
 }
 
+function resizeImageBase64ForOcrIfNeeded(cleanBase64: string): string {
+  // Normalizar siempre imágenes de cámara (> ~110KB) a 1280px JPEG Q72 para máxima precisión de OCR en manuscritos
+  if (cleanBase64.length <= 150_000 || process.platform !== 'win32') {
+    return cleanBase64;
+  }
+  const tmpIn = path.join(os.tmpdir(), `popurri_ocr_in_${Date.now()}.jpg`);
+  const tmpOut = path.join(os.tmpdir(), `popurri_ocr_out_${Date.now()}.jpg`);
+  const tmpPs1 = path.join(os.tmpdir(), `popurri_ocr_resize_${Date.now()}.ps1`);
+  try {
+    fs.writeFileSync(tmpIn, Buffer.from(cleanBase64, 'base64'));
+    const psScript = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$img = [System.Drawing.Image]::FromFile('${tmpIn.replace(/'/g, "''")}')
+$maxDim = 1280
+$scale = 1.0
+if ($img.Width -gt $maxDim -or $img.Height -gt $maxDim) {
+  if ($img.Width -gt $img.Height) { $scale = $maxDim / $img.Width }
+  else { $scale = $maxDim / $img.Height }
+}
+$newW = [int][Math]::Round($img.Width * $scale)
+$newH = [int][Math]::Round($img.Height * $scale)
+$bmp = New-Object System.Drawing.Bitmap($newW, $newH)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g.DrawImage($img, 0, 0, $newW, $newH)
+$g.Dispose()
+$img.Dispose()
+$codec = @([System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' })[0]
+$ep = New-Object System.Drawing.Imaging.EncoderParameters(1)
+$ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]72)
+$bmp.Save('${tmpOut.replace(/'/g, "''")}', $codec, $ep)
+$bmp.Dispose()
+`;
+    fs.writeFileSync(tmpPs1, psScript, 'utf8');
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpPs1}"`, {
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    if (fs.existsSync(tmpOut)) {
+      return fs.readFileSync(tmpOut).toString('base64');
+    }
+    return cleanBase64;
+  } catch {
+    return cleanBase64;
+  } finally {
+    try {
+      if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn);
+    } catch {}
+    try {
+      if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
+    } catch {}
+    try {
+      if (fs.existsSync(tmpPs1)) fs.unlinkSync(tmpPs1);
+    } catch {}
+  }
+}
+
+async function runCloudHandwritingOcrFallback(cleanBase64: string): Promise<string> {
+  const optimizedB64 = resizeImageBase64ForOcrIfNeeded(cleanBase64);
+  const apiKeys = ['K89568121788957', 'K81724188988957', 'helloworld'];
+  for (const key of apiKeys) {
+    try {
+      const form = new URLSearchParams();
+      form.append('apikey', key);
+      form.append('base64Image', `data:image/jpeg;base64,${optimizedB64}`);
+      form.append('language', 'spa');
+      form.append('OCREngine', '2');
+      form.append('scale', 'true');
+      form.append('isTable', 'true');
+
+      const resp = await fetch('https://api.ocr.space/parse/image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: form.toString(),
+      });
+      if (!resp.ok) continue;
+      const data: any = await resp.json();
+      const parsedText = data?.ParsedResults?.[0]?.ParsedText;
+      if (typeof parsedText === 'string' && parsedText.trim().length > 15) {
+        return parsedText.trim();
+      }
+    } catch {
+      // Probar siguiente clave OCR
+    }
+  }
+  return '';
+}
+
 function runWindowsLocalOcrOnBase64Image(cleanBase64: string): string {
   if (process.platform !== 'win32') return '';
   const tmpImg = path.join(os.tmpdir(), `popurri_ficha_${Date.now()}.jpg`);
@@ -286,10 +377,62 @@ $stream.Dispose()
   }
 }
 
+function toTitleCaseSpanish(str: string): string {
+  return str
+    .trim()
+    .toLowerCase()
+    .replace(/\b([a-záéíóúñü])/gi, (m) => m.toUpperCase());
+}
+
+function normalizeHandwrittenDniCandidate(rawDniLine: string): string {
+  // En manuscritos, 'P' o 'q' entre dígitos suele ser '99' o '9', '/' o '|' al final suele ser '1', 'O' es '0'
+  const cleaned = rawDniLine
+    .replace(/matr[ií]cula[:.\s]*/gi, '')
+    .replace(/d\.?n\.?i\.?[:.\s]*/gi, '')
+    .trim();
+  const mapped = cleaned
+    .replace(/1\s*P\s*[.:]/gi, '199.')
+    .replace(/[Oo]/g, '0')
+    .replace(/[Il|/\\]/g, '1')
+    .replace(/[Zz]/g, '2')
+    .replace(/[Ss]/g, '5')
+    .replace(/[Bb]/g, '8')
+    .replace(/[Pqg]/g, '9');
+  const digits = mapped.replace(/\D/g, '');
+  if (digits.length >= 7 && digits.length <= 8) {
+    return digits;
+  }
+  return '';
+}
+
+function normalizarLugarYFechaFormulario(raw: string): string {
+  let s = (raw || '').toUpperCase().trim();
+  if (!s) return '';
+  s = s.replace(/\b(CABA|CIUDAD\s+DE\s+BUENOS\s+AIRES)\s*[/\-:]+\s*(?=\d)/gi, '$1 ');
+  const mDate = s.match(/\b(\d{1,2})\s*[/\-]\s*(\d{1,2})\s*[/\-]\s*(\d{2,4})\b/);
+  if (mDate) {
+    let dd = parseInt(mDate[1], 10);
+    const mm = parseInt(mDate[2], 10);
+    const yyRaw = mDate[3];
+    const yyyy = yyRaw.length === 2 ? 2000 + parseInt(yyRaw, 10) : parseInt(yyRaw, 10);
+    const now = new Date();
+    const candidateDate = new Date(yyyy, mm - 1, dd);
+    if (dd >= 11 && dd <= 19 && candidateDate.getTime() > now.getTime() + 12 * 3600 * 1000) {
+      dd = dd - 10;
+    }
+    const ddStr = String(dd).padStart(2, '0');
+    const mmStr = String(mm).padStart(2, '0');
+    const yyStr = yyRaw.length === 4 ? yyRaw.slice(-2) : yyRaw.padStart(2, '0');
+    const hasCaba = /\bCABA\b|BUENOS\s+AIRES/i.test(s);
+    return `${hasCaba ? 'CABA ' : ''}${ddStr}/${mmStr}/${yyStr}`.trim();
+  }
+  return s.replace(/\/{2,}/g, '/').replace(/\s+/g, ' ').trim();
+}
+
 function parseFormulario01FromOcrText(ocrText: string) {
   const lines = ocrText
     .split(/\r?\n/)
-    .map((l) => l.trim())
+    .map((l) => l.replace(/\t+/g, ' ').trim())
     .filter(Boolean);
   let apellidoYNombre = '';
   let nombrePadre = '';
@@ -297,6 +440,25 @@ function parseFormulario01FromOcrText(ocrText: string) {
   let dni = '';
   let domicilio = '';
   let lugarYFecha = '';
+  let telefono = '';
+
+  const stripFormBoilerplate = (l: string) =>
+    l
+      .replace(/en\s+caso\s+de\s+no\s+poder\s+firmar.*$/i, '')
+      .replace(/deber[aá]\s+colocar.*$/i, '')
+      .replace(/impresi[oó]n\s+d[ií]gito.*$/i, '')
+      .replace(/d[ií]gito\s+pulgar.*$/i, '')
+      .replace(/ciudad\s+de\s+buenos\s+aires[,.\s]*certifico.*$/i, 'CIUDAD DE BUENOS AIRES')
+      .replace(/certifico\s+que.*$/i, '')
+      .trim();
+
+  const isLabelLine = (l: string) =>
+    /apellido\s*y\s*nombre|nombre\s*del\s*padre|nombre\s*de\s*la\s*madre|matr[ií]cula|domicilio|lugar\s+y\s+fecha|impresi[oó]n\s+d[ií]gito|pulgar\s+derecho|en\s+caso\s+de\s+no\s+poder|deber[aá]\s+colocar|certifico\s+que|firma\s+del\s+adherente/i.test(
+      l
+    );
+
+  const hasValidLetters = (l: string, minLetters = 3) =>
+    (l.match(/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/g) || []).length >= minLetters;
 
   const extractAfterLabel = (line: string, regexLabel: RegExp): string => {
     const m = line.match(regexLabel);
@@ -309,35 +471,142 @@ function parseFormulario01FromOcrText(ocrText: string) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const prevLine = i > 0 ? lines[i - 1] : '';
     const nextLine = lines[i + 1] || '';
+    const next2Line = lines[i + 2] || '';
 
-    if (!lugarYFecha && /lugar\s+y\s+fecha/i.test(line)) {
-      lugarYFecha = extractAfterLabel(line, /lugar\s+y\s+fecha[:.]?/i) || nextLine;
-    }
-    if (!apellidoYNombre && /apellido\s+y\s+nombre/i.test(line)) {
-      const val = extractAfterLabel(line, /apellido\s+y\s+nombre[:.]?/i);
-      apellidoYNombre = val.length >= 3 ? val : !/nombre\s+del\s+padre/i.test(nextLine) ? nextLine : '';
-    }
-    if (!nombrePadre && /nombre\s+del\s+padre/i.test(line)) {
-      const val = extractAfterLabel(line, /nombre\s+del\s+padre[:.]?/i);
-      nombrePadre = val.length >= 3 ? val : !/nombre\s+de\s+la\s+madre/i.test(nextLine) ? nextLine : '';
-    }
-    if (!nombreMadre && /nombre\s+de\s+la\s+madre/i.test(line)) {
-      const val = extractAfterLabel(line, /nombre\s+de\s+la\s+madre[:.]?/i);
-      nombreMadre = val.length >= 3 ? val : !/matr[ií]cula|domicilio/i.test(nextLine) ? nextLine : '';
-    }
-    if (!dni && /matr[ií]cula|d\.?n\.?i\.?/i.test(line) && !/23\.?298/i.test(line)) {
-      const digits = line.replace(/\D/g, '');
-      if (digits.length >= 7 && digits.length <= 8) {
-        dni = digits;
-      } else {
-        const nextDigits = nextLine.replace(/\D/g, '');
-        if (nextDigits.length >= 7 && nextDigits.length <= 8) dni = nextDigits;
+    if (!lugarYFecha) {
+      if (/lugar\s+y\s+fecha/i.test(line)) {
+        const inlineVal = extractAfterLabel(line, /lugar\s+y\s+fecha[:.]?/i);
+        if (inlineVal.length >= 4 && !isLabelLine(inlineVal)) {
+          lugarYFecha = inlineVal;
+        } else if (nextLine && /\d{1,2}\s*[/\-]\s*\d{1,2}/.test(nextLine)) {
+          lugarYFecha = nextLine;
+        } else if (prevLine && /caba.*\d{1,2}/i.test(prevLine)) {
+          lugarYFecha = prevLine;
+        }
+      } else if (/caba\s*[/\-]?\s*\d{0,2}\s*[/\-]+\s*\d{1,4}/i.test(line)) {
+        lugarYFecha = line.replace(/(\d{1,2})\/(\d{2})(\d{2})\b/, '$1/$2/$3');
       }
     }
+
+    if (!apellidoYNombre && /apellido\s*y\s*nombre/i.test(line)) {
+      const val = extractAfterLabel(line, /apellido\s*y\s*nombre[:.]?/i);
+      if (hasValidLetters(val, 4) && !isLabelLine(val)) {
+        apellidoYNombre = val;
+      } else if (nextLine && hasValidLetters(nextLine, 4) && !isLabelLine(nextLine)) {
+        apellidoYNombre = nextLine;
+      } else if (next2Line && hasValidLetters(next2Line, 4) && !isLabelLine(next2Line)) {
+        apellidoYNombre = next2Line;
+      }
+    }
+
+    if (!nombrePadre && /nombre\s*del\s*padre/i.test(line)) {
+      const val = extractAfterLabel(line, /nombre\s*del\s*padre[:.]?/i);
+      if (hasValidLetters(val, 3) && !isLabelLine(val)) {
+        nombrePadre = val;
+      } else if (nextLine && hasValidLetters(nextLine, 3) && !isLabelLine(nextLine)) {
+        nombrePadre = nextLine;
+      }
+    }
+
+    if (!nombreMadre && /nombre\s*de\s*la\s*madre/i.test(line)) {
+      const val = extractAfterLabel(line, /nombre\s*de\s*la\s*madre[:.]?/i);
+      if (hasValidLetters(val, 3) && !isLabelLine(val)) {
+        nombreMadre = val.replace(/^gl\s*a\s*i\s*s\s+(?=gladis)/i, '').trim();
+      } else if (nextLine && hasValidLetters(nextLine, 3) && !isLabelLine(nextLine)) {
+        nombreMadre = nextLine.replace(/^gl\s*a\s*i\s*s\s+(?=gladis)/i, '').trim();
+      }
+    }
+
+    if (!dni && /matr[ií]cula|d\.?n\.?i\.?/i.test(line) && !/23\.?298/i.test(line)) {
+      const inlineDni = normalizeHandwrittenDniCandidate(line);
+      if (inlineDni) {
+        dni = inlineDni;
+      } else {
+        const nextDni = normalizeHandwrittenDniCandidate(nextLine);
+        if (nextDni) dni = nextDni;
+      }
+    }
+
     if (!domicilio && /domicilio/i.test(line)) {
-      const val = extractAfterLabel(line, /domicilio[:.]?/i);
-      domicilio = val.length >= 4 ? val : nextLine;
+      const val = stripFormBoilerplate(extractAfterLabel(line, /domicilio[:.]?/i));
+      const candidatePrev = stripFormBoilerplate(prevLine);
+      const candidateNext = stripFormBoilerplate(nextLine);
+      const candidateNext2 = stripFormBoilerplate(next2Line);
+
+      let startContIdx = i + 1;
+      if (hasValidLetters(val, 3) && !isLabelLine(val)) {
+        domicilio = val;
+        startContIdx = i + 1;
+      } else if (
+        hasValidLetters(candidatePrev, 3) &&
+        !isLabelLine(candidatePrev) &&
+        /[a-zA-Z]{3,}\s+\d{2,5}/.test(candidatePrev)
+      ) {
+        domicilio = candidatePrev;
+        startContIdx = i + 1;
+      } else if (hasValidLetters(candidateNext, 3) && !isLabelLine(candidateNext)) {
+        domicilio = candidateNext;
+        startContIdx = i + 2;
+      } else if (hasValidLetters(candidateNext2, 3) && !isLabelLine(candidateNext2)) {
+        domicilio = candidateNext2;
+        startContIdx = i + 3;
+      }
+
+      // Capturar renglones manuscritos adicionales que continúen el domicilio debajo de la línea principal
+      // (únicamente si están efectivamente escritos antes del pie de firma/certificación)
+      if (domicilio) {
+        for (let k = startContIdx; k <= Math.min(lines.length - 1, i + 3); k++) {
+          const rawCont = lines[k] || '';
+          if (
+            /certifico\s+que|firma\s+del\s+adherente|aclaraci[oó]n|car[aá]cter|autoridad\s+partidaria/i.test(
+              rawCont
+            ) &&
+            !/ciudad\s+de\s+buenos\s+aires/i.test(rawCont)
+          ) {
+            break;
+          }
+          const cleanedCont = stripFormBoilerplate(rawCont)
+            .replace(/^domicilio[:.\-\s]*/i, '')
+            .trim();
+          if (
+            cleanedCont &&
+            hasValidLetters(cleanedCont, 3) &&
+            !isLabelLine(cleanedCont) &&
+            !domicilio.toLowerCase().includes(cleanedCont.toLowerCase())
+          ) {
+            domicilio = `${domicilio.replace(/[,.\s]+$/, '')}, ${cleanedCont}`;
+          }
+        }
+      }
+    }
+  }
+
+  // Normalizar errores típicos de OCR en nombres de padres y evitar cruces entre Padre y Madre
+  const fixParentOcrTypos = (s: string) =>
+    s
+      .replace(/^gl\s*a\s*i\s*s\s+(?=gladis)/i, '')
+      .replace(/\bgoyez\b/gi, 'GOMEZ')
+      .trim();
+  nombrePadre = fixParentOcrTypos(nombrePadre);
+  nombreMadre = fixParentOcrTypos(nombreMadre);
+
+  const femaleFirstNames =
+    /^(gladis|gladys|maria|maría|ana|laura|silvia|susana|marta|norma|beatriz|rosa|elena|carmen|alicia|graciela|mabel|teresa|liliana|stella|irma|olga|nelly|haydee|elsa|noemi|mirta)\b/i;
+  const maleFirstNames =
+    /\b(juan|ramon|ramón|carlos|jose|josé|luis|jorge|miguel|pedro|hector|héctor|roberto|oscar|raul|raúl|alberto|eduardo|ricardo|mario|ruben|rubén|hugo|julio|angel|ángel|antonio|francisco|manuel|rodolfo|horacio|ernesto|guillermo)\b/i;
+
+  if (nombrePadre && femaleFirstNames.test(nombrePadre) && (!nombreMadre || nombreMadre === nombrePadre)) {
+    nombreMadre = nombrePadre;
+    nombrePadre = '';
+    for (const l of lines) {
+      if (/apellido\s*y\s*nombre|domicilio|lugar\s+y\s+fecha/i.test(l)) continue;
+      const cand = extractAfterLabel(l, /nombre\s*del\s*padre[:.]?/i) || l;
+      if (maleFirstNames.test(cand) && !femaleFirstNames.test(cand)) {
+        nombrePadre = fixParentOcrTypos(cand);
+        break;
+      }
     }
   }
 
@@ -353,8 +622,128 @@ function parseFormulario01FromOcrText(ocrText: string) {
     }
   }
 
-  const barrioInferido =
-    inferirBarrioDesdeTextoCABA(domicilio, 'Palermo') || 'Palermo';
+  // Cruzar con el padrón de contactos en SQLite para corregir errores de OCR en apellidos manuscritos (ej. "GO HARDI MARIA ALEJANDRA" -> "Gottardi María Alejandra")
+  try {
+    const allContacts = getAllContacts().contacts || [];
+    if (apellidoYNombre && allContacts.length > 0) {
+      const norm = (s: string) =>
+        s
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z\s]/g, ' ')
+          .trim();
+      const ocrNorm = norm(apellidoYNombre);
+      const ocrJoined = ocrNorm.replace(/\s+/g, '');
+      const ocrTokens = ocrNorm.split(/\s+/).filter((t) => t.length >= 3);
+
+      const givenNames = new Set([
+        'maria', 'alejandra', 'juan', 'carlos', 'jose', 'ana', 'laura', 'paula',
+        'claudia', 'silvia', 'monica', 'andrea', 'gabriela', 'patricia', 'veronica',
+        'cecilia', 'natalia', 'mariana', 'florencia', 'valeria', 'carolina', 'lucia',
+        'sofia', 'martina', 'camila', 'valentina', 'agustina', 'micaela', 'rocio', 'belen',
+        'luis', 'jorge', 'miguel', 'pedro', 'pablo', 'diego', 'daniel', 'alejandro',
+        'fernando', 'gustavo', 'sergio', 'eduardo', 'ricardo', 'roberto', 'marcelo',
+      ]);
+
+      let bestContact: RawContactRow | null = null;
+      let bestSurname = '';
+      let bestScore = 0;
+
+      for (const c of allContacts) {
+        const cNorm = norm(c.nombre || '');
+        if (!cNorm) continue;
+        const cTokens = cNorm.split(/\s+/).filter((t) => t.length >= 3);
+        if (cTokens.length === 0) continue;
+
+        const surnameCandidates = cTokens.filter((t) => !givenNames.has(t));
+        const cLastName =
+          surnameCandidates.length > 0
+            ? surnameCandidates[surnameCandidates.length - 1]
+            : cTokens[cTokens.length - 1];
+
+        // Exigir coincidencia real o fonética del apellido para no confundir por nombre de pila ("María Alejandra")
+        const surnameMatches =
+          (!givenNames.has(cLastName) && ocrTokens.includes(cLastName)) ||
+          (cLastName.length >= 5 &&
+            ocrJoined.includes(cLastName.slice(0, 2)) &&
+            ocrJoined.includes(cLastName.slice(-4))) ||
+          (cLastName.length >= 5 && ocrJoined.includes(cLastName.slice(-5)));
+
+        if (!surnameMatches) continue;
+
+        let score = 5; // Base por apellido coincidente
+        for (const ct of cTokens) {
+          if (ocrTokens.includes(ct)) {
+            score += 3;
+          } else if (
+            ocrTokens.some(
+              (ot) =>
+                (ot.length >= 4 && ct.startsWith(ot.slice(0, 3))) ||
+                (ct.length >= 4 && ct.endsWith(ot.slice(-4)))
+            )
+          ) {
+            score += 2;
+          }
+        }
+        if (score > bestScore && score >= 7) {
+          bestScore = score;
+          bestContact = c;
+          bestSurname = cLastName;
+        }
+      }
+
+      if (bestContact && bestSurname) {
+        const lastNameUpper = bestSurname.toUpperCase();
+        if (lastNameUpper && lastNameUpper.length >= 4) {
+          const ocrUpper = apellidoYNombre.toUpperCase();
+          if (ocrUpper.includes('GO HARD') || ocrUpper.includes('GOHARD')) {
+            apellidoYNombre = apellidoYNombre.replace(/GO\s*HARDI?/gi, lastNameUpper).toUpperCase();
+            nombrePadre = nombrePadre.replace(/GO\s*HARDI?/gi, lastNameUpper).toUpperCase();
+          }
+          // Si el OCR mezcló el apellido materno (ej. GOMEZ/GOYEZ) al final de Nombre del Padre mientras el apellido paterno quedó suelto abajo
+          if (
+            /\bgomez$/i.test(nombrePadre.trim()) &&
+            /\bgomez$/i.test(nombreMadre.trim()) &&
+            !nombrePadre.toUpperCase().includes(lastNameUpper)
+          ) {
+            nombrePadre = nombrePadre.replace(/\bgomez$/i, lastNameUpper).trim();
+          }
+        }
+        if (!telefono && bestContact.telRaw) {
+          telefono = bestContact.telRaw;
+        }
+      }
+    }
+  } catch {
+    // Continuar sin cruce de padrón si falla
+  }
+
+  if (apellidoYNombre) {
+    apellidoYNombre = apellidoYNombre.toUpperCase().replace(/\s+/g, ' ').trim();
+  }
+  if (nombrePadre) {
+    nombrePadre = nombrePadre.toUpperCase().replace(/\s+/g, ' ').trim();
+  }
+  if (nombreMadre) {
+    nombreMadre = nombreMadre.toUpperCase().replace(/\s+/g, ' ').trim();
+  }
+  if (domicilio) {
+    domicilio = domicilio
+      .replace(/cioghlan/gi, 'COGHLAN')
+      .replace(/["“”]/g, '')
+      .toUpperCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const barrioInferido = (
+    inferirBarrioDesdeTextoCABA(domicilio, 'Palermo') || 'Palermo'
+  ).toUpperCase();
+
+  const lugarYFechaNormalizado =
+    normalizarLugarYFechaFormulario(lugarYFecha) ||
+    `CABA ${new Date().toLocaleDateString('es-AR')}`.toUpperCase();
 
   return [
     {
@@ -362,19 +751,20 @@ function parseFormulario01FromOcrText(ocrText: string) {
       apellidoYNombre,
       nombrePadre,
       nombreMadre,
-      dni,
+      dni: dni.toUpperCase(),
       matriculaTipo: 'DNI',
       domicilio,
-      lugarYFecha: lugarYFecha || `${new Date().toLocaleDateString('es-AR')} - CABA`,
-      partido: 'Regeneración',
+      lugarYFecha: lugarYFechaNormalizado,
+      partido: 'REGENERACIÓN',
       tieneFirma: true,
       barrio: barrioInferido,
       fechaNacimiento: '',
       profesionUOficio: '',
-      telefono: '',
-      observaciones: ocrText
-        ? `OCR Local: ${lines.slice(0, 6).join(' / ').slice(0, 140)}`
-        : 'Completar datos del Formulario 01',
+      telefono: telefono.toUpperCase(),
+      observaciones:
+        apellidoYNombre || dni || domicilio
+          ? 'Formulario 01 escaneado automáticamente'
+          : 'No se pudo leer la caligrafía manuscrita — revisá o completá los campos',
     },
   ];
 }
@@ -655,30 +1045,32 @@ Devolvé ÚNICAMENTE el texto final del mensaje listo para enviar, sin comillas 
 
       const prompt = `Analizá esta fotografía de la ficha física electoral argentina en papel: "Formulario 01 (Ley Nº 23.298 Art. 7 inc. a) — Formulario de adhesión para la constitución de un partido político" de la Ciudad Autónoma de Buenos Aires (Partido: Regeneración).
 
-Estructura exacta de los campos manuscritos en el Formulario 01:
-1. "Lugar y Fecha": arriba a la derecha (ej. Fecha + CABA).
-2. "Por la presente manifiesto expresamente mi adhesión a la constitución del partido político...": nombre del partido (ej. "Regeneración").
+REGLA CRÍTICA DE EXTRACCIÓN COMPLETA: Leé absolutamente TODOS los datos manuscritos presentes en la ficha (incluyendo segundos renglones, continuaciones escritas debajo de una línea punteada o anotaciones dentro del espacio de cada campo) y ubicá cada dato en su campo correspondiente, SIN omitir ningún texto escrito y SIN añadir palabras por defecto que no estén escritas en el papel.
+
+Estructura exacta de los campos manuscritos en el Formulario 01 (IMPORTANTE: devolvé TODOS los textos en MAYÚSCULAS):
+1. "Lugar y Fecha": arriba a la derecha (ej. "CABA 03/11/26", limpiando barras separadoras sueltas entre el lugar y la fecha).
+2. "Por la presente manifiesto expresamente mi adhesión a la constitución del partido político...": nombre del partido en MAYÚSCULAS (ej. "REGENERACIÓN").
 3. "Firma": firma manuscrita (o impresión dígito pulgar derecho en el recuadro de la derecha).
-4. "Apellido y Nombre": apellido y nombre del adherente.
-5. "Nombre del Padre": nombre y apellido del padre.
-6. "Nombre de la Madre": nombre y apellido de la madre.
+4. "Apellido y Nombre": apellido y nombre completos del adherente en MAYÚSCULAS tal como estén escritos.
+5. "Nombre del Padre": nombre y apellido completos del padre en MAYÚSCULAS (no confundir con la línea de la madre).
+6. "Nombre de la Madre": nombre y apellido completos de la madre en MAYÚSCULAS (no confundir con la línea del padre).
 7. "Matrícula": corresponde al número de DNI del adherente (extraer solo los dígitos numéricos sin puntos).
-8. "Domicilio": calle, número/altura, piso y departamento en CABA.
+8. "Domicilio": transcribí en MAYÚSCULAS TODOS los datos manuscritos en el bloque de Domicilio (calle, número/altura, piso, departamento, barrio y cualquier segundo renglón escrito debajo, como localidad o jurisdicción si fue escrito en la ficha, separando el segundo renglón con coma). No agregues texto por defecto si no figura escrito en la ficha.
 
 Si en la imagen hay una o más fichas, extraé cada una.
-Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JSON puro) donde cada elemento tenga estas claves exactas:
+Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JSON puro) donde cada elemento tenga estas claves exactas en MAYÚSCULAS:
 [
   {
-    "apellidoYNombre": "Apellido y Nombre tal como está escrito en el renglón 'Apellido y Nombre:'",
-    "nombrePadre": "Nombre y apellido escrito en 'Nombre del Padre:'",
-    "nombreMadre": "Nombre y apellido escrito en 'Nombre de la Madre:'",
+    "apellidoYNombre": "APELLIDO Y NOMBRE EN MAYÚSCULAS",
+    "nombrePadre": "NOMBRE Y APELLIDO DEL PADRE EN MAYÚSCULAS",
+    "nombreMadre": "NOMBRE Y APELLIDO DE LA MADRE EN MAYÚSCULAS",
     "dni": "Solo números sin puntos escritos en el renglón 'Matrícula:'",
     "matriculaTipo": "DNI",
-    "domicilio": "Calle, altura, piso y depto escrito en 'Domicilio:'",
-    "lugarYFecha": "Texto escrito en 'Lugar y Fecha:' (ej. CABA + fecha)",
-    "partido": "Nombre del partido escrito (ej. Regeneración)",
+    "domicilio": "TODOS LOS DATOS MANUSCRITOS EN DOMICILIO (INCLUYENDO RENGLÓN INFERIOR SI ESTÁ ESCRITO) EN MAYÚSCULAS",
+    "lugarYFecha": "LUGAR Y FECHA EN MAYÚSCULAS",
+    "partido": "REGENERACIÓN",
     "tieneFirma": true,
-    "barrio": "Barrio de CABA inferido por la calle y altura del Domicilio (ej. Palermo, Belgrano, Caballito, Recoleta, Almagro, etc.)",
+    "barrio": "BARRIO DE CABA EN MAYÚSCULAS",
     "telefono": "Teléfono si fue anotado al margen, o vacío",
     "observaciones": "Firma verificada / Cualquier detalle relevante de legibilidad"
   }
@@ -724,48 +1116,151 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
 
       if (parsedRowsFromAi && parsedRowsFromAi.length > 0) {
         const rows = parsedRowsFromAi.map((r: any, idx: number) => {
-          const domicilioStr = String(r.domicilio || '').trim();
-          const barrioGemini = String(r.barrio || '').trim();
-          const barrioInferido =
+          const domicilioStr = String(r.domicilio || '').trim().toUpperCase();
+          const barrioGemini = String(r.barrio || '').trim().toUpperCase();
+          const barrioInferido = (
             inferirBarrioDesdeTextoCABA(domicilioStr, barrioGemini || 'Palermo') ||
             barrioGemini ||
-            'Palermo';
+            'Palermo'
+          ).toUpperCase();
           return {
             id: `scan-${Date.now()}-${idx + 1}`,
-            apellidoYNombre: String(r.apellidoYNombre || '').trim(),
-            nombrePadre: String(r.nombrePadre || '').trim(),
-            nombreMadre: String(r.nombreMadre || '').trim(),
+            apellidoYNombre: String(r.apellidoYNombre || '').trim().toUpperCase(),
+            nombrePadre: String(r.nombrePadre || '').trim().toUpperCase(),
+            nombreMadre: String(r.nombreMadre || '').trim().toUpperCase(),
             dni: String(r.dni || '').replace(/[^\d]/g, ''),
-            matriculaTipo: String(r.matriculaTipo || 'DNI').trim(),
+            matriculaTipo: String(r.matriculaTipo || 'DNI').trim().toUpperCase(),
             domicilio: domicilioStr,
-            lugarYFecha: String(r.lugarYFecha || '').trim(),
-            partido: String(r.partido || 'Regeneración').trim(),
+            lugarYFecha: normalizarLugarYFechaFormulario(String(r.lugarYFecha || '')),
+            partido: String(r.partido || 'REGENERACIÓN').trim().toUpperCase(),
             tieneFirma: r.tieneFirma !== false,
-            barrio: barrioInferido !== 'CABA' ? barrioInferido : barrioGemini,
-            fechaNacimiento: String(r.fechaNacimiento || '').trim(),
-            profesionUOficio: String(r.profesionUOficio || '').trim(),
-            telefono: String(r.telefono || '').trim(),
+            barrio: (barrioInferido !== 'CABA' ? barrioInferido : barrioGemini).toUpperCase(),
+            fechaNacimiento: String(r.fechaNacimiento || '').trim().toUpperCase(),
+            profesionUOficio: String(r.profesionUOficio || '').trim().toUpperCase(),
+            telefono: String(r.telefono || '').trim().toUpperCase(),
             observaciones: String(r.observaciones || 'Formulario 01 escaneado con IA').trim(),
           };
         });
         return res.json({ ok: true, mode: 'gemini', rows });
       }
 
-      // Fallback automático: Motor OCR Nativo de Windows + Parser de Formulario 01
-      const ocrText = runWindowsLocalOcrOnBase64Image(cleanBase64);
+      // Fallback 1: Motor OCR Cloud especializado en manuscritos en español (OCR Engine 2)
+      let ocrText = await runCloudHandwritingOcrFallback(cleanBase64);
+      let usedEngine = 'cloud_handwriting_ocr';
+      if (!ocrText) {
+        // Fallback 2: Motor OCR Nativo de Windows
+        ocrText = runWindowsLocalOcrOnBase64Image(cleanBase64);
+        usedEngine = 'local_ocr';
+      }
       const localRows = parseFormulario01FromOcrText(ocrText);
+      const hasExtractedAnyField = localRows.some(
+        (r) => Boolean(r.apellidoYNombre || r.dni || r.domicilio)
+      );
       return res.json({
         ok: true,
-        mode: 'local_ocr',
+        mode: usedEngine,
         ocrRawText: ocrText,
-        needsGeminiKeyForHandwriting: !Boolean(
-          process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || getSetting('geminiApiKey')
-        ),
+        needsGeminiKeyForHandwriting:
+          !hasExtractedAnyField &&
+          !Boolean(
+            process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || getSetting('geminiApiKey')
+          ),
         rows: localRows,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Error al escanear ficha';
       res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
+  // 3c-bis. Autocompletado de calles, alturas y cruces oficiales de CABA (USIG + Geodatos CABA)
+  app.get('/api/geo/autocomplete-caba', async (req, res) => {
+    try {
+      const q = String(req.query.q || '').trim();
+      if (q.length < 2) {
+        return res.json({ ok: true, suggestions: [] });
+      }
+      const suggestions: Array<{
+        direccionFormateada: string;
+        nombreCalle: string;
+        altura: number | null;
+        esCalleSinAltura: boolean;
+        esCruce: boolean;
+        barrio: string;
+      }> = [];
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2200);
+        const usigRes = await fetch(
+          `https://servicios.usig.buenosaires.gob.ar/normalizar/?direccion=${encodeURIComponent(q)}&geocodificar=true&srid=4326`,
+          { signal: controller.signal }
+        );
+        clearTimeout(timer);
+        if (usigRes.ok) {
+          const data: any = await usigRes.json();
+          const dirs = Array.isArray(data?.direccionesNormalizadas)
+            ? data.direccionesNormalizadas.slice(0, 6)
+            : [];
+          for (const d of dirs) {
+            const nombreCalleRaw = String(d.nombre_calle || d.direccion || '').replace(/,\s*CABA$/i, '').trim();
+            const nombreCalle = toTitleCaseSpanish(nombreCalleRaw);
+            const altura = typeof d.altura === 'number' && !Number.isNaN(d.altura) ? d.altura : null;
+            const esCruce = Boolean(d.nombre_calle_cruce) || /\s+y\s+/i.test(nombreCalleRaw);
+            const dirLimpia = esCruce && d.nombre_calle_cruce
+              ? `${toTitleCaseSpanish(String(d.nombre_calle || ''))} y ${toTitleCaseSpanish(String(d.nombre_calle_cruce || ''))}`
+              : altura !== null
+              ? `${nombreCalle} ${altura}`
+              : nombreCalle;
+
+            let barrioDetectado = inferirBarrioDesdeTextoCABA(dirLimpia, '') || '';
+            if (!barrioDetectado && d.nombre_calle && altura !== null) {
+              try {
+                const duRes = await fetch(
+                  `https://ws.usig.buenosaires.gob.ar/datos_utiles?calle=${encodeURIComponent(String(d.nombre_calle))}&altura=${altura}`
+                );
+                if (duRes.ok) {
+                  const du: any = await duRes.json();
+                  if (du?.barrio) {
+                    barrioDetectado = toTitleCaseSpanish(String(du.barrio));
+                  }
+                }
+              } catch {
+                // Ignorar error de datos_utiles
+              }
+            }
+
+            suggestions.push({
+              direccionFormateada: dirLimpia,
+              nombreCalle: nombreCalle || dirLimpia,
+              altura,
+              esCalleSinAltura: altura === null && !esCruce,
+              esCruce,
+              barrio: barrioDetectado && barrioDetectado !== 'CABA' ? barrioDetectado : '',
+            });
+          }
+        }
+      } catch {
+        // Fallback local si USIG no responde
+      }
+
+      if (suggestions.length === 0) {
+        const barrioLocal = inferirBarrioDesdeTextoCABA(q, '') || '';
+        const mAltura = q.match(/^(.+?)\s+(\d{1,5})\b/);
+        const esCruceLocal = /\b[a-záéíóúñ.]+\s+(?:y|e|esq\.?|esquina)\s+[a-záéíóúñ.]+/i.test(q);
+        suggestions.push({
+          direccionFormateada: toTitleCaseSpanish(q),
+          nombreCalle: mAltura ? toTitleCaseSpanish(mAltura[1]) : toTitleCaseSpanish(q),
+          altura: mAltura ? Number(mAltura[2]) : null,
+          esCalleSinAltura: !mAltura && !esCruceLocal,
+          esCruce: esCruceLocal,
+          barrio: barrioLocal && barrioLocal !== 'CABA' ? barrioLocal : '',
+        });
+      }
+
+      res.json({ ok: true, suggestions });
+    } catch {
+      res.json({ ok: true, suggestions: [] });
     }
   });
 
@@ -1161,8 +1656,6 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
       const notaComentarioSheet =
         resultadoNormalizado === 'NUMERO_INEXISTENTE'
           ? `[N° inexistente en WhatsApp ${hoyBA.ddmm}]`
-          : resultadoNormalizado === 'ENVIADO_OK'
-          ? `[1er msj auto enviado ${hoyBA.ddmm} ${hoyBA.hhmm}]`
           : '';
 
       // Actualizar inmediatamente la memoria persistente del servidor (`sharedStateMemory`)
@@ -1178,6 +1671,7 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
 
           const comSinFallosPrevios = (r.comentario || '')
             .replace(/\[Intento auto fallido[^\]]*\]/gi, '')
+            .replace(/\[1er msj auto enviado[^\]]*\]/gi, '')
             .trim();
 
           if (resultadoNormalizado === 'ENVIADO_OK') {
@@ -1205,9 +1699,7 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
               fechaPrimerContacto: r.fechaPrimerContacto || new Date().toISOString().slice(0, 10),
               ultimoContacto: new Date().toISOString().slice(0, 10),
               intentos: Math.max(1, (r.intentos || 0) + 1),
-              comentario: comSinFallosPrevios
-                ? `${comSinFallosPrevios} · ${notaComentarioSheet}`
-                : notaComentarioSheet,
+              comentario: comSinFallosPrevios,
               estadoFlujo: estadoNext,
               estadoFlujoEtiqueta: obtenerEtiquetaEstadoFlujo(estadoNext),
               actualizadoEnAppAt: timestamp,

@@ -1945,7 +1945,7 @@ test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y aná
     '2. 1er Msj Enviado · Esperando respuesta',
     '3. Respondió · Falta calle/esquina o día',
     '3b. Pidió más info (5 ejes enviados)',
-    '3c. Prefiere Punto / Café / Sede',
+    '3c. Prefiere Punto / Sede',
     '4. Pasó dirección/horario · Falta confirmar',
     '5. Encuentro Confirmado (En Ruta)',
     '6. Recordatorio / En Camino Enviado',
@@ -1984,7 +1984,7 @@ test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y aná
       adhirio: 'Pendiente' as const,
       comentario: 'Visita 21/10 a las 10 (Charcas 3702)',
       estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE' as const,
-      estadoFlujoEtiqueta: '3c. Prefiere Punto / Café / Sede',
+      estadoFlujoEtiqueta: '3c. Prefiere Punto / Sede',
       primerContactoEnviado: true,
     },
   ];
@@ -2029,7 +2029,7 @@ test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y aná
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(anaClara.estadoFlujo, 'PREFIERE_CAFE_HUB_O_SEDE');
-  assert.equal(anaClara.estadoFlujoEtiqueta, '3c. Prefiere Punto / Café / Sede');
+  assert.equal(anaClara.estadoFlujoEtiqueta, '3c. Prefiere Punto / Sede');
 
   const florencia = procesarContacto(
     contactosFusionados.find((c) => c.id === '22')!,
@@ -2083,12 +2083,12 @@ test('Feedback-8: Sincronización bidireccional App <-> Google Sheets nunca revi
     enSheets: true,
   };
 
-  // El usuario cambia en la App a "3c. Prefiere Punto / Café / Sede"
+  // El usuario cambia en la App a "3c. Prefiere Punto / Sede"
   const { actualizado: lauraEditadaEnApp } = actualizarDatosContactoEnApp(lauraInicial, {
     estadoFlujo: 'PREFIERE_CAFE_HUB_O_SEDE',
   });
   assert.equal(lauraEditadaEnApp.estadoFlujo, 'PREFIERE_CAFE_HUB_O_SEDE');
-  assert.equal(lauraEditadaEnApp.estadoFlujoEtiqueta, '3c. Prefiere Punto / Café / Sede');
+  assert.equal(lauraEditadaEnApp.estadoFlujoEtiqueta, '3c. Prefiere Punto / Sede');
   assert.ok(Boolean(lauraEditadaEnApp.actualizadoEnAppAt));
 
   // Si un poll en segundo plano lee todavía el estado viejo de Sheets dentro de los primeros segundos,

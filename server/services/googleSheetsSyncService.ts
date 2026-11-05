@@ -22,7 +22,7 @@ const LANGUAGE_SERVER_CANDIDATES = getLanguageServerCandidates();
 
 interface SheetRowEntry {
   rowNum: number; // 1-based row index in Google Sheets (e.g. row 2 for #1)
-  cols: string[]; // [id, nombre, barrio, tel, rsp, adhirio, comentario, estado]
+  cols: string[]; // [id, nombre, barrio, tel, rsp, adhirio, dias, horario, direccion, comentario, estado]
 }
 
 interface SpreadsheetRowCache {
@@ -43,6 +43,9 @@ export interface SheetRowUpdateInput {
   telefonoNorm?: string;
   rsp?: string;
   adhirio?: string;
+  diasEncuentro?: string;
+  horarioEncuentro?: string;
+  calleOCruce?: string;
   comentario?: string;
   comentarioNota?: string;
   estado?: string;
@@ -187,11 +190,38 @@ function updateRowCacheFromTSV(spreadsheetId: string, tsvText: string): Spreadsh
   const byTelLast8 = new Map<string, SheetRowEntry>();
   let maxRowNum = 1;
 
+  const headerLine = (lines[0] || '').toLowerCase();
+  const isStructured11Col =
+    headerLine.includes('horario') ||
+    headerLine.includes('dirección') ||
+    headerLine.includes('direccion') ||
+    (lines[0] || '').split('\t').length >= 10;
+
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     if (!line || !line.trim()) continue;
-    const cols = line.split('\t').map((c) => c.trim());
-    while (cols.length < 8) cols.push('');
+    const rawCols = line.split('\t').map((c) => c.trim());
+    let cols: string[];
+    if (isStructured11Col || rawCols.length >= 10) {
+      cols = [...rawCols];
+      while (cols.length < 11) cols.push('');
+    } else {
+      while (rawCols.length < 8) rawCols.push('');
+      cols = [
+        rawCols[0],
+        rawCols[1],
+        rawCols[2],
+        rawCols[3],
+        rawCols[4],
+        rawCols[5],
+        '',
+        '',
+        '',
+        rawCols[6],
+        rawCols[7],
+      ];
+    }
+
     const rowNum = i + 1;
     if (rowNum > maxRowNum) maxRowNum = rowNum;
 
@@ -248,7 +278,7 @@ export async function readControlSheetTSV(sheetUrlOrId?: string): Promise<{
   }
 
   const res = await execGsheetsCli(
-    ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:H600`],
+    ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:K600`],
     12000
   );
 
@@ -298,7 +328,7 @@ export async function pushContactUpdatesToSheet(params: {
       let cache = rowCacheBySpreadsheet.get(spreadsheetId);
       if (!cache || cache.byId.size === 0) {
         const readRes = await execGsheetsCli(
-          ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:H600`],
+          ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:K600`],
           12000
         );
         if (readRes.ok && readRes.stdout.trim().length > 0) {
@@ -321,11 +351,11 @@ export async function pushContactUpdatesToSheet(params: {
           const entry = cache.byId.get(cleanId);
           if (!entry) continue;
           const validChip = normalizeOfficialSheetChipLabel(rawLabel);
-          if (entry.cols[7] !== validChip) {
-            entry.cols[7] = validChip;
+          if (entry.cols[10] !== validChip) {
+            entry.cols[10] = validChip;
             batchOps.push({
               op: 'write',
-              range: `${DEFAULT_CONTROL_SHEET_NAME}!H${entry.rowNum}`,
+              range: `${DEFAULT_CONTROL_SHEET_NAME}!K${entry.rowNum}`,
               data: [[validChip]],
             });
           }
@@ -347,7 +377,7 @@ export async function pushContactUpdatesToSheet(params: {
 
         if (needsCacheRefresh) {
           const readRes = await execGsheetsCli(
-            ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:H600`],
+            ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:K600`],
             12000
           );
           if (readRes.ok && readRes.stdout.trim().length > 0) {
@@ -398,24 +428,41 @@ export async function pushContactUpdatesToSheet(params: {
                   ? String(p.adhirio).trim()
                   : entry.cols[5] || 'Pendiente';
 
-              let colG = entry.cols[6] || '';
+              const colG =
+                p.diasEncuentro !== undefined
+                  ? String(p.diasEncuentro).trim()
+                  : entry.cols[6] || '';
+              const colH =
+                p.horarioEncuentro !== undefined
+                  ? String(p.horarioEncuentro).trim()
+                  : entry.cols[7] || '';
+              const colI =
+                p.calleOCruce !== undefined
+                  ? String(p.calleOCruce).trim()
+                  : entry.cols[8] || '';
+
+              let colJ = entry.cols[9] || '';
               if (p.comentario !== undefined) {
-                colG = String(p.comentario).trim();
-              } else if (p.comentarioNota) {
-                const prevCom = String(entry.cols[6] || '')
+                colJ = String(p.comentario).trim();
+              } else if (
+                p.comentarioNota &&
+                !/1er msj auto enviado|1er mensaje enviado/i.test(p.comentarioNota)
+              ) {
+                const prevCom = String(entry.cols[9] || '')
                   .replace(/\[Intento auto fallido[^\]]*\]/gi, '')
+                  .replace(/\[1er msj auto enviado[^\]]*\]/gi, '')
                   .trim();
-                colG = prevCom.includes(p.comentarioNota)
+                colJ = prevCom.includes(p.comentarioNota)
                   ? prevCom
                   : prevCom
                   ? `${prevCom} · ${p.comentarioNota}`
                   : p.comentarioNota;
               }
 
-              const colH =
+              const colK =
                 p.estado || p.estadoFlujo
                   ? validChip
-                  : entry.cols[7] || obtenerEtiquetaEstadoFlujo('1ER_MSJ_ENVIADO_SIN_RSP');
+                  : entry.cols[10] || obtenerEtiquetaEstadoFlujo('1ER_MSJ_ENVIADO_SIN_RSP');
 
               entry.cols = [
                 String(colA),
@@ -426,12 +473,15 @@ export async function pushContactUpdatesToSheet(params: {
                 colF,
                 colG,
                 colH,
+                colI,
+                colJ,
+                colK,
               ];
 
               batchOps.push({
                 op: 'write',
-                range: `${DEFAULT_CONTROL_SHEET_NAME}!A${entry.rowNum}:H${entry.rowNum}`,
-                data: [[colA, colB, colC, colD, colE, colF, colG, colH]],
+                range: `${DEFAULT_CONTROL_SHEET_NAME}!A${entry.rowNum}:K${entry.rowNum}`,
+                data: [[colA, colB, colC, colD, colE, colF, colG, colH, colI, colJ, colK]],
               });
             } else if (idTarget) {
               const newRowNum = cache.maxRowNum + 1;
@@ -445,15 +495,18 @@ export async function pushContactUpdatesToSheet(params: {
               const colD = String(p.telRaw || p.tel || p.telefonoNorm || '').trim();
               const colE = String(p.rsp || 'Nuevo').trim();
               const colF = String(p.adhirio || 'Pendiente').trim();
-              const colG =
+              const colG = String(p.diasEncuentro || '').trim();
+              const colH = String(p.horarioEncuentro || '').trim();
+              const colI = String(p.calleOCruce || '').trim();
+              const colJ =
                 p.comentario !== undefined
                   ? String(p.comentario).trim()
                   : String(p.comentarioNota || '').trim();
-              const colH = validChip;
+              const colK = validChip;
 
               const newEntry: SheetRowEntry = {
                 rowNum: newRowNum,
-                cols: [String(colA), colB, colC, colD, colE, colF, colG, colH],
+                cols: [String(colA), colB, colC, colD, colE, colF, colG, colH, colI, colJ, colK],
               };
               cache.byId.set(idTarget, newEntry);
               if (telLast8) {
@@ -462,8 +515,8 @@ export async function pushContactUpdatesToSheet(params: {
 
               batchOps.push({
                 op: 'write',
-                range: `${DEFAULT_CONTROL_SHEET_NAME}!A${newRowNum}:H${newRowNum}`,
-                data: [[colA, colB, colC, colD, colE, colF, colG, colH]],
+                range: `${DEFAULT_CONTROL_SHEET_NAME}!A${newRowNum}:K${newRowNum}`,
+                data: [[colA, colB, colC, colD, colE, colF, colG, colH, colI, colJ, colK]],
               });
             }
           }
@@ -577,6 +630,11 @@ export async function syncVolunteerSheetTab(params: {
     telRaw: string;
     rsp?: string;
     adhirio?: string;
+    diasEncuentro?: string;
+    horarioEncuentro?: string;
+    horaInicio?: string;
+    horaFin?: string;
+    calleOCruce?: string;
     comentario?: string;
     estadoFlujoEtiqueta?: string;
   }>;
@@ -592,29 +650,51 @@ export async function syncVolunteerSheetTab(params: {
     // 1. Intentar crear la pestaña si aún no existe (ignorar error si ya existe)
     await execGsheetsCli(['mutate', 'add-sheet', spreadsheetId, tabName], 10000);
 
-    // 2. Construir filas [#, Nombre y Apellido, Barrio, Teléfono, RSP, Adhirió, Comentario, Estado (App)]
+    // 2. Construir filas [#, Nombre y Apellido, Barrio, Teléfono, RSP, Adhirió, Día(s), Horario, Dirección / Punto, Comentario, Estado (App)]
     const rows: string[][] = [
-      ['#', 'Nombre y Apellido', 'Barrio', 'Teléfono', 'RSP', 'Adhirió', 'Comentario', 'Estado (App)'],
-      ...params.contacts.map((c) => [
-        String(c.id || ''),
-        String(c.nombre || ''),
-        String(c.barrio || ''),
-        String(c.telRaw || ''),
-        String(c.rsp || 'Nuevo'),
-        String(c.adhirio || 'Pendiente'),
-        String(c.comentario || ''),
-        normalizeOfficialSheetChipLabel(c.estadoFlujoEtiqueta),
-      ]),
+      [
+        '#',
+        'Nombre y Apellido',
+        'Barrio',
+        'Teléfono',
+        'RSP',
+        'Adhirió',
+        'Día(s)',
+        'Horario',
+        'Dirección / Punto',
+        'Comentario',
+        'Estado (App)',
+      ],
+      ...params.contacts.map((c) => {
+        const horario =
+          c.horarioEncuentro ||
+          (c.horaInicio && c.horaFin && c.horaInicio !== c.horaFin
+            ? `${c.horaInicio} a ${c.horaFin}`
+            : c.horaInicio || '');
+        return [
+          String(c.id || ''),
+          String(c.nombre || ''),
+          String(c.barrio || ''),
+          String(c.telRaw || ''),
+          String(c.rsp || 'Nuevo'),
+          String(c.adhirio || 'Pendiente'),
+          String(c.diasEncuentro || ''),
+          String(horario),
+          String(c.calleOCruce || ''),
+          String(c.comentario || ''),
+          normalizeOfficialSheetChipLabel(c.estadoFlujoEtiqueta),
+        ];
+      }),
     ];
 
     const batchOps = [
       {
         op: 'clear',
-        range: `'${tabName}'!A1:H600`,
+        range: `'${tabName}'!A1:K600`,
       },
       {
         op: 'write',
-        range: `'${tabName}'!A1:H${rows.length}`,
+        range: `'${tabName}'!A1:K${rows.length}`,
         data: rows,
       },
     ];
@@ -684,7 +764,7 @@ export async function deleteContactFromSheet(params: {
   try {
     // Leer estado fresco de Control para ubicar el número exacto de fila 1-based
     const readRes = await execGsheetsCli(
-      ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:H600`],
+      ['readonly', 'read', spreadsheetId, `${DEFAULT_CONTROL_SHEET_NAME}!A1:K600`],
       12000
     );
     if (readRes.ok && readRes.stdout.trim().length > 0) {
