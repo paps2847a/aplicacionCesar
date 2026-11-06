@@ -9,7 +9,19 @@ function getTargetSheet() {
 }
 
 function resolveColMap(headers) {
-  var map = { id: 0, nombre: 1, barrio: 2, tel: 3, rsp: 4, adhirio: 5, comentario: 6, estado: 7 };
+  var map = {
+    id: 0,
+    nombre: 1,
+    barrio: 2,
+    tel: 3,
+    rsp: 4,
+    adhirio: 5,
+    dias: -1,
+    horario: -1,
+    direccion: -1,
+    comentario: 6,
+    estado: 7
+  };
   if (!headers || !headers.length) return map;
   for (var c = 0; c < headers.length; c++) {
     var h = String(headers[c] || '').toLowerCase().trim();
@@ -19,9 +31,13 @@ function resolveColMap(headers) {
     else if (h.indexOf('tel') !== -1 || h.indexOf('cel') !== -1) map.tel = c;
     else if (h === 'rsp' || h.indexOf('resp') !== -1) map.rsp = c;
     else if (h.indexOf('adhir') !== -1 || h.indexOf('firm') !== -1) map.adhirio = c;
-    else if (h.indexOf('coment') !== -1 || h.indexOf('direcc') !== -1 || h.indexOf('nota') !== -1) map.comentario = c;
+    else if (h.indexOf('d\u00eda') !== -1 || h === 'dia' || h === 'dias' || h === 'dia(s)' || h.indexOf('dias') !== -1) map.dias = c;
+    else if (h.indexOf('horario') !== -1 || h.indexOf('hora') !== -1) map.horario = c;
+    else if (h.indexOf('direcc') !== -1 || h.indexOf('punto') !== -1 || h.indexOf('cruce') !== -1 || h.indexOf('calle') !== -1) map.direccion = c;
+    else if (h.indexOf('coment') !== -1 || h.indexOf('nota') !== -1) map.comentario = c;
     else if (h.indexOf('estado') !== -1 || h.indexOf('etapa') !== -1) map.estado = c;
   }
+  if (map.comentario === -1 && map.direccion !== -1) map.comentario = map.direccion;
   return map;
 }
 
@@ -67,47 +83,72 @@ function doPost(e) {
     sheet.getRange(1, 1, body.payload.length, body.payload[0].length).setValues(body.payload);
     return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'replaceAll' })).setMimeType(ContentService.MimeType.JSON);
   }
-  if ((body.action === 'updateRow' || body.action === 'upsertRow') && body.payload) {
-    var p = body.payload;
+  if ((body.action === 'updateRow' || body.action === 'upsertRow' || body.action === 'batchUpdateRows') && (body.payload || body.updates)) {
+    var list = Array.isArray(body.updates) && body.updates.length > 0 ? body.updates : [body.payload];
     var data = sheet.getDataRange().getValues();
     var cols = resolveColMap(data[0] || []);
-    var idTarget = String(p.id || '').trim();
-    var telTarget = String(p.telefonoNorm || p.telRaw || '').replace(/\D+/g, '').slice(-8);
-    var found = false;
-    for (var i = 1; i < data.length; i++) {
-      var rowId = String(data[i][cols.id] || '').trim();
-      var rowTel = String(data[i][cols.tel] || '').replace(/\D+/g, '').slice(-8);
-      if ((idTarget && rowId === idTarget) || (telTarget && rowTel && rowTel === telTarget)) {
-        if (p.nombre !== undefined && p.nombre !== '') sheet.getRange(i + 1, cols.nombre + 1).setValue(p.nombre);
-        if (p.barrio !== undefined && p.barrio !== '') sheet.getRange(i + 1, cols.barrio + 1).setValue(p.barrio);
-        if (p.telRaw !== undefined && p.telRaw !== '') sheet.getRange(i + 1, cols.tel + 1).setValue(p.telRaw);
-        if (p.rsp !== undefined) sheet.getRange(i + 1, cols.rsp + 1).setValue(p.rsp);
-        if (p.adhirio !== undefined) sheet.getRange(i + 1, cols.adhirio + 1).setValue(p.adhirio);
-        if (p.comentario !== undefined) {
-          sheet.getRange(i + 1, cols.comentario + 1).setValue(p.comentario);
-        } else if (p.comentarioNota) {
-          var prevCom = String(data[i][cols.comentario] || '').replace(/\[Intento auto fallido[^\]]*\]/gi, '').trim();
-          var nextCom = prevCom.indexOf(p.comentarioNota) >= 0 ? prevCom : (prevCom ? prevCom + ' · ' + p.comentarioNota : p.comentarioNota);
-          sheet.getRange(i + 1, cols.comentario + 1).setValue(nextCom);
+    var updatedCount = 0;
+
+    for (var u = 0; u < list.length; u++) {
+      var p = list[u];
+      if (!p) continue;
+      var idTargetRaw = String(p.id || p.contactId || '').trim();
+      var idTargetClean = idTargetRaw.replace(/^#/, '').trim();
+      var idTargetDigits = idTargetClean.replace(/\D+/g, '');
+      var telTarget = String(p.telefonoNorm || p.telRaw || p.tel || '').replace(/\D+/g, '').slice(-8);
+      var found = false;
+      for (var i = 1; i < data.length; i++) {
+        var rowIdRaw = String(data[i][cols.id] || '').trim();
+        var rowIdClean = rowIdRaw.replace(/^#/, '').trim();
+        var rowIdDigits = rowIdClean.replace(/\D+/g, '');
+        var rowTel = String(data[i][cols.tel] || '').replace(/\D+/g, '').slice(-8);
+        var matchId = Boolean(
+          idTargetClean &&
+          (rowIdClean === idTargetClean || (idTargetDigits && rowIdDigits === idTargetDigits))
+        );
+        var matchTel = Boolean(telTarget && rowTel && rowTel === telTarget);
+        if (matchId || matchTel) {
+          if (p.nombre !== undefined && p.nombre !== '') sheet.getRange(i + 1, cols.nombre + 1).setValue(p.nombre);
+          if (p.barrio !== undefined && p.barrio !== '') sheet.getRange(i + 1, cols.barrio + 1).setValue(p.barrio);
+          if (p.telRaw !== undefined && p.telRaw !== '') sheet.getRange(i + 1, cols.tel + 1).setValue(p.telRaw);
+          if (p.rsp !== undefined) sheet.getRange(i + 1, cols.rsp + 1).setValue(p.rsp);
+          if (p.adhirio !== undefined) sheet.getRange(i + 1, cols.adhirio + 1).setValue(p.adhirio);
+          if (cols.dias !== -1 && p.diasEncuentro !== undefined) sheet.getRange(i + 1, cols.dias + 1).setValue(p.diasEncuentro);
+          if (cols.horario !== -1 && p.horarioEncuentro !== undefined) sheet.getRange(i + 1, cols.horario + 1).setValue(p.horarioEncuentro);
+          if (cols.direccion !== -1 && p.calleOCruce !== undefined) sheet.getRange(i + 1, cols.direccion + 1).setValue(p.calleOCruce);
+          if (p.comentario !== undefined) {
+            sheet.getRange(i + 1, cols.comentario + 1).setValue(p.comentario);
+          } else if (p.comentarioNota) {
+            var prevCom = String(data[i][cols.comentario] || '').replace(/\[Intento auto fallido[^\]]*\]/gi, '').trim();
+            var nextCom = prevCom.indexOf(p.comentarioNota) >= 0 ? prevCom : (prevCom ? prevCom + ' · ' + p.comentarioNota : p.comentarioNota);
+            sheet.getRange(i + 1, cols.comentario + 1).setValue(nextCom);
+          }
+          if (p.estado !== undefined && p.estado !== '') sheet.getRange(i + 1, cols.estado + 1).setValue(p.estado);
+          found = true;
+          updatedCount++;
+          break;
         }
-        if (p.estado !== undefined && p.estado !== '') sheet.getRange(i + 1, cols.estado + 1).setValue(p.estado);
-        found = true;
-        break;
+      }
+      if (!found && idTargetClean && body.action !== 'updateRow' && body.action !== 'batchUpdateRows' && p.action !== 'actualizacion_contacto') {
+        var totalCols = Math.max(data[0] ? data[0].length : 0, 11);
+        var newRow = [];
+        for (var cIdx = 0; cIdx < totalCols; cIdx++) newRow.push('');
+        newRow[cols.id] = idTargetClean;
+        newRow[cols.nombre] = p.nombre || '';
+        newRow[cols.barrio] = p.barrio || '';
+        newRow[cols.tel] = p.telRaw || p.telefonoNorm || '';
+        newRow[cols.rsp] = p.rsp || 'Nuevo';
+        newRow[cols.adhirio] = p.adhirio || 'Pendiente';
+        if (cols.dias !== -1) newRow[cols.dias] = p.diasEncuentro || '';
+        if (cols.horario !== -1) newRow[cols.horario] = p.horarioEncuentro || '';
+        if (cols.direccion !== -1) newRow[cols.direccion] = p.calleOCruce || '';
+        newRow[cols.comentario] = p.comentario !== undefined ? p.comentario : (p.comentarioNota || '');
+        newRow[cols.estado] = p.estado || '1. Sin contactar (Enviar 1er mensaje)';
+        sheet.appendRow(newRow);
+        updatedCount++;
       }
     }
-    if (!found && idTarget) {
-      var newRow = ['', '', '', '', 'Nuevo', 'Pendiente', '', ''];
-      newRow[cols.id] = idTarget;
-      newRow[cols.nombre] = p.nombre || '';
-      newRow[cols.barrio] = p.barrio || '';
-      newRow[cols.tel] = p.telRaw || p.telefonoNorm || '';
-      newRow[cols.rsp] = p.rsp || 'Nuevo';
-      newRow[cols.adhirio] = p.adhirio || 'Pendiente';
-      newRow[cols.comentario] = p.comentario !== undefined ? p.comentario : (p.comentarioNota || '');
-      newRow[cols.estado] = p.estado || '1. Sin contactar (Enviar 1er mensaje)';
-      sheet.appendRow(newRow);
-    }
-    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: 'updateRow', found: found })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, action: body.action, updatedCount: updatedCount })).setMimeType(ContentService.MimeType.JSON);
   }
   return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
 }

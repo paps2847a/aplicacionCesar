@@ -2289,6 +2289,66 @@ test('coincideBusquedaUniversal con #ID busca exclusivamente por ID exacto sin c
   assert.equal(contactosFusionados[0].id, '493');
 });
 
+test('Edición de contacto (ej: #168 Pablo Enrique Rubio) no se duplica ni se revierte al sincronizar con Sheets', () => {
+  // 1. Contacto inicial en la App (#168 sin contactar)
+  const contactoInicial: RawContactRow = {
+    id: '#168',
+    nombre: 'Pablo Enrique Rubio',
+    barrio: 'Palermo',
+    telRaw: '54 9 11 5977-3959',
+    rsp: 'Nuevo',
+    adhirio: 'Pendiente',
+    comentario: '',
+    enSheets: true,
+    primerContactoEnviado: false,
+    estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
+  };
+
+  // 2. El usuario edita SOLO el teléfono en la App
+  const nuevoTelefono = '54 9 11 2233-4455';
+  const { actualizado: editadoEnApp } = actualizarDatosContactoEnApp(contactoInicial, {
+    telRaw: nuevoTelefono,
+    estadoFlujo: 'SIN_CONTACTAR_1ER_MSJ',
+  });
+
+  // Verificar que actualizadoEnAppAt no sea undefined
+  assert.ok(editadoEnApp.actualizadoEnAppAt, 'actualizadoEnAppAt debe estar definido tras editar el teléfono');
+  assert.equal(editadoEnApp.telRaw, nuevoTelefono);
+
+  // 3. Llega sincronización desde Google Sheets (donde la fila todavía tiene el teléfono viejo y formato "168" sin "#")
+  const filaDesdeSheets: RawContactRow = {
+    id: '168',
+    nombre: 'Pablo Enrique Rubio',
+    barrio: 'Palermo',
+    telRaw: '54 9 11 5977-3959', // Teléfono viejo en Sheets
+    rsp: 'No',
+    adhirio: 'Pendiente',
+    comentario: '',
+    enSheets: true,
+    primerContactoEnviado: true,
+    estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
+  };
+
+  const { contactosFusionados } = fusionarContactosDesdeSheetsConControl(
+    [filaDesdeSheets],
+    [editadoEnApp],
+    new Set(),
+    false
+  );
+
+  // No debe haber duplicación (#168 vs 168)
+  assert.equal(contactosFusionados.length, 1, 'No debe duplicarse el contacto entre #168 y 168');
+  // Debe preservar el teléfono editado en la app
+  assert.equal(contactosFusionados[0].telRaw, nuevoTelefono, 'Debe preservar el nuevo teléfono editado en la app');
+  assert.ok(contactosFusionados[0].actualizadoEnAppAt, 'Debe conservar actualizadoEnAppAt');
+
+  // 4. Caso multi-dispositivo (ej: PC vs notebook con y sin prefijo #)
+  const multiFusion = fusionarContactosMultiDispositivo([editadoEnApp], [filaDesdeSheets]);
+  assert.equal(multiFusion.length, 1, 'Multi-dispositivo no debe duplicar por prefijo #');
+  assert.equal(multiFusion[0].telRaw, nuevoTelefono, 'Multi-dispositivo debe preferir la edición reciente');
+});
+
+
 
 
 

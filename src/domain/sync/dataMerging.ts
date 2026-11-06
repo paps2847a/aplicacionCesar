@@ -320,7 +320,14 @@ export function fusionarContactosDesdeSheetsConControl(
   const adheridosPorNombre = new Set<string>();
 
   for (const prev of previosEnApp) {
-    mapaPreviosPorId.set(String(prev.id).trim(), prev);
+    const rawId = String(prev.id).trim();
+    if (rawId) {
+      mapaPreviosPorId.set(rawId, prev);
+      const digitsId = rawId.replace(/\D+/g, '');
+      if (digitsId && !mapaPreviosPorId.has(digitsId)) {
+        mapaPreviosPorId.set(digitsId, prev);
+      }
+    }
     const t = normalizarTelefonoWA(prev.telRaw);
     if (t) mapaPreviosPorTel.set(t, prev);
     if (yaAdhirioAntes(prev)) {
@@ -345,17 +352,23 @@ export function fusionarContactosDesdeSheetsConControl(
   const contactosFusionados = nuevosDesdeSheets.map((item, idx) => {
     const row = sincronizarBarrioConDireccionComentario(repararContactoDesfasado(item, idx));
     const idKey = String(row.id).trim();
+    const idDigits = idKey.replace(/\D+/g, '');
     const telKey = normalizarTelefonoWA(row.telRaw);
     const nomKey = (row.nombre || '').toLowerCase().replace(/\s+/g, ' ').trim();
     if (idKey) idsVistosEnSheet.add(idKey);
+    if (idDigits) idsVistosEnSheet.add(idDigits);
     if (telKey) telsVistosEnSheet.add(telKey);
 
-    const previo = mapaPreviosPorId.get(idKey) || (telKey ? mapaPreviosPorTel.get(telKey) : undefined);
+    const previo =
+      (idKey ? mapaPreviosPorId.get(idKey) : undefined) ||
+      (idDigits ? mapaPreviosPorId.get(idDigits) : undefined) ||
+      (telKey ? mapaPreviosPorTel.get(telKey) : undefined);
     const tieneSnapshotPrevioSheet = Boolean(
       ultimosVistosEnSheetPorId && ultimosVistosEnSheetPorId.size > 0
     );
     const fotoPreviaSheet = tieneSnapshotPrevioSheet
-      ? ultimosVistosEnSheetPorId!.get(idKey)
+      ? ultimosVistosEnSheetPorId!.get(idKey) ||
+        (idDigits ? ultimosVistosEnSheetPorId!.get(idDigits) : undefined)
       : undefined;
     const baseComparacionSheet = fotoPreviaSheet || (!ultimosVistosEnSheetPorId ? previo : undefined);
 
@@ -810,12 +823,19 @@ export function fusionarContactosDesdeSheetsConControl(
 
   for (const prev of previosEnApp) {
     const idKey = String(prev.id).trim();
+    const idDigits = idKey.replace(/\D+/g, '');
     const telKey = normalizarTelefonoWA(prev.telRaw);
-    const yaIncluidoPorId = Boolean(idKey && idsVistosEnSheet.has(idKey));
+    const yaIncluidoPorId = Boolean(
+      (idKey && idsVistosEnSheet.has(idKey)) ||
+      (idDigits && idsVistosEnSheet.has(idDigits))
+    );
     const yaIncluidoPorTelMismoNombre =
       !idKey && Boolean(telKey) && telsVistosEnSheet.has(telKey);
     if (!yaIncluidoPorId && !yaIncluidoPorTelMismoNombre) {
-      const estabaEnSheetsAntes = Boolean(idKey && ultimosVistosEnSheetPorId?.has(idKey));
+      const estabaEnSheetsAntes = Boolean(
+        (idKey && ultimosVistosEnSheetPorId?.has(idKey)) ||
+        (idDigits && ultimosVistosEnSheetPorId?.has(idDigits))
+      );
       const recienCreadoEnApp =
         !estabaEnSheetsAntes &&
         !priorizarSheets &&
@@ -859,7 +879,11 @@ export function fusionarContactosMultiDispositivo(
   const mapaRemotosPorTel = new Map<string, RawContactRow>();
   for (const r of remotos) {
     const idK = String(r.id || '').trim();
-    if (idK) mapaRemotosPorId.set(idK, r);
+    if (idK) {
+      mapaRemotosPorId.set(idK, r);
+      const dK = idK.replace(/\D+/g, '');
+      if (dK && !mapaRemotosPorId.has(dK)) mapaRemotosPorId.set(dK, r);
+    }
     const tK = normalizarTelefonoWA(r.telRaw);
     if (tK) mapaRemotosPorTel.set(tK, r);
   }
@@ -917,11 +941,16 @@ export function fusionarContactosMultiDispositivo(
   const resultado: RawContactRow[] = [];
   for (const loc of locales) {
     const idK = String(loc.id || '').trim();
+    const dK = idK.replace(/\D+/g, '');
     const tK = normalizarTelefonoWA(loc.telRaw);
     if (idK) idsProcesados.add(idK);
+    if (dK) idsProcesados.add(dK);
     if (tK) telsProcesados.add(tK);
 
-    const rem = idK ? mapaRemotosPorId.get(idK) : tK ? mapaRemotosPorTel.get(tK) : undefined;
+    const rem =
+      (idK ? mapaRemotosPorId.get(idK) : undefined) ||
+      (dK ? mapaRemotosPorId.get(dK) : undefined) ||
+      (tK ? mapaRemotosPorTel.get(tK) : undefined);
     if (!rem) {
       resultado.push(loc);
     } else {
@@ -931,9 +960,13 @@ export function fusionarContactosMultiDispositivo(
 
   for (const rem of remotos) {
     const idK = String(rem.id || '').trim();
+    const dK = idK.replace(/\D+/g, '');
     const tK = normalizarTelefonoWA(rem.telRaw);
     const visto =
-      Boolean(idK && idsProcesados.has(idK)) || (!idK && Boolean(tK) && telsProcesados.has(tK));
+      Boolean(
+        (idK && idsProcesados.has(idK)) ||
+        (dK && idsProcesados.has(dK))
+      ) || (!idK && Boolean(tK) && telsProcesados.has(tK));
     if (!visto) {
       resultado.push(rem);
     }
@@ -995,8 +1028,14 @@ export function actualizarDatosContactoEnApp(
   }
 
   const esReversionANuevo =
-    cambios.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
-    cambios.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO';
+    (cambios.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+      cambios.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO') &&
+    rawActual.estadoFlujo !== undefined &&
+    rawActual.estadoFlujo !== 'SIN_CONTACTAR_1ER_MSJ' &&
+    rawActual.estadoFlujo !== 'FALTA_NOMBRE_Y_APELLIDO' &&
+    cambios.telRaw === undefined &&
+    cambios.nombre === undefined &&
+    cambios.calleOCruce === undefined;
 
   if (esReversionANuevo) {
     comentarioCombinado = comentarioCombinado
@@ -1022,7 +1061,9 @@ export function actualizarDatosContactoEnApp(
     horarioEncuentro: nuevoHorario,
     comentario: comentarioCombinado,
     enSheets: true,
-    actualizadoEnAppAt: esReversionANuevo ? undefined : cambiosDefinidos.actualizadoEnAppAt || ahoraISO,
+    actualizadoEnAppAt: esReversionANuevo
+      ? undefined
+      : cambiosDefinidos.actualizadoEnAppAt || ahoraISO,
   };
 
   // Si se modificó el comentario o calleOCruce, verificar si corresponde auto-corregir el barrio
@@ -1041,7 +1082,9 @@ export function actualizarDatosContactoEnApp(
       cambios.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
     ) {
       conBarrioSincronizado.primerContactoEnviado = false;
-      conBarrioSincronizado.actualizadoEnAppAt = undefined;
+      conBarrioSincronizado.actualizadoEnAppAt = esReversionANuevo
+        ? undefined
+        : cambiosDefinidos.actualizadoEnAppAt || ahoraISO;
       if (cambios.rsp === undefined) {
         conBarrioSincronizado.rsp = 'Nuevo';
       }
@@ -1208,7 +1251,9 @@ export function actualizarDatosContactoEnApp(
     ...conBarrioSincronizado,
     actualizadoEnAppAt: esReversionANuevo
       ? undefined
-      : cambiosDefinidos.actualizadoEnAppAt || ahoraISO,
+      : cambiosDefinidos.actualizadoEnAppAt ||
+        conBarrioSincronizado.actualizadoEnAppAt ||
+        ahoraISO,
     estadoFlujo: estadoFinal,
     estadoFlujoEtiqueta: estadoFinal ? obtenerEtiquetaEstadoFlujo(estadoFinal) : undefined,
   };

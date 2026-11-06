@@ -228,6 +228,7 @@ function updateRowCacheFromTSV(spreadsheetId: string, tsvText: string): Spreadsh
     const idClean = String(cols[0] || '')
       .replace(/^#/, '')
       .trim();
+    const idDigits = idClean.replace(/\D+/g, '');
     const telDigits = String(cols[3] || '').replace(/\D+/g, '');
     const telLast8 = telDigits.length >= 8 ? telDigits.slice(-8) : '';
 
@@ -238,6 +239,9 @@ function updateRowCacheFromTSV(spreadsheetId: string, tsvText: string): Spreadsh
 
     if (idClean) {
       byId.set(idClean, entry);
+    }
+    if (idDigits && idDigits !== idClean) {
+      byId.set(idDigits, entry);
     }
     if (telLast8) {
       byTelLast8.set(telLast8, entry);
@@ -372,7 +376,12 @@ export async function pushContactUpdatesToSheet(params: {
             const idTarget = String(u?.id ?? u?.contactId ?? '')
               .replace(/^#/, '')
               .trim();
-            return idTarget && !cache!.byId.has(idTarget);
+            const idDigits = idTarget.replace(/\D+/g, '');
+            return (
+              idTarget &&
+              !cache!.byId.has(idTarget) &&
+              (!idDigits || !cache!.byId.has(idDigits))
+            );
           });
 
         if (needsCacheRefresh) {
@@ -391,11 +400,13 @@ export async function pushContactUpdatesToSheet(params: {
             const idTarget = String(p.id ?? p.contactId ?? '')
               .replace(/^#/, '')
               .trim();
+            const idDigits = idTarget.replace(/\D+/g, '');
             const telDigits = String(p.telRaw || p.tel || p.telefonoNorm || '').replace(/\D+/g, '');
             const telLast8 = telDigits.length >= 8 ? telDigits.slice(-8) : '';
 
             const entry =
               (idTarget ? cache.byId.get(idTarget) : undefined) ||
+              (idDigits ? cache.byId.get(idDigits) : undefined) ||
               (telLast8 ? cache.byTelLast8.get(telLast8) : undefined);
 
             const validChip = normalizeOfficialSheetChipLabel(p.estado || p.estadoFlujo);
@@ -483,7 +494,12 @@ export async function pushContactUpdatesToSheet(params: {
                 range: `${DEFAULT_CONTROL_SHEET_NAME}!A${entry.rowNum}:K${entry.rowNum}`,
                 data: [[colA, colB, colC, colD, colE, colF, colG, colH, colI, colJ, colK]],
               });
-            } else if (idTarget) {
+            } else if (
+              idTarget &&
+              params.action !== 'updateRow' &&
+              params.action !== 'batchUpdateRows' &&
+              (p as any).action !== 'actualizacion_contacto'
+            ) {
               const newRowNum = cache.maxRowNum + 1;
               cache.maxRowNum = newRowNum;
 

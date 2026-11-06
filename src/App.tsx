@@ -537,12 +537,20 @@ export default function App() {
       preserveIdentityColumns = false
     ) => {
       const idKey = String(updatedRow.id || '').trim();
+      const idDigits = idKey.replace(/\D+/g, '');
       if (idKey) {
-        recentLocalEditsByIdRef.current.set(idKey, {
+        const localEntry = {
           timestamp: Date.now(),
           row: updatedRow,
-        });
+        };
+        recentLocalEditsByIdRef.current.set(idKey, localEntry);
+        if (idDigits && idDigits !== idKey) {
+          recentLocalEditsByIdRef.current.set(idDigits, localEntry);
+        }
         lastSeenSheetRowsByIdRef.current.set(idKey, updatedRow);
+        if (idDigits && idDigits !== idKey) {
+          lastSeenSheetRowsByIdRef.current.set(idDigits, updatedRow);
+        }
       }
       activePushCountRef.current += 1;
       editEpochRef.current += 1;
@@ -662,9 +670,17 @@ export default function App() {
         updates.tel === undefined &&
         updates.calleOCruce === undefined;
 
-      const contactoActual = rawContactsRef.current.find(
-        (c) => String(c.id) === String(contactId)
-      );
+      const contactIdClean = String(contactId).trim();
+      const contactIdDigits = contactIdClean.replace(/\D+/g, '');
+      const isContactMatch = (candidateId: string | number) => {
+        const cStr = String(candidateId).trim();
+        return (
+          cStr === contactIdClean ||
+          (Boolean(contactIdDigits) && cStr.replace(/\D+/g, '') === contactIdDigits)
+        );
+      };
+
+      const contactoActual = rawContactsRef.current.find((c) => isContactMatch(c.id));
       const resultadoCalc = contactoActual
         ? actualizarDatosContactoEnApp(contactoActual, cambiosInput)
         : null;
@@ -673,15 +689,20 @@ export default function App() {
       editEpochRef.current += 1;
       if (rowCalculada) {
         const idKeyClean = String(contactId).trim();
-        recentLocalEditsByIdRef.current.set(idKeyClean, {
+        const idDigits = idKeyClean.replace(/\D+/g, '');
+        const localEntry = {
           timestamp: Date.now(),
           row: rowCalculada,
-        });
+        };
+        recentLocalEditsByIdRef.current.set(idKeyClean, localEntry);
+        if (idDigits && idDigits !== idKeyClean) {
+          recentLocalEditsByIdRef.current.set(idDigits, localEntry);
+        }
       }
 
       setRawContacts((prev) =>
         prev.map((c) => {
-          if (String(c.id) !== String(contactId)) return c;
+          if (!isContactMatch(c.id)) return c;
           return rowCalculada || actualizarDatosContactoEnApp(c, cambiosInput).actualizado;
         })
       );
@@ -769,12 +790,24 @@ export default function App() {
     isUndoRunningRef.current = true;
     try {
       editEpochRef.current += 1;
-      recentLocalEditsByIdRef.current.set(String(contactId).trim(), {
+      const cIdClean = String(contactId).trim();
+      const cIdDigits = cIdClean.replace(/\D+/g, '');
+      const undoEntry = {
         timestamp: Date.now(),
         row: prevRow,
-      });
+      };
+      recentLocalEditsByIdRef.current.set(cIdClean, undoEntry);
+      if (cIdDigits && cIdDigits !== cIdClean) {
+        recentLocalEditsByIdRef.current.set(cIdDigits, undoEntry);
+      }
       setRawContacts((prev) =>
-        prev.map((c) => (String(c.id) === String(contactId) ? prevRow : c))
+        prev.map((c) => {
+          const cStr = String(c.id).trim();
+          const match =
+            cStr === cIdClean ||
+            (Boolean(cIdDigits) && cStr.replace(/\D+/g, '') === cIdDigits);
+          return match ? prevRow : c;
+        })
       );
       void pushUpdateToGoogleSheets(prevRow, 'deshacer_cambio', false);
       await fetch(`/api/contacts/${contactId}`, {
@@ -1132,7 +1165,12 @@ export default function App() {
             );
             const nextSeenMap = new Map<string, RawContactRow>();
             for (const p of parsed) {
-              if (p.id) nextSeenMap.set(String(p.id).trim(), p);
+              if (p.id) {
+                const pId = String(p.id).trim();
+                const pDigits = pId.replace(/\D+/g, '');
+                nextSeenMap.set(pId, p);
+                if (pDigits && pDigits !== pId) nextSeenMap.set(pDigits, p);
+              }
             }
             lastSeenSheetRowsByIdRef.current = nextSeenMap;
 
@@ -1141,7 +1179,10 @@ export default function App() {
               .filter((row) => !deletedContactIdsRef.current.has(String(row.id || '').trim()))
               .map((row) => {
                 const idKey = String(row.id || '').trim();
-                const recentLocal = recentLocalEditsByIdRef.current.get(idKey);
+                const idDigits = idKey.replace(/\D+/g, '');
+                const recentLocal =
+                  recentLocalEditsByIdRef.current.get(idKey) ||
+                  (idDigits ? recentLocalEditsByIdRef.current.get(idDigits) : undefined);
                 if (
                   recentLocal &&
                   (activePushCountRef.current > 0 || nowMs - recentLocal.timestamp < 600000)
@@ -1624,10 +1665,22 @@ export default function App() {
             const nowTime = Date.now();
             setRawContacts((prev) =>
               prev.map((row) => {
-                const match = freshUpdated.find((u) => String(u.id) === String(row.id));
+                const match = freshUpdated.find((u) => {
+                  const uId = String(u.id || '').trim();
+                  const rId = String(row.id || '').trim();
+                  const uDigits = uId.replace(/\D+/g, '');
+                  const rDigits = rId.replace(/\D+/g, '');
+                  return (
+                    uId === rId ||
+                    (Boolean(uDigits) && Boolean(rDigits) && uDigits === rDigits)
+                  );
+                });
                 if (!match) return row;
                 const idKey = String(row.id || '').trim();
-                const recentLocal = recentLocalEditsByIdRef.current.get(idKey);
+                const idDigits = idKey.replace(/\D+/g, '');
+                const recentLocal =
+                  recentLocalEditsByIdRef.current.get(idKey) ||
+                  (idDigits ? recentLocalEditsByIdRef.current.get(idDigits) : undefined);
                 if (recentLocal && nowTime - recentLocal.timestamp < 180000) {
                   return row; // Proteger edición local reciente contra reversión
                 }

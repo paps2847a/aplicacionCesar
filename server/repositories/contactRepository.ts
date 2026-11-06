@@ -141,7 +141,13 @@ export function getAllContacts(filters?: {
 
 export function getContactById(id: string): RawContactRow | null {
   const db = getDatabase();
-  const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(String(id).trim()) as unknown as ContactRowDb | undefined;
+  const idStr = String(id).trim();
+  const idDigits = idStr.replace(/\D+/g, '');
+  let row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(idStr) as unknown as ContactRowDb | undefined;
+  if (!row && idDigits) {
+    row = db.prepare('SELECT * FROM contacts WHERE id = ? OR id = ? OR id = ?')
+      .get(idDigits, `#${idDigits}`, `# ${idDigits}`) as unknown as ContactRowDb | undefined;
+  }
   return row ? mapDbToContact(row) : null;
 }
 
@@ -278,7 +284,8 @@ export function updateContactFields(id: string, updates: Partial<RawContactRow>)
   const merged: RawContactRow = {
     ...current,
     ...updates,
-    actualizadoEnAppAt: new Date().toISOString(),
+    id: current.id,
+    actualizadoEnAppAt: updates.actualizadoEnAppAt || new Date().toISOString(),
   };
 
   return upsertContact(merged);
@@ -286,7 +293,12 @@ export function updateContactFields(id: string, updates: Partial<RawContactRow>)
 
 export function deleteContact(id: string): boolean {
   const db = getDatabase();
-  const res = db.prepare('DELETE FROM contacts WHERE id = ?').run(String(id).trim());
+  const idStr = String(id).trim();
+  const idDigits = idStr.replace(/\D+/g, '');
+  let res = db.prepare('DELETE FROM contacts WHERE id = ?').run(idStr);
+  if (res.changes === 0 && idDigits) {
+    res = db.prepare('DELETE FROM contacts WHERE id = ? OR id = ? OR id = ?').run(idDigits, `#${idDigits}`, `# ${idDigits}`);
+  }
   return res.changes > 0;
 }
 
