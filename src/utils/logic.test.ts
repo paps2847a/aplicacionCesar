@@ -2540,10 +2540,21 @@ test('Feedback-16: Vocativos compuestos, salida automática de 1b, exclusión de
       false,
       'Juliana (#508, 12/11 al 13/11) jamás debe incluirse en un bloque de HOY 11/11'
     );
-    // Además, el inicio propuesto para HOY (10:30 hs actual) debe respetar el margen mínimo de preparación/confirmación (>= 11:45 hs)
+    // Además, el inicio propuesto para HOY (10:30 hs actual) debe respetar el margen mínimo calibrado de 90 min (>= 12:00 hs)
     assert.ok(
-      (bHoy.horaInicioCalculada || '12:00') >= '11:45',
-      `El bloque no confirmado de HOY a las 10:30 debe iniciar al menos a las 11:45 hs, inició a las ${bHoy.horaInicioCalculada}`
+      (bHoy.horaInicioCalculada || '12:00') >= '12:00',
+      `El bloque no confirmado de HOY a las 10:30 debe iniciar con 90 min de margen (>= 12:00 hs), inició a las ${bHoy.horaInicioCalculada}`
+    );
+    // Con 2 vecinos sin pedido explícito de café, debe priorizar PUERTA_A_PUERTA y 9 min por parada
+    assert.equal(
+      bHoy.modalidad,
+      'PUERTA_A_PUERTA',
+      'Con 2 vecinos sin pedido explícito de café debe priorizar PUERTA_A_PUERTA'
+    );
+    assert.equal(
+      bHoy.paradasRutaSugerida?.[0]?.minutosEncuentro,
+      9,
+      'Cada parada Puerta a Puerta debe calcular 9 minutos (rango 8-10 min)'
     );
   }
 

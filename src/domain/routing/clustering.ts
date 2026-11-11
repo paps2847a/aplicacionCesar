@@ -250,11 +250,21 @@ export function construirMicroClusters(
       );
       const fechaPrincipal = g.fechaExplicita || fechasAgrupadas[0] || '';
       const miembrosConGeoExacta = g.miembros.filter((m) => m.tieneCoordenadasExactas !== false);
-      // REGLA ESTRICTA PUNTOS 4 Y 7: Un Café HUB sólo se recomienda si agrupa >= 2 personas con dirección geocodificada exacta
-      // y NINGUNA de ellas tiene que caminar más de 15 minutos hasta el café propuesto.
+      const algunoPidioCafeExplicito = g.miembros.some(
+        (m) =>
+          m.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+          m.situacion === 'PREFIERE_PUNTO' ||
+          /punto\s+de\s+encuentro|prefiere\s+(?:punto|caf[eé])|acercarme\s+a\s+un\s+caf[eé]/i.test(
+            m.comentario || ''
+          )
+      );
+      // REGLA ESTRICTA CALIBRADA:
+      // - Café HUB se recomienda automáticamente SÓLO cuando hay >= 3 vecinos (con geo exacta y <= 15 min a pie),
+      //   SALVO que alguno haya pedido explícitamente ir a un café/punto (en cuyo caso aplica desde 2 vecinos).
+      // - Con 2 vecinos sin pedido explícito de café, se prioriza PUERTA_A_PUERTA.
       const convieneCafeHub =
-        g.miembros.length >= 2 &&
-        miembrosConGeoExacta.length >= 2 &&
+        ((g.miembros.length >= 3 && miembrosConGeoExacta.length >= 3) ||
+          (algunoPidioCafeExplicito && g.miembros.length >= 2 && miembrosConGeoExacta.length >= 2)) &&
         maxMinutos <= 15;
 
       const modalidadRecomendadaAgenda: ModalidadEncuentroAgenda = convieneCafeHub

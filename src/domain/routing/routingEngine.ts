@@ -56,7 +56,12 @@ import {
 } from '../messaging/greetingsAndTone';
 import { extraerPrimerNombre } from '../contacts/nameCorrection';
 import { CATALOGO_CAFES_HUB_CABA, buscarCafeHubMasCercano } from '../../data/cafesHubCatalog';
-import { procesarContacto, resolverFechaObjetivoContacto, sonHorariosCompatiblesEnCircuito } from '../contacts/contactStatus';
+import {
+  obtenerRangoHorarioEfectivoContacto,
+  procesarContacto,
+  resolverFechaObjetivoContacto,
+  sonHorariosCompatiblesEnCircuito,
+} from '../contacts/contactStatus';
 import { calcularResumenKPIsPadron } from '../tasks/dailyTasks';
 import { diagnosticarYGenerarMensajeSeguimiento48h, generarMensajeContextual } from '../messaging/messageTemplates';
 import { actualizarDatosContactoEnApp } from '../sync/dataMerging';
@@ -126,7 +131,7 @@ export function esContactoConfirmadoEnLista1a1(contact: Contact): boolean {
 export function calcularHojaDeRuta(
   paradas: Contact[],
   horaSalidaStr: string = '09:40',
-  bufferMinutos: number = 10,
+  bufferMinutos: number = 9,
   profile: VoiceProfile = DEFAULT_VOICE_PROFILE,
   eventosCalendar: CalendarEventItem[] = [],
   fechaRutaDDMM?: string,
@@ -431,9 +436,9 @@ export function calcularHojaDeRuta(
           ventanaColGYaVencidaHoy);
 
       // Si es la ruta de HOY y esta parada NO es una cita ya confirmada con hora fija ni ya vencida,
-      // dejar brecha prudente (mínimo 60 min desde ahora, o 30 min si ya está confirmado sin hora puntual)
+      // dejar brecha prudente de 90 min para confirmación + preparación antes del encuentro (~75 min antes de salir)
       // para darle tiempo a la persona de confirmar y al responsable de alistarse y salir (Puntos 3 y 6).
-      const brechaMinimaHoy = esContactoConfirmadoEnLista1a1(c) ? 20 : 60;
+      const brechaMinimaHoy = esContactoConfirmadoEnLista1a1(c) ? 20 : 75;
       const minHoraSalidaHoy = Math.max(
         9 * 60 + 30,
         Math.ceil((minutosActualesBA + brechaMinimaHoy) / 15) * 15
@@ -1344,10 +1349,15 @@ export function generarCorteEstrategicoLocal(
 
     // Margen prudente para propuestas no confirmadas:
     // - Nunca proponer al inicio mismo de la jornada sin margen de preparación/confirmación (mínimo 09:45 / 10:00 hs salvo cita ya confirmada).
-    // - Si es HOY y el bloque NO está confirmado, dejar al menos 75 min desde la hora actual antes de salir.
+    // - Si es HOY y el bloque NO está confirmado, garantizar 90 minutos entre el envío de la propuesta y la hora del encuentro.
     const minSalidaHoyConMargen = Math.min(
       19 * 60,
-      Math.ceil((hoyBA.hour * 60 + hoyBA.minute + (tieneConfirmados ? 15 : 75)) / 15) * 15
+      Math.ceil(
+        (hoyBA.hour * 60 +
+          hoyBA.minute +
+          (tieneConfirmados ? 15 : Math.max(75, 90 - Math.min(20, trasladoDesdeBase)))) /
+          15
+      ) * 15
     );
 
     const minInicioOperativo = esHoy
@@ -1651,7 +1661,8 @@ export function generarCorteEstrategicoLocal(
         }
       : undefined;
 
-    const bufferPorParada = 10;
+    // Regla Calibrada: 8 a 10 minutos por parada en Puerta a Puerta (9 min promedio) para contemplar ascensor/bajada del edificio
+    const bufferPorParada = 9;
     const contactosMismoDiaRef = elegiblesAgendaConLugar.filter(
       (c) =>
         resolverFechaObjetivoContacto(c, ahoraMs) === fechaClave ||
@@ -1699,9 +1710,23 @@ export function generarCorteEstrategicoLocal(
           )
         : Math.max(30, contactosGrupo.length * 20);
 
+    // Regla Calibrada: Tiempo de permanencia en Café HUB dinámico según cantidad de vecinos (confirmados y totales) y amplitud de sus franjas
+    const confirmadosEnCafe = contactosGrupo.filter(esContactoConfirmadoEnLista1a1).length;
+    const rangosMiembros = contactosGrupo.map((c) => obtenerRangoHorarioEfectivoContacto(c));
+    const maxIniGrupo = Math.max(...rangosMiembros.map((r) => r.minIni));
+    const minFinGrupo = Math.min(...rangosMiembros.map((r) => r.minFin));
+    const amplitudVentanaComun = minFinGrupo > maxIniGrupo ? minFinGrupo - maxIniGrupo : 60;
+    const baseMinPorCantidad =
+      contactosGrupo.length <= 2
+        ? 30 + confirmadosEnCafe * 5
+        : contactosGrupo.length === 3
+        ? 40 + confirmadosEnCafe * 5
+        : contactosGrupo.length === 4
+        ? 45 + confirmadosEnCafe * 5
+        : 60;
     const duracionCafeHubMin = Math.max(
-      60,
-      Math.min(90, 45 + contactosGrupo.length * 10)
+      30,
+      Math.min(60, Math.min(baseMinPorCantidad, Math.max(30, amplitudVentanaComun)))
     );
 
     let duracionTotalMinutos = esSede
@@ -1741,7 +1766,7 @@ export function generarCorteEstrategicoLocal(
       const spanNecesario = Math.max(duracionTotalMinutos, finMinReal - iniMinReal);
       const minCandHoy =
         fechaClave === hoyBA.ddmm
-          ? Math.max(10 * 60, Math.ceil((hoyBA.hour * 60 + hoyBA.minute + 75) / 15) * 15)
+          ? Math.max(10 * 60, Math.ceil((hoyBA.hour * 60 + hoyBA.minute + 80) / 15) * 15)
           : 9 * 60 + 30;
       const candsOrdenados: number[] = [];
       for (let cand = minCandHoy; cand <= 20 * 60 + 30; cand += 15) {
@@ -1954,10 +1979,8 @@ export function generarCorteEstrategicoLocal(
       contactosOrdenadosCronologicamente.length >= 2 &&
       Boolean(mejorCafe) &&
       horasFijasDistintasCount <= 1 &&
-      mediaMinutosMejorCafe <= 14 &&
-      (contactosOrdenadosCronologicamente.length >= 3 ||
-        pidenPuntoCount >= 1 ||
-        minutosTrasladoInternoPap >= 20);
+      mediaMinutosMejorCafe <= 15 &&
+      (contactosOrdenadosCronologicamente.length >= 3 || pidenPuntoCount >= 1);
 
     const modalidadRecomendada: ModalidadEncuentroAgenda = esSede
       ? 'EVENTO_SEDE'
@@ -2049,6 +2072,7 @@ export function generarCorteEstrategicoLocal(
     centroLng: number;
     convieneCafeHub: boolean;
     modalidadAdaptadaPorConfirmacion?: ModalidadEncuentroAgenda;
+    encadenarConCafeClusterId?: string;
     fechaExplicita?: string;
     tieneAlertaVencido: boolean;
     franjaDominante: FranjaHoraria;
@@ -2063,7 +2087,8 @@ export function generarCorteEstrategicoLocal(
     miembrosSub: Contact[],
     convieneCafeDefault: boolean,
     modalidadForzada?: ModalidadEncuentroAgenda,
-    fechaExp?: string
+    fechaExp?: string,
+    encadenarConCafeClusterId?: string
   ): CircuitoParaAgendar => {
     const conteoF: Record<string, number> = {};
     let minIniComun: number | undefined;
@@ -2128,7 +2153,17 @@ export function generarCorteEstrategicoLocal(
       }
     }
 
-    // Respetar siempre la modalidad confirmada explícitamente por el vecino/usuario (incluso si es 1 persona en Café Hub)
+    // Regla Calibrada:
+    // - Si algún vecino pidió explícitamente Café HUB / Punto, o si hay >= 3 vecinos con convieneCafeDefault, usar CAFE_HUB.
+    // - Si son 2 vecinos y ninguno pidió Café HUB explícitamente, priorizar PUERTA_A_PUERTA.
+    const algunoPidioCafeSub = miembrosSub.some(
+      (c) =>
+        c.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+        c.situacion === 'PREFIERE_PUNTO' ||
+        /punto\s+de\s+encuentro|prefiere\s+(?:punto|caf[eé])|acercarme\s+a\s+un\s+caf[eé]/i.test(
+          c.comentario || ''
+        )
+    );
     const convieneCafe =
       modalidadForzada === 'CAFE_HUB'
         ? true
@@ -2136,7 +2171,7 @@ export function generarCorteEstrategicoLocal(
         ? false
         : miembrosSub.length < 2
         ? false
-        : convieneCafeDefault && miembrosSub.length >= 2;
+        : convieneCafeDefault && (miembrosSub.length >= 3 || algunoPidioCafeSub);
 
     // Resolver fecha objetivo priorizando HOY si algún miembro está pautado para HOY
     const fechasMiembros = miembrosSub
@@ -2159,6 +2194,7 @@ export function generarCorteEstrategicoLocal(
       centroLng: cLng,
       convieneCafeHub: convieneCafe,
       modalidadAdaptadaPorConfirmacion: modalidadForzada,
+      encadenarConCafeClusterId,
       fechaExplicita: fechaEfectivaSub,
       tieneAlertaVencido: miembrosSub.some((c) => Boolean(c.alertaVencido?.activa)),
       franjaDominante: franjaDom,
@@ -2216,7 +2252,8 @@ export function generarCorteEstrategicoLocal(
     const armarSubCircuito = (
       subId: string,
       miembrosSub: Contact[],
-      modalidadForzada?: ModalidadEncuentroAgenda
+      modalidadForzada?: ModalidadEncuentroAgenda,
+      encadenarConCafeClusterId?: string
     ): CircuitoParaAgendar =>
       calcularMetadatosCircuito(
         subId,
@@ -2224,27 +2261,30 @@ export function generarCorteEstrategicoLocal(
         miembrosSub,
         convieneCafeDefault,
         modalidadForzada,
-        fechaExp
+        fechaExp,
+        encadenarConCafeClusterId
       );
 
     const grupoCafeCandidato = [...pidieronCafeHub, ...sinPreferenciaForzada];
-    // Regla estricta: quien está en "3c. Prefiere Punto / Café / Sede" (pidieronCafeHub) NUNCA se mezcla en una ruta Puerta a Puerta
-    if (pidieronCafeHub.length > 0 && pidieronPuertaAPuerta.length > 0) {
-      const grupoPap = [...pidieronPuertaAPuerta, ...sinPreferenciaForzada];
-      return [
-        armarSubCircuito(`${clusterIdBase}-pap`, grupoPap, 'PUERTA_A_PUERTA'),
-        armarSubCircuito(`${clusterIdBase}-cafe`, pidieronCafeHub, 'CAFE_HUB'),
-      ];
-    }
-
+    // Regla Calibrada:
+    // Si hay un grupo que va al Café HUB (ya sea porque pidieron Café HUB o porque quedan >= 3 vecinos para el café)
+    // y otro(s) vecino(s) declinó ir al café y pidió que pasemos por su domicilio (pidieronPuertaAPuerta):
+    // -> Agendamos primero el Café HUB y encadenamos la visita a domicilio inmediatamente antes o después del horario del Café HUB
+    //    (o en el próximo hueco/día libre si no entra en ese día).
     if (
       pidieronPuertaAPuerta.length > 0 &&
-      grupoCafeCandidato.length >= 2 &&
-      sinPreferenciaForzada.length >= 3
+      (pidieronCafeHub.length > 0 || grupoCafeCandidato.length >= 3)
     ) {
+      const idCafe = `${clusterIdBase}-cafe`;
+      const grupoCafeEfectivo =
+        grupoCafeCandidato.length >= 2 ? grupoCafeCandidato : pidieronCafeHub;
+      const grupoPapEfectivo =
+        grupoCafeCandidato.length >= 2
+          ? pidieronPuertaAPuerta
+          : [...pidieronPuertaAPuerta, ...sinPreferenciaForzada];
       return [
-        armarSubCircuito(`${clusterIdBase}-cafe`, grupoCafeCandidato, 'CAFE_HUB'),
-        armarSubCircuito(`${clusterIdBase}-pap`, pidieronPuertaAPuerta, 'PUERTA_A_PUERTA'),
+        armarSubCircuito(idCafe, grupoCafeEfectivo, 'CAFE_HUB'),
+        armarSubCircuito(`${clusterIdBase}-pap`, grupoPapEfectivo, 'PUERTA_A_PUERTA', idCafe),
       ];
     }
 
@@ -2471,27 +2511,121 @@ export function generarCorteEstrategicoLocal(
           diasFuturosPreferidos.find((d) => (conteoCircuitosPorDia[d.diaBA.ddmm] || 0) < 3) ||
           diasFuturosPreferidos[idx % diasFuturosPreferidos.length];
 
-    conteoCircuitosPorDia[diaElegido.diaBA.ddmm] =
-      (conteoCircuitosPorDia[diaElegido.diaBA.ddmm] || 0) + 1;
-
     const modalidadCirc: ModalidadEncuentroAgenda =
       circ.modalidadAdaptadaPorConfirmacion ||
       (circ.convieneCafeHub ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
     const duracionEst =
       modalidadCirc === 'PUERTA_A_PUERTA'
-        ? Math.max(35, circ.miembros.length * 22)
-        : Math.max(60, Math.min(90, 45 + circ.miembros.length * 10));
+        ? Math.max(25, circ.miembros.length * 20)
+        : Math.max(30, Math.min(60, 30 + circ.miembros.length * 8));
 
-    const slot = encontrarVentanaDiurnaSinChoqueCalendar({
-      diaInfo: diaElegido,
-      duracionMin: duracionEst,
-      franjaPreferida: circ.franjaDominante,
-      latBarrio: circ.centroLat,
-      lngBarrio: circ.centroLng,
-      ventanaColumnaG: circ.ventanaColumnaGComun,
-      horaPuntualPreferida: circ.horaPuntualMasTemprana,
-      tieneConfirmados: tieneConfirmadosCirc,
-    });
+    // Regla Calibrada Protocolo Café HUB -> Pasa a Domicilio:
+    // Si este bloque Puerta a Puerta proviene de alguien que rechazó el Café HUB del mismo barrio,
+    // intentar primero ubicarlo inmediatamente ANTES o DESPUÉS del horario del Café HUB en ese mismo día;
+    // si no hay espacio en el día, separarlo automáticamente en el siguiente hueco libre del día o del próximo día disponible de esa persona.
+    let horaSalidaEncadenada: string | undefined;
+    let notaEncadenada: string | undefined;
+
+    if (circ.encadenarConCafeClusterId) {
+      const bloqueCafeHermano = agendaSugeridaDias.find(
+        (b) => b.clusterIdVinculado === circ.encadenarConCafeClusterId
+      );
+      const diaCafe = bloqueCafeHermano
+        ? diasOperativos.find((d) => d.diaBA.ddmm === bloqueCafeHermano.fechaClave)
+        : undefined;
+      if (bloqueCafeHermano && diaCafe) {
+        const cafeRef = bloqueCafeHermano.cafesHubOpciones?.[0];
+        const minTrasladoAlCafe = cafeRef
+          ? estimarMinutosCaminandoCABA(circ.centroLat, circ.centroLng, cafeRef.lat, cafeRef.lng).minutosCaminando
+          : 10;
+        const iniCafeMin = horaAMinutosDelDia(bloqueCafeHermano.horaInicioCalculada || '15:00');
+        const finCafeMin = horaAMinutosDelDia(bloqueCafeHermano.horaFinCalculada || '16:00');
+        const ocupadosDiaCafe = intervalosOcupadosPorDia[diaCafe.diaBA.ddmm] || [];
+        const ventanaVecino = circ.ventanaColumnaGComun;
+
+        const cabeEnHueco = (iniCand: number, finCand: number) => {
+          if (iniCand < 9 * 60 || finCand > 20 * 60 + 15) return false;
+          if (ventanaVecino && (iniCand < ventanaVecino.minIni - 15 || finCand > ventanaVecino.minFin + 15)) {
+            return false;
+          }
+          const chocaOcupado = ocupadosDiaCafe.some((oc) => iniCand < oc.fin + 2 && finCand + 2 > oc.ini);
+          if (chocaOcupado) return false;
+          const chocaCal = diaCafe.eventos.some((ev) => {
+            const evI = horaAMinutosDelDia(ev.startTime);
+            const evF = horaAMinutosDelDia(ev.endTime);
+            return iniCand < evF + 10 && finCand + 15 > evI;
+          });
+          return !chocaCal;
+        };
+
+        // Opción A: Inmediatamente DESPUÉS del Café HUB (saliendo del café hacia el domicilio)
+        const iniDespues = finCafeMin;
+        const finDespues = iniDespues + minTrasladoAlCafe + circ.miembros.length * 10;
+        // Opción B: Inmediatamente ANTES del Café HUB (pasando por el domicilio y caminando al café)
+        const finAntes = iniCafeMin - minTrasladoAlCafe;
+        const iniAntes = finAntes - (circ.miembros.length * 10 + 10);
+
+        if (cabeEnHueco(iniDespues, finDespues)) {
+          diaElegido = diaCafe;
+          horaSalidaEncadenada = sumarMinutosAHora('00:00', iniDespues);
+          notaEncadenada = `✓ Visita a domicilio encadenada inmediatamente después del Café HUB (${bloqueCafeHermano.horaInicioCalculada}-${bloqueCafeHermano.horaFinCalculada} hs), contemplando ~${minTrasladoAlCafe} min a pie desde el café.`;
+        } else if (cabeEnHueco(iniAntes, finAntes)) {
+          diaElegido = diaCafe;
+          horaSalidaEncadenada = sumarMinutosAHora('00:00', Math.max(9 * 60, iniAntes));
+          notaEncadenada = `✓ Visita a domicilio encadenada inmediatamente antes del Café HUB (${bloqueCafeHermano.horaInicioCalculada}-${bloqueCafeHermano.horaFinCalculada} hs), contemplando ~${minTrasladoAlCafe} min a pie hacia el café.`;
+        } else {
+          // Si no entra pegado al Café HUB, buscar otro hueco en el mismo día o pasar al próximo día disponible de esa persona
+          const slotMismoDia = encontrarVentanaDiurnaSinChoqueCalendar({
+            diaInfo: diaCafe,
+            duracionMin: duracionEst,
+            franjaPreferida: circ.franjaDominante,
+            latBarrio: circ.centroLat,
+            lngBarrio: circ.centroLng,
+            ventanaColumnaG: circ.ventanaColumnaGComun,
+            horaPuntualPreferida: circ.horaPuntualMasTemprana,
+            tieneConfirmados: tieneConfirmadosCirc,
+          });
+          if (!slotMismoDia.chocaForzado) {
+            diaElegido = diaCafe;
+            horaSalidaEncadenada = slotMismoDia.horaInicio;
+            notaEncadenada = slotMismoDia.notaCalendar;
+          } else {
+            const proximoDiaVecino =
+              diasOperativos
+                .slice(1)
+                .find(
+                  (d) =>
+                    d.diaBA.ddmm !== diaCafe.diaBA.ddmm &&
+                    (circ.miembros.every((m) => m.fechasMencionadas.length === 0) ||
+                      circ.miembros.some((m) => m.fechasMencionadas.includes(d.diaBA.ddmm)))
+                ) ||
+              diasOperativos.find((d) => d.diaBA.ddmm !== diaCafe.diaBA.ddmm) ||
+              diaElegido;
+            diaElegido = proximoDiaVecino;
+          }
+        }
+      }
+    }
+
+    conteoCircuitosPorDia[diaElegido.diaBA.ddmm] =
+      (conteoCircuitosPorDia[diaElegido.diaBA.ddmm] || 0) + 1;
+
+    const slot = horaSalidaEncadenada
+      ? {
+          horaInicio: horaSalidaEncadenada,
+          notaCalendar: notaEncadenada || `✓ Horario coordinado para el ${diaElegido.diaBA.ddmm}.`,
+          chocaForzado: false,
+        }
+      : encontrarVentanaDiurnaSinChoqueCalendar({
+          diaInfo: diaElegido,
+          duracionMin: duracionEst,
+          franjaPreferida: circ.franjaDominante,
+          latBarrio: circ.centroLat,
+          lngBarrio: circ.centroLng,
+          ventanaColumnaG: circ.ventanaColumnaGComun,
+          horaPuntualPreferida: circ.horaPuntualMasTemprana,
+          tieneConfirmados: tieneConfirmadosCirc,
+        });
 
     const etiquetaDiaLimpia =
       diaElegido.prefijo === 'HOY' || diaElegido.prefijo === 'MAÑANA'
