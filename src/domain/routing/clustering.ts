@@ -101,21 +101,38 @@ export function construirMicroClusters(
       if (fechaContacto && g.fechaExplicita && fechaContacto !== g.fechaExplicita) {
         continue;
       }
-      // Si uno tiene fecha de HOY y el otro no tiene fecha, sólo agrupar si comparten el mismo turno
+      // Si el contacto tiene fechas explícitas cargadas (ej. 12/11 al 13/11) y algún miembro del grupo tiene fechas explícitas sin intersección, no mezclarlos
+      if (c.fechasMencionadas.length > 0) {
+        const miembrosConFechas = g.miembros.filter((m) => m.fechasMencionadas.length > 0);
+        if (
+          miembrosConFechas.length > 0 &&
+          !miembrosConFechas.every((m) =>
+            m.fechasMencionadas.some((f) => c.fechasMencionadas.includes(f))
+          )
+        ) {
+          continue;
+        }
+      }
+      // Si uno tiene fecha de HOY y el otro tiene fechas explícitas que NO incluyen HOY, jamás agruparlos
       if (
-        (fechaContacto === hoyBA.ddmm && g.fechaExplicita && g.fechaExplicita !== hoyBA.ddmm) ||
-        (g.fechaExplicita === hoyBA.ddmm && fechaContacto && fechaContacto !== hoyBA.ddmm)
+        (fechaContacto === hoyBA.ddmm &&
+          ((g.fechaExplicita && g.fechaExplicita !== hoyBA.ddmm) ||
+            g.miembros.some((m) => m.fechasMencionadas.length > 0 && !m.fechasMencionadas.includes(hoyBA.ddmm)))) ||
+        (g.fechaExplicita === hoyBA.ddmm &&
+          ((fechaContacto && fechaContacto !== hoyBA.ddmm) ||
+            (c.fechasMencionadas.length > 0 && !c.fechasMencionadas.includes(hoyBA.ddmm))))
       ) {
         continue;
       }
-      // No mezclar citas estrictas de la Mañana/Mediodía ('AM') con citas estrictas de la Tarde/Noche ('PM')
-      // ni ventanas horarias que no tengan intersección real (ej: 10:00 hs o 9-16 hs con 17:30 hs)
+      // Si NO es el bloque de HOY, no mezclar citas estrictas de la Mañana/Mediodía ('AM') con citas estrictas de la Tarde/Noche ('PM')
+      const esGrupoHoy = fechaContacto === hoyBA.ddmm || g.fechaExplicita === hoyBA.ddmm;
       if (
-        (turnoContacto !== 'FLEX' &&
+        !esGrupoHoy &&
+        ((turnoContacto !== 'FLEX' &&
           g.turnoGrupo &&
           g.turnoGrupo !== 'FLEX' &&
           turnoContacto !== g.turnoGrupo) ||
-        !sonHorariosCompatiblesEnCircuito(g.miembros, c)
+          !sonHorariosCompatiblesEnCircuito(g.miembros, c))
       ) {
         continue;
       }
@@ -180,8 +197,17 @@ export function construirMicroClusters(
 
       const cafeHubBarrio = profile.cafesPorBarrio[barrioPrincipal];
 
-      // Buscar los Cafés HUB oficiales de la lista de Google Maps del usuario más cercanos al centroide real del circuito
-      const cafesOficialesCercanos = listarCafesHubCercanos(g.centroLat, g.centroLng, 4, true);
+      // Buscar los Cafés HUB oficiales de la lista de Google Maps del usuario que estén a <= 15 min caminando de TODOS los miembros del grupo
+      const seleccionCafesCluster = seleccionarCafesHubPorCercaniaYFranja(
+        g.miembros,
+        barrioPrincipal,
+        g.fechaExplicita || hoyBA.ddmm,
+        profile
+      );
+      const cafesOficialesCercanos =
+        seleccionCafesCluster.cafesRanking.length > 0
+          ? seleccionCafesCluster.cafesRanking
+          : listarCafesHubCercanos(g.centroLat, g.centroLng, 4, true);
       const cafeOficialPrincipal = cafesOficialesCercanos[0];
 
       // Buscar la intersección o Café HUB conocido más cercano al centroide
@@ -223,8 +249,13 @@ export function construirMicroClusters(
         new Set([...fechasResueltas, ...g.miembros.flatMap((m) => m.fechasMencionadas).filter(Boolean)])
       );
       const fechaPrincipal = g.fechaExplicita || fechasAgrupadas[0] || '';
+      const miembrosConGeoExacta = g.miembros.filter((m) => m.tieneCoordenadasExactas !== false);
+      // REGLA ESTRICTA PUNTOS 4 Y 7: Un Café HUB sólo se recomienda si agrupa >= 2 personas con dirección geocodificada exacta
+      // y NINGUNA de ellas tiene que caminar más de 15 minutos hasta el café propuesto.
       const convieneCafeHub =
-        g.miembros.length >= 2 && maxMinutos <= maxMinutosRadio + 6;
+        g.miembros.length >= 2 &&
+        miembrosConGeoExacta.length >= 2 &&
+        maxMinutos <= 15;
 
       const modalidadRecomendadaAgenda: ModalidadEncuentroAgenda = convieneCafeHub
         ? 'CAFE_HUB'

@@ -214,7 +214,7 @@ export const ModernSettingsView: React.FC<ModernSettingsViewProps> = ({
     inferirBarrioDesdeTextoCABA(localProfile.direccionPartida) || 'Palermo';
 
   return (
-    <div className="mx-auto w-full max-w-5xl min-w-0 overflow-x-hidden px-3 sm:px-6 py-4 sm:py-6 space-y-5 sm:space-y-6">
+    <div className="mx-auto w-full max-w-5xl min-w-0 overflow-x-clip px-3 sm:px-6 py-4 sm:py-6 space-y-5 sm:space-y-6">
       {/* Header Popurrí */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white border-2 border-[#323232] rounded-2xl p-4 sm:p-5 shadow-[4px_4px_0px_#323232]">
         <div>

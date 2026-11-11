@@ -1,4 +1,10 @@
-import { analizarDisponibilidadColumnaG } from '../calendar/availability';
+import {
+  analizarDisponibilidadColumnaG,
+  compararFechaDDMMConHoyBA,
+  extraerFechasMencionadas,
+  obtenerPartesFechaHoraBA,
+  sumarDiasAFechaBA,
+} from '../calendar/availability';
 import { EstadoFlujo, FranjaHoraria, SituacionContacto } from '../../types';
 import {
   Contact,
@@ -9,6 +15,7 @@ import {
 } from '../../types';
 import { DEFAULT_VOICE_PROFILE } from '../../data/estatusPopurriData';
 import { extraerPrimerNombre } from '../contacts/nameCorrection';
+import { extraerCalleOCruce } from '../geo/cabaLocations';
 import {
   describirCafeConDistanciaDesdeContacto,
   OpcionesCafeMensaje,
@@ -18,10 +25,6 @@ import {
   corregirPelonesDiaSemanaEnTexto,
   postProcesarMensajeAntiPelonesYSaludo,
 } from './greetingsAndTone';
-import {
-  obtenerPartesFechaHoraBA,
-  sumarDiasAFechaBA,
-} from '../calendar/availability';
 
 export function generarMensajeContextual(
   contact: {
@@ -57,7 +60,14 @@ export function generarMensajeContextual(
   const { incluirCafe, fraseCafe, horarioCafe } = infoCafe;
 
   const dir = contact.calleOCruce || contact.barrio || 'tu zona';
-  const fechaCitada = contact.fechasMencionadas[0] || 'esta semana';
+  const hoyBA = obtenerPartesFechaHoraBA(extra?.ahoraMs ?? Date.now());
+  const fechaVigente = contact.fechasMencionadas.find(
+    (f) => compararFechaDDMMConHoyBA(f, hoyBA) >= 0
+  );
+  const fechaCitada =
+    fechaVigente ||
+    contact.fechasMencionadas[contact.fechasMencionadas.length - 1] ||
+    'esta semana';
 
   // Posdata sutil anti-fraude para cuando falta el nombre en cualquier mensaje de seguimiento
   const posdataSutilNombre = esSinNombre
@@ -593,7 +603,16 @@ export function diagnosticarYGenerarMensajeSeguimiento48h(
     adh === 'si' ||
     params.situacion === 'DESCARTADO_NO_CABA' ||
     params.situacion === 'NUEVO_SIN_PRIMER_MENSAJE' ||
-    params.esVisitaConcretadaORetiro
+    params.esVisitaConcretadaORetiro ||
+    params.estadoFlujo === 'PASO_DATOS_FALTA_CONFIRMAR' ||
+    params.estadoFlujo === 'ENCUENTRO_CONFIRMADO' ||
+    params.estadoFlujo === 'RECORDATORIO_DIA_ENVIADO' ||
+    params.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ||
+    params.estadoFlujo === 'POSTERGO_SALUD_O_VIAJE' ||
+    params.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK' ||
+    params.estadoFlujo === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO' ||
+    params.estadoFlujo === 'SIN_DNI_CABA_PEDIR_REFERIDOS' ||
+    params.estadoFlujo === 'DESCARTADO_O_BAJA'
   ) {
     return undefined;
   }
@@ -833,100 +852,258 @@ export function adaptarMensajeConRespuestaVecinoLocal(
   const saludo = contact.sinNombre
     ? 'Hola, ¿cómo estás?'
     : `Hola, ${contact.primerNombre}, ¿cómo estás?`;
-  const lugar = contact.calleOCruce || contact.barrio || 'tu zona';
+  const calleExistente = (contact.calleOCruce || '').trim();
+  const calleExtraidaDeRespuesta = extraerCalleOCruce(instruccion);
+  const calleEfectiva = calleExtraidaDeRespuesta || calleExistente;
+  const tieneCalleReal = Boolean(calleEfectiva && calleEfectiva.length > 0);
+  const lugar = calleEfectiva || contact.barrio || 'tu zona';
   const infoCafe = describirCafeConDistanciaDesdeContacto(contact, profile);
   const posdataNombre = contact.sinNombre
     ? '\n\n_(De paso, recordame por acá tu nombre y apellido así te agendo bien en la planilla)_.'
     : '';
   const finalizar = (txt: string) => aplicarReglaSaludoMismoDia(txt, contact, 'AUTO_MISMO_DIA');
 
+  if (!instruccion) {
+    return finalizar(baseMsg);
+  }
+
   // 1) Si pide acortar en 2-3 líneas directas
   if (/acort[aá]r|m[aá]s\s+corto|2-3\s+l[ií]neas|2\s+oraciones|breves|resum/i.test(instruccion)) {
     if (contact.alertaVencido?.activa) {
-      return finalizar(`${saludo} Te pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}*. ¿Qué día y franja horaria de esta semana te queda cómodo para reprogramar esos 2 minutos con tu DNI físico de CABA?${posdataNombre}`);
+      return finalizar(
+        `${saludo} Te pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}*. ¿Qué día y franja horaria de esta semana te queda cómodo para reprogramar esos 2 minutos con tu DNI físico de CABA?${posdataNombre}`
+      );
     }
-    if (contact.tienePuntoEncuentroDeterminado) {
+    if (tieneCalleReal || contact.tienePuntoEncuentroDeterminado) {
       return finalizar(
         infoCafe.incluirCafe
           ? `${saludo} Estoy organizando el recorrido por ${contact.barrio}: ¿te queda bien que pase 2 minutos por *${lugar}* o preferís que nos veamos en ${infoCafe.fraseCafe}? Recordá tener a mano el DNI físico de CABA.${posdataNombre}`
           : `${saludo} Estoy organizando el recorrido por ${contact.barrio}: ¿en qué día y horario te queda cómodo que pase 2 minutos por *${lugar}* para la firma de adhesión con tu DNI físico de CABA?${posdataNombre}`
       );
     }
-    return finalizar(`${saludo} Soy ${profile.nombrePromotor} (${profile.espacioPolitico}). Para coordinar los 2 minutos de tu firma de adhesión en ${contact.barrio} con DNI físico de CABA, ¿por qué calle/esquina y en qué franja horaria te queda más cómodo?${posdataNombre}`);
+    return finalizar(
+      `${saludo} Soy ${profile.nombrePromotor} (${profile.espacioPolitico}). Para coordinar los 2 minutos de tu firma de adhesión en ${contact.barrio} con DNI físico de CABA, ¿por qué calle/esquina y en qué franja horaria te queda más cómodo?${posdataNombre}`
+    );
   }
 
-  // 2) Analizar qué respondió o pidió la persona en `instruccion`
+  // 2) Consulta por firma online / digital / virtual / PDF (con o sin viaje)
+  const preguntaFirmaOnline =
+    /\b(firm[aáo]\s+online|firma\s+digital|firmar\s+digital|virtual|por\s+internet|por\s+mail|pdf|a\s+distancia|remoto)\b/i.test(
+      instruccion
+    );
+  const mencionaViajeOAfuera =
+    /\b(de\s+viaje|viajando|por\s+el\s+mundo|exterior|afuera|costa\s+rica|espa[ñn]a|europa|estados\s+unidos|ee\.?uu|brasil|uruguay|no\s+vuelvo|hasta\s+(?:el\s+)?202[789]|no\s+estoy\s+en\s+(?:argentina|buenos\s+aires|caba|capital))\b/i.test(
+      instruccion
+    );
+  const esViajeLargo =
+    /\b(no\s+vuelvo\s+hasta|202[789]|por\s+el\s+mundo|vivo\s+en\s+el\s+exterior|me\s+mud[eé]|radicad[oa]\s+en)\b/i.test(
+      instruccion
+    );
+
+  if (preguntaFirmaOnline) {
+    if (mencionaViajeOAfuera || esViajeLargo) {
+      return finalizar(
+        `${saludo}\n\n¡Qué buen plan ese viaje, que lo disfrutes muchísimo! Te agradezco de corazón la voluntad de sumarte. Lamentablemente para esta etapa la Justicia Electoral nos exige que la firma sea presencial en la planilla de papel y con el DNI físico de CABA en mano (no nos toman firma online ni digital).\n\nSi tenés algún familiar, amigo o vecino acá en CABA que creas que se pueda copar en apoyarnos con su firma, pasame su contacto o mi número y me acerco. ¡Muchas gracias igual por la buena onda y muy buen viaje!${posdataNombre}`
+      );
+    }
+    return finalizar(
+      `${saludo}\n\nMuchas gracias por la predisposición. Te cuento que para este paso la Justicia Electoral nos exige la firma ológrafa en la ficha de papel con el DNI físico de CABA (todavía no habilitan firma online/digital para adhesiones).\n\nJustamente para que no tengas que trasladarte ni perder tiempo, yo me acerco 2 minutos por la esquina o puerta que te quede más cómoda en *${contact.barrio || 'tu zona'}*${infoCafe.incluirCafe ? ` (o nos vemos en ${infoCafe.fraseCafe})` : ''}. ¿Qué día y horario te viene bien?${posdataNombre}`
+    );
+  }
+
+  // 3) Está de viaje o fuera de CABA temporalmente (sin preguntar por firma online)
+  if (mencionaViajeOAfuera || /\b(vuelvo\s+el|regreso\s+el|reci[eé]n\s+vuelvo|vuelvo\s+la\s+semana)\b/i.test(instruccion)) {
+    if (esViajeLargo) {
+      return finalizar(
+        `${saludo}\n\n¡Qué lindo viaje, que lo disfrutes un montón! Como la firma de adhesión tiene que hacerse en papel acá en CABA con DNI físico, te dejo liberado/a por ahora.\n\nSi tenés algún familiar o amigo con DNI en CABA que le interese sumarse, avisame y lo contacto. ¡Muchas gracias por responderme y muy buen viaje!${posdataNombre}`
+      );
+    }
+    const fechasRegreso = extraerFechasMencionadas(instruccion);
+    const matchDiaRegreso = instruccion.match(
+      /\b(?:vuelvo|regreso|estoy\s+de\s+vuelta)\s+(?:el\s+|reci[eé]n\s+el\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|la\s+semana\s+que\s+viene|en\s+[a-záéíóúñ]+(?:\s+de\s+\d{4})?)/i
+    );
+    const refRegreso = fechasRegreso.length > 0
+      ? `después del *${fechasRegreso[fechasRegreso.length - 1]}*`
+      : matchDiaRegreso
+      ? `cuando vuelvas (*${matchDiaRegreso[1]}*)`
+      : 'cuando estés de vuelta por CABA';
+    return finalizar(
+      `${saludo}\n\nBuenísimo, gracias por avisarme y que tengas muy buen viaje. Cero apuro: ya mismo me anoto acá para volver a escribirte ${refRegreso} así coordinamos esos 2 minutos por *${lugar}* cuando ya estés instalado/a. ¡Que disfrutes!${posdataNombre}`
+    );
+  }
+
+  // 4) Situación de salud / familiar / postergación
+  if (/\b(enferm[oa]|internad[oa]|operaci[oó]n|m[eé]dico|salud| Gripe|fiebre|cuidando\s+a)\b/i.test(instruccion)) {
+    return finalizar(
+      `${saludo}\n\nNo te preocupes para nada, primero está la salud y la familia. Ojalá se recuperen muy pronto.\n\nLo dejamos en pausa sin ningún apuro y más adelante, cuando estés más tranquilo/a, me avisás y me acerco 2 minutos por *${lugar}*. ¡Te mando un abrazo!${posdataNombre}`
+    );
+  }
+
+  // 5) No tiene DNI en CABA / vive en Provincia u otro municipio
+  if (
+    /\b(no\s+tengo\s+(?:dni|domicilio)\s+en\s+caba|tengo\s+(?:dni|domicilio)\s+en\s+provincia|soy\s+de\s+provincia|vivo\s+en\s+provincia|no\s+voto\s+en\s+caba|domicilio\s+fuera\s+de\s+caba|cambi[eé]\s+el\s+domicilio)\b/i.test(
+      instruccion
+    )
+  ) {
+    return finalizar(
+      `${saludo}\n\n¡Qué lástima! Para esta etapa la Justicia Electoral nos exige que el último domicilio impreso en el DNI físico sea de CABA.\n\nDe todas formas, si tenés algún familiar, amigo o compañero de trabajo con DNI en CABA que quiera darnos una mano firmando la adhesión para constituir el partido (*${profile.partidoLegal}*), pasame su contacto o dale mi número. ¡Muchas gracias igual por la buena predisposición!${posdataNombre}`
+    );
+  }
+
+  // 6) Solicita baja / no quiere firmar / número equivocado
+  if (
+    /\b(no\s+me\s+interesa|dame\s+de\s+baja|no\s+quiero\s+firmar|no\s+voy\s+a\s+firmar|n[uú]mero\s+equivocado|no\s+complet[eé]|no\s+me\s+escribas)\b/i.test(
+      instruccion
+    )
+  ) {
+    return finalizar(
+      `${saludo}\n\nNo te hagas ningún problema, te agradezco por avisarme. Ya mismo te doy de baja de mi listado para no volver a molestarte. ¡Que tengas muy buena semana!`
+    );
+  }
+
+  // 7) Menciona que firma con una amiga / pareja / familiar o que ya quedó con alguien
+  if (/\b(amig[oa]|pareja|marido|espos[oa]|hermano|hermana|vecin[oa]|somos\s+dos|dos\s+personas|qued[eé]\s+con\s+ella)\b/i.test(instruccion)) {
+    const dispAmiga = analizarDisponibilidadColumnaG(instruccion);
+    const fechasAmiga = extraerFechasMencionadas(instruccion);
+    const mDiaSem = instruccion.match(/\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/i);
+    const refDia = fechasAmiga.length > 0
+      ? `el *${fechasAmiga[0]}*`
+      : mDiaSem
+      ? `este *${mDiaSem[1].toLowerCase()}*`
+      : 'en el día que les quede cómodo';
+    const refHora = dispAmiga.horaPuntualPactada
+      ? ` a las *${dispAmiga.horaPuntualPactada} hs*`
+      : dispAmiga.etiquetaVentana
+      ? ` (${dispAmiga.etiquetaVentana})`
+      : '';
+    return finalizar(
+      tieneCalleReal
+        ? `${saludo}\n\n¡Qué alegría que se sumen juntos/as! Llevo fichas extra entonces para que puedan firmar los dos en el momento (acordate sólo de que ambos tengan su DNI físico con domicilio en CABA).\n\n¿Les queda bien que pase 2 minutos por *${calleEfectiva}* ${refDia}${refHora} o en qué horario les resulta más cómodo?${posdataNombre}`
+        : `${saludo}\n\n¡Qué bueno que se sume tu amiga también! Llevo fichas extra así firman las dos en 2 minutos (sólo hace falta que ambas tengan el DNI físico con domicilio en CABA).\n\n¿Por qué *calle y altura o esquina* de *${contact.barrio || 'la zona'}* y en qué *horario* de ${refDia} les queda cómodo que me acerque?${posdataNombre}`
+    );
+  }
+
+  // 8) Pide más información / consulta de qué se trata Popurrí
+  if (
+    /\b(m[aá]s\s+info|informaci[oó]n|de\s+qu[eé]\s+se\s+trata|qui[eé]nes\s+son|qu[eé]\s+proponen|propuestas|no\s+recuerdo|recordame)\b/i.test(
+      instruccion
+    )
+  ) {
+    const msgInfo = generarMensajeContextual(contact, profile, 'mas_info');
+    return msgInfo.texto;
+  }
+
+  // 9) Pregunta por oficinas / sede / ir a un punto / qué dirección en el barrio
+  if (
+    /\b(oficinas?|sede|chile\s*1408|ir\s+a\s+firmar|pasar\s+a\s+firmar|qu[eé]\s+direcci[oó]n\s+de|d[oó]nde\s+est[aá]n|punto\s+de\s+encuentro)\b/i.test(
+      instruccion
+    )
+  ) {
+    const mencionaOficinaOSede = /\b(oficinas?|sede|chile\s*1408|centro)\b/i.test(instruccion);
+    return finalizar(
+      mencionaOficinaOSede
+        ? `${saludo}\n\n¡Buenísimo! Nuestra sede central está en *Chile 1408* (Monserrat, donde nos reunimos los miércoles de 18:30 a 20:00 hs), pero como esta semana voy a estar recorriendo *${contact.barrio || 'tu barrio'}*, si te resulta más práctico me acerco yo 2 minutos por tu cuadra o nos vemos en ${infoCafe.incluirCafe ? infoCafe.fraseCafe : `una esquina de *${contact.barrio}*`}.\n\n¿Por qué *calle/altura o esquina* de *${contact.barrio || 'la zona'}* y en qué *día y franja horaria* te queda más cómodo? (Acordate sólo de tener el DNI físico de CABA).${posdataNombre}`
+        : `${saludo}\n\nPara que te sea súper cómodo y no tengas que trasladarte lejos, organizo el recorrido por *${contact.barrio || 'el barrio'}* acercándome 2 minutos a la puerta o esquina que te quede más a mano${infoCafe.incluirCafe ? ` (o si preferís un punto fijo, también nos encontramos en ${infoCafe.fraseCafe})` : ''}.\n\n¿Por qué *calle/altura o esquina* andás y qué *día y franja horaria* te viene mejor esta semana?${posdataNombre}`
+    );
+  }
+
+  // 10) Analizar disponibilidad (día, horario, calle/esquina) pasada por la persona
   const disp = analizarDisponibilidadColumnaG(instruccion);
-  const fechasEncontradas = Array.from(
-    new Set((instruccion.match(/\b(\d{1,2}\/\d{1,2})\b/g) || []).map((f) => f.trim()))
+  const fechasEncontradas = extraerFechasMencionadas(instruccion);
+  const mencionaManiana = /\bma[ñn]ana\b/i.test(instruccion) && !/\bpor\s+la\s+ma[ñn]ana\b/i.test(instruccion);
+  const matchDiaSemana = instruccion.match(
+    /\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/i
   );
-  const mencionaManiana = /\bma[ñn]ana\b/i.test(instruccion);
-  const mencionaJueves = /\bjueves\b/i.test(instruccion);
-  const mencionaViernes = /\bviernes\b/i.test(instruccion);
-  const mencionaSabado = /\bs[aá]bado\b/i.test(instruccion);
-  const mencionaLunes = /\blunes\b/i.test(instruccion);
-  const prefiereDomicilio = /\b(casa|domicilio|puerta|ac[aá]|edificio|timbre|pasar\s+por)\b/i.test(instruccion);
-  const prefiereCafe = /\b(caf[eé]|bar|confiter[ií]a|punto\s+de\s+encuentro)\b/i.test(instruccion);
-  const pideDisculpasCompromiso = /\b(disculp|responsabilidad|compromiso|no\s+pude|reprogram)\b/i.test(instruccion);
+  const prefiereDomicilio = /\b(casa|domicilio|puerta|ac[aá]|edificio|timbre|pasar\s+por)\b/i.test(
+    instruccion
+  );
+  const prefiereCafe = /\b(caf[eé]|bar|confiter[ií]a)\b/i.test(instruccion);
+  const pideDisculpasCompromiso = /\b(disculp|responsabilidad|compromiso|no\s+pude|reprogram)\b/i.test(
+    instruccion
+  );
+
+  const tieneDiaEnRespuesta =
+    fechasEncontradas.length > 0 || mencionaManiana || Boolean(matchDiaSemana);
+  const tieneHorarioEnRespuesta =
+    Boolean(disp.horaPuntualPactada) ||
+    Boolean(disp.esVentanaAmplia) ||
+    /\b(tarde|ma[ñn]ana|mediod[ií]a|\d{1,2}\s*hs)\b/i.test(instruccion);
 
   const diaTexto =
-    fechasEncontradas.length > 0
+    fechasEncontradas.length > 1
+      ? `entre el *${fechasEncontradas[0]}* y el *${fechasEncontradas[fechasEncontradas.length - 1]}*`
+      : fechasEncontradas.length === 1
       ? `el *${fechasEncontradas[0]}*`
       : mencionaManiana
       ? '*mañana*'
-      : mencionaJueves
-      ? 'el *jueves*'
-      : mencionaViernes
-      ? 'el *viernes*'
-      : mencionaSabado
-      ? 'el *sábado*'
-      : mencionaLunes
-      ? 'el *lunes*'
-      : 'en estos días';
+      : matchDiaSemana
+      ? `el *${matchDiaSemana[1].toLowerCase()}*`
+      : contact.diasEncuentro
+      ? `el *${contact.diasEncuentro}*`
+      : '';
 
   const horarioTexto = disp.horaPuntualPactada
     ? `alrededor de las *${disp.horaPuntualPactada} hs*`
     : disp.etiquetaVentana
-    ? `dentro de la franja de *${disp.etiquetaVentana}*`
+    ? `en la franja de *${disp.etiquetaVentana}*`
     : /\btarde\b/i.test(instruccion)
     ? 'por la *tarde*'
-    : /\bma[ñn]ana\b/i.test(instruccion) && !mencionaManiana
+    : /\bpor\s+la\s+ma[ñn]ana\b/i.test(instruccion)
     ? 'por la *mañana*'
     : /\bmediod[ií]a\b/i.test(instruccion)
     ? 'al *mediodía*'
+    : contact.horarioEncuentro
+    ? `en el horario de *${contact.horarioEncuentro}*`
     : '';
 
   if (pideDisculpasCompromiso) {
     return finalizar(
       infoCafe.incluirCafe && !prefiereDomicilio
-        ? `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que lo reprogramemos para ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} pasando 2 minutos por *${lugar}*, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.${posdataNombre}`
-        : `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que pase 2 minutos por *${lugar}* ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''}? Gracias.${posdataNombre}`
+        ? `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que lo reprogramemos${diaTexto ? ` para ${diaTexto}` : ''}${horarioTexto ? ` ${horarioTexto}` : ''} pasando 2 minutos por *${lugar}*, o preferís que nos encontremos en ${infoCafe.fraseCafe}? Gracias.${posdataNombre}`
+        : `${saludo}\n\nTe pido disculpas porque no pude cumplir con nuestro compromiso de pasar por *${lugar}* como teníamos previsto.\n\nPara adaptarme a tu disponibilidad, ¿te queda bien que pase 2 minutos por *${lugar}*${diaTexto ? ` ${diaTexto}` : ''}${horarioTexto ? ` ${horarioTexto}` : ''}? Gracias.${posdataNombre}`
     );
   }
 
   if (prefiereCafe && infoCafe.incluirCafe) {
-    return finalizar(`${saludo}\n\nPerfecto, gracias por avisarme. Agendamos entonces para vernos ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} en ${infoCafe.fraseCafe} (son sólo 2 minutos con tu DNI físico con domicilio en CABA). Te escribo un ratito antes de estar ahí. Gracias.${posdataNombre}`);
+    return finalizar(
+      `${saludo}\n\nPerfecto, gracias por avisarme. Agendamos entonces para vernos${diaTexto ? ` ${diaTexto}` : ''}${horarioTexto ? ` ${horarioTexto}` : ''} en ${infoCafe.fraseCafe} (son sólo 2 minutos con tu DNI físico con domicilio en CABA). Te escribo un ratito antes de estar ahí. Gracias.${posdataNombre}`
+    );
   }
 
+  // Caso A: Pasó horario o día, pero AÚN NO tenemos calle/altura ni esquina concreta (ej. "disponible a partir de las 18hs por Palermo o Saavedra")
+  if (!tieneCalleReal && (tieneHorarioEnRespuesta || tieneDiaEnRespuesta)) {
+    const resumenDisponibilidad = [diaTexto, horarioTexto].filter(Boolean).join(' ');
+    return finalizar(
+      `${saludo}\n\n¡Buenísimo, gracias por responderme! Me anoto tu disponibilidad ${resumenDisponibilidad || `por *${contact.barrio || 'la zona'}*`}.\n\nPara poder armar el recorrido y acercarme esos 2 minutos (acordate de tener el DNI físico con domicilio en CABA): ¿por qué *calle y altura o esquina de referencia* de *${contact.barrio || 'tu zona'}*${!diaTexto ? ' y qué *día de esta semana*' : ''} te queda más cómodo que pase?${posdataNombre}`
+    );
+  }
+
+  // Caso B: Tiene calle/esquina real (en ficha o recién extraída) + algún dato de día/horario
   if (
-    prefiereDomicilio ||
-    disp.horaPuntualPactada ||
-    disp.esVentanaAmplia ||
-    fechasEncontradas.length > 0 ||
-    mencionaManiana ||
-    mencionaJueves ||
-    mencionaViernes ||
-    mencionaSabado ||
-    mencionaLunes
+    tieneCalleReal &&
+    (prefiereDomicilio || tieneHorarioEnRespuesta || tieneDiaEnRespuesta)
   ) {
-    return finalizar(`${saludo}\n\nBuenísimo, gracias por confirmarme. Te agendo entonces para pasar 2 minutos por *${lugar}* ${diaTexto}${horarioTexto ? ` ${horarioTexto}` : ''} (acordate de tener a mano tu DNI físico con domicilio en CABA). Te aviso por acá un ratito antes de llegar. Gracias.${posdataNombre}`);
+    if (!diaTexto) {
+      return finalizar(
+        `${saludo}\n\n¡Excelente, gracias por el dato! Ya me agendé *${calleEfectiva}*${horarioTexto ? ` (${horarioTexto})` : ''}.\n\n¿Qué *día de esta semana* te queda más cómodo que pase 2 minutos con la planilla (recordá tener a mano el DNI físico de CABA)?${posdataNombre}`
+      );
+    }
+    if (!horarioTexto) {
+      return finalizar(
+        `${saludo}\n\n¡Buenísimo, gracias! Para pasar 2 minutos por *${calleEfectiva}* ${diaTexto} con la ficha de adhesión, ¿en qué *horario o franja horaria* te queda más cómodo encontrarme?${posdataNombre}`
+      );
+    }
+    return finalizar(
+      `${saludo}\n\n¡Buenísimo, muchas gracias! Te agendo entonces para pasar 2 minutos por *${calleEfectiva}* ${diaTexto} ${horarioTexto} (acordate de tener a mano tu DNI físico con domicilio en CABA). Ese día te aviso por acá unos 10-15 minutos antes de llegar.${posdataNombre}`
+    );
   }
 
-  if (instruccion) {
-    return finalizar(`${saludo}\n\nGracias por responderme (${instruccion}). Te propongo entonces pasar 2 minutos por *${lugar}* en el día y horario que te quede más cómodo con tu DNI físico con domicilio en CABA${infoCafe.incluirCafe ? `, o bien vernos en ${infoCafe.fraseCafe}` : ''}. Avisame qué te resulta mejor y lo dejamos agendado.${posdataNombre}`);
-  }
-
-  return finalizar(baseMsg);
+  // Caso C: Confirmó que tiene DNI en CABA ("Sí tengo DNI en CABA", "Hola, sí puedo") pero aún no dio ni calle ni horario
+  return finalizar(
+    tieneCalleReal
+      ? `${saludo}\n\n¡Muchas gracias por responderme! Para organizarnos por *${calleEfectiva}* (${contact.barrio || 'CABA'}) y que te lleve apenas 2 minutos firmar la ficha con tu DNI físico: ¿qué *día y franja horaria* de esta semana te queda más cómodo que pase${infoCafe.incluirCafe ? `, o preferís que nos crucemos en ${infoCafe.fraseCafe}` : ''}?${posdataNombre}`
+      : `${saludo}\n\n¡Muchas gracias por responderme! Para sumarte al recorrido de esta semana por *${contact.barrio || 'tu barrio'}* (son apenas 2 minutos con tu DNI físico con domicilio en CABA): ¿me pasarías una *calle y altura o esquina de referencia* y en qué *día y franja horaria* te queda más cómodo que pase${infoCafe.incluirCafe ? ` (o si preferís vernos en ${infoCafe.fraseCafe})` : ''}?${posdataNombre}`
+  );
 }
 
 /**

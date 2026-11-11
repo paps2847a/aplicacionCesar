@@ -77,14 +77,79 @@ const DATA_DIR = getDataDirectory();
 const SHARED_STATE_PATH = path.join(DATA_DIR, 'popurri_shared_state.json');
 const TMP_SHARED_STATE_PATH = path.join(os.tmpdir(), 'popurri_shared_state.json');
 
+function dedupeContactsInMemory(list: RawContactRow[]): RawContactRow[] {
+  if (!Array.isArray(list) || list.length <= 1) return list || [];
+  const byId = new Map<string, RawContactRow>();
+  const byPhoneAndName = new Map<string, string>();
+
+  const normId = (rawId: unknown): string => {
+    const clean = String(rawId ?? '').trim().replace(/^#+/, '').trim();
+    return /^\d+$/.test(clean) ? String(Number(clean)) : clean;
+  };
+  const normPhone8 = (rawTel: unknown): string => {
+    const d = String(rawTel ?? '').replace(/\D+/g, '');
+    return d.length >= 8 ? d.slice(-8) : '';
+  };
+  const normName = (rawName: unknown): string =>
+    String(rawName ?? '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  for (const item of list) {
+    if (!item) continue;
+    const cid = normId(item.id);
+    if (!cid) continue;
+    const tel8 = normPhone8((item as any).telefonoNorm || item.tel || item.telRaw);
+    const nName = normName(item.nombre);
+    const phoneNameKey = tel8 && nName ? `${tel8}__${nName}` : '';
+
+    const existingIdForPhoneName = phoneNameKey ? byPhoneAndName.get(phoneNameKey) : undefined;
+    const targetId = existingIdForPhoneName || cid;
+    const prev = byId.get(targetId);
+
+    if (!prev) {
+      const normalizedItem: RawContactRow = { ...item, id: targetId };
+      byId.set(targetId, normalizedItem);
+      if (phoneNameKey) byPhoneAndName.set(phoneNameKey, targetId);
+    } else {
+      const prevTs = prev.actualizadoEnAppAt ? Date.parse(prev.actualizadoEnAppAt) || 0 : 0;
+      const currTs = item.actualizadoEnAppAt ? Date.parse(item.actualizadoEnAppAt) || 0 : 0;
+      const winner = currTs >= prevTs ? item : prev;
+      const loser = currTs >= prevTs ? prev : item;
+      byId.set(targetId, {
+        ...loser,
+        ...winner,
+        id: targetId,
+        diasEncuentro: winner.diasEncuentro || loser.diasEncuentro,
+        horarioEncuentro: winner.horarioEncuentro || loser.horarioEncuentro,
+        calleOCruce: winner.calleOCruce || loser.calleOCruce,
+        pisoDepto: winner.pisoDepto || loser.pisoDepto,
+        comentario:
+          (winner.comentario || '').length >= (loser.comentario || '').length
+            ? winner.comentario
+            : loser.comentario,
+      });
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
 function sanitizeSnapshot(snapshot: SharedAppStateSnapshot): SharedAppStateSnapshot {
   const controlKeys = new Set<string>();
   for (const reg of snapshot.controlEnvios || []) {
     if (reg?.contactId) controlKeys.add(`id:${String(reg.contactId).trim()}`);
   }
-  const sanitizedContacts = Array.isArray(snapshot.rawContacts)
-    ? migrarContactosDesde167SinPrimerContacto(snapshot.rawContacts, controlKeys)
+  const dedupedRaw = Array.isArray(snapshot.rawContacts)
+    ? dedupeContactsInMemory(snapshot.rawContacts)
     : snapshot.rawContacts;
+  const sanitizedContacts = Array.isArray(dedupedRaw)
+    ? migrarContactosDesde167SinPrimerContacto(dedupedRaw, controlKeys)
+    : dedupedRaw;
 
   const cleanedCal = deduplicarEventosCalendar(snapshot.calendarEvents || []);
   const sanitizedCalendar = Array.isArray(snapshot.calendarEvents)
@@ -2359,23 +2424,218 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
     }
   });
 
-  // 9. Gestión integrada de Túnel Cloudflare para uso móvil fuera de casa (4G/5G/LTE)
+  // 8b. Geocodificación de alta precisión y cálculo de distancia a pie en CABA (Google Maps API + USIG CABA + OSRM)
+  const serverGeocodeCache = new Map<
+    string,
+    { lat: number; lng: number; direccionNormalizada?: string; barrio?: string; source: string }
+  >();
+  const serverWalkingCache = new Map<
+    string,
+    { minutos: number; metros: number; source: 'google_maps' | 'osrm_foot' }
+  >();
+
+  app.post('/api/geo/geocode-caba', async (req, res) => {
+    try {
+      const rawAddress = String(req.body?.address || '').trim();
+      const rawBarrio = String(req.body?.barrio || '').trim();
+      if (!rawAddress || rawAddress.length < 3) {
+        return res.status(400).json({ ok: false, error: 'Dirección vacía o demasiado corta.' });
+      }
+      const cacheKey = `${rawAddress.toLowerCase()}__${rawBarrio.toLowerCase()}`;
+      const cached = serverGeocodeCache.get(cacheKey);
+      if (cached) {
+        return res.json({ ok: true, ...cached, cached: true });
+      }
+
+      const gmapsKey = String(
+        process.env.GOOGLE_MAPS_API_KEY ||
+          process.env.VITE_GOOGLE_MAPS_API_KEY ||
+          getSetting('googleMapsApiKey') ||
+          ''
+      ).trim();
+
+      // 1. Prioridad 1: Google Maps Geocoding API (si hay API Key configurada)
+      if (gmapsKey) {
+        try {
+          const query = `${rawAddress}, ${rawBarrio ? `${rawBarrio}, ` : ''}Ciudad Autónoma de Buenos Aires, Argentina`;
+          const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+            query
+          )}&region=ar&language=es&key=${encodeURIComponent(gmapsKey)}`;
+          const gmRes = await fetch(url, { signal: AbortSignal.timeout(5000) });
+          if (gmRes.ok) {
+            const gmJson = await gmRes.json();
+            const first = gmJson?.results?.[0];
+            const loc = first?.geometry?.location;
+            if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
+              const entry = {
+                lat: loc.lat,
+                lng: loc.lng,
+                direccionNormalizada: String(first.formatted_address || rawAddress),
+                barrio: inferirBarrioDesdeTextoCABA(String(first.formatted_address || rawBarrio)) || undefined,
+                source: 'google_maps',
+              };
+              serverGeocodeCache.set(cacheKey, entry);
+              return res.json({ ok: true, ...entry });
+            }
+          }
+        } catch {
+          // Fallback a USIG CABA
+        }
+      }
+
+      // 2. Prioridad 2: USIG Normalizador Oficial del Gobierno de la Ciudad de Buenos Aires (exactitud al metro puerta a puerta en CABA)
+      try {
+        const cleanQuery = rawAddress
+          .replace(/,?\s*C\d{4}[A-Z]{0,3}\b.*$/i, '')
+          .replace(/,?\s*(?:Cdad\.?\s*Aut[oó]noma|Ciudad\s*Aut[oó]noma|CABA|Capital\s*Federal).*$/i, '')
+          .trim();
+        const usigUrl = `https://servicios.usig.buenosaires.gob.ar/normalizar/?direccion=${encodeURIComponent(
+          `${cleanQuery}, CABA`
+        )}& geocodificar=TRUE`;
+        const usigRes = await fetch(usigUrl, { signal: AbortSignal.timeout(5000) });
+        if (usigRes.ok) {
+          const usigJson = await usigRes.json();
+          const dirs = usigJson?.direccionesNormalizadas;
+          const first = Array.isArray(dirs) ? dirs.find((d: any) => d?.coordenadas?.x && d?.coordenadas?.y) : null;
+          if (first && first.coordenadas) {
+            const lat = Number(first.coordenadas.y);
+            const lng = Number(first.coordenadas.x);
+            if (Number.isFinite(lat) && Number.isFinite(lng) && lat < -34.5 && lat > -34.72) {
+              const entry = {
+                lat,
+                lng,
+                direccionNormalizada: String(first.direccion || cleanQuery),
+                barrio: inferirBarrioDesdeTextoCABA(String(first.direccion || rawBarrio)) || undefined,
+                source: 'usig_caba',
+              };
+              serverGeocodeCache.set(cacheKey, entry);
+              return res.json({ ok: true, ...entry });
+            }
+          }
+        }
+      } catch {
+        // Fallback
+      }
+
+      return res.json({ ok: false, error: 'No se encontraron coordenadas exactas en CABA.' });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'Error geocodificando dirección' });
+    }
+  });
+
+  app.post('/api/geo/walking-distance', async (req, res) => {
+    try {
+      const originLat = Number(req.body?.originLat);
+      const originLng = Number(req.body?.originLng);
+      const destLat = Number(req.body?.destLat);
+      const destLng = Number(req.body?.destLng);
+      if (
+        !Number.isFinite(originLat) ||
+        !Number.isFinite(originLng) ||
+        !Number.isFinite(destLat) ||
+        !Number.isFinite(destLng)
+      ) {
+        return res.status(400).json({ ok: false, error: 'Coordenadas inválidas.' });
+      }
+
+      const key = `${originLat.toFixed(5)},${originLng.toFixed(5)}->${destLat.toFixed(5)},${destLng.toFixed(5)}`;
+      const cached = serverWalkingCache.get(key);
+      if (cached) {
+        return res.json({ ok: true, ...cached, cached: true });
+      }
+
+      const gmapsKey = String(
+        process.env.GOOGLE_MAPS_API_KEY ||
+          process.env.VITE_GOOGLE_MAPS_API_KEY ||
+          getSetting('googleMapsApiKey') ||
+          ''
+      ).trim();
+
+      // 1. Google Maps Distance Matrix API (mode=walking)
+      if (gmapsKey) {
+        try {
+          const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&mode=walking&language=es&key=${encodeURIComponent(
+            gmapsKey
+          )}`;
+          const gmRes = await fetch(url, { signal: AbortSignal.timeout(5000) });
+          if (gmRes.ok) {
+            const gmJson = await gmRes.json();
+            const elem = gmJson?.rows?.[0]?.elements?.[0];
+            if (elem?.status === 'OK' && elem.duration?.value && elem.distance?.value) {
+              const metros = Number(elem.distance.value);
+              const minutos = Math.max(2, Math.ceil(Number(elem.duration.value) / 60));
+              const result = { minutos, metros, source: 'google_maps' as const };
+              serverWalkingCache.set(key, result);
+              return res.json({ ok: true, ...result });
+            }
+          }
+        } catch {
+          // Fallback a OSRM Foot
+        }
+      }
+
+      // 2. Ruta peatonal por calles reales (OSRM Foot Routing calibrado al ritmo de Google Maps en CABA: 72 m/min)
+      try {
+        const osrmUrl = `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${originLng},${originLat};${destLng},${destLat}?overview=false`;
+        const osrmRes = await fetch(osrmUrl, { signal: AbortSignal.timeout(5000) });
+        if (osrmRes.ok) {
+          const osrmJson = await osrmRes.json();
+          const route = osrmJson?.routes?.[0];
+          if (route && typeof route.distance === 'number') {
+            const metros = Math.round(route.distance);
+            const minutos = Math.max(2, Math.ceil(metros / 70));
+            const result = { minutos, metros, source: 'osrm_foot' as const };
+            serverWalkingCache.set(key, result);
+            return res.json({ ok: true, ...result });
+          }
+        }
+      } catch {
+        // Ignore
+      }
+
+      return res.json({ ok: false, error: 'Sin ruta peatonal externa disponible' });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'Error calculando distancia a pie' });
+    }
+  });
+
+  // 9. Gestión integrada de Túnel Móvil Resiliente (Cloudflare + Fallback SSH localhost.run + Healthcheck automático)
   let tunnelProcess: ChildProcess | null = null;
   let currentTunnelUrl: string | null = null;
   let currentTunnelQrDataUrl: string | null = null;
   let tunnelStarting = false;
+  let tunnelConsecutiveFailures = 0;
 
-  const startOrEnsureCloudflareTunnel = () => {
+  const updateTunnelUrl = (newUrl: string) => {
+    if (!newUrl || newUrl === currentTunnelUrl) return;
+    currentTunnelUrl = newUrl;
+    tunnelConsecutiveFailures = 0;
+    console.log(`\n🌐 [Túnel Móvil 4G/5G Activo] -> ${currentTunnelUrl}\n`);
+    QRCode.toDataURL(currentTunnelUrl, { margin: 1, width: 220 })
+      .then((qr) => {
+        currentTunnelQrDataUrl = qr;
+      })
+      .catch(() => {});
+  };
+
+  const startLocalhostRunFallbackTunnel = () => {
     if (process.env.DISABLE_TUNNEL === 'true') return;
     if (tunnelProcess || tunnelStarting) return;
-    const cloudflaredExe = path.join(ROOT_DIR, 'bin', 'cloudflared.exe');
-    if (!fs.existsSync(cloudflaredExe)) return;
-
     tunnelStarting = true;
     try {
       const child = spawn(
-        cloudflaredExe,
-        ['tunnel', '--protocol', 'http2', '--url', `http://localhost:${PORT}`],
+        'ssh',
+        [
+          '-o',
+          'StrictHostKeyChecking=no',
+          '-o',
+          'ServerAliveInterval=30',
+          '-o',
+          'ExitOnForwardFailure=yes',
+          '-R',
+          `80:localhost:${PORT}`,
+          'nokey@localhost.run',
+        ],
         {
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
@@ -2386,18 +2646,11 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
 
       const onData = (chunk: Buffer) => {
         const text = chunk.toString();
-        const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
-        if (match && match[0] !== currentTunnelUrl) {
-          currentTunnelUrl = match[0];
-          console.log(`\n🌐 [Túnel Móvil 4G/5G Activo] -> ${currentTunnelUrl}\n`);
-          QRCode.toDataURL(currentTunnelUrl, { margin: 1, width: 220 })
-            .then((qr) => {
-              currentTunnelQrDataUrl = qr;
-            })
-            .catch(() => {});
+        const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.lhr\.life/);
+        if (match) {
+          updateTunnelUrl(match[0]);
         }
       };
-
       child.stdout?.on('data', onData);
       child.stderr?.on('data', onData);
       child.on('close', () => {
@@ -2405,13 +2658,115 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
         tunnelStarting = false;
         currentTunnelUrl = null;
         currentTunnelQrDataUrl = null;
-        // Reintentar automáticamente tras 5s si se cae la conexión
-        setTimeout(() => startOrEnsureCloudflareTunnel(), 5000);
+        setTimeout(() => startOrEnsureCloudflareTunnel(), 4000);
       });
     } catch {
       tunnelStarting = false;
     }
   };
+
+  const startOrEnsureCloudflareTunnel = () => {
+    if (process.env.DISABLE_TUNNEL === 'true') return;
+    if (tunnelProcess || tunnelStarting) return;
+    const cloudflaredExe = path.join(ROOT_DIR, 'bin', 'cloudflared.exe');
+    if (!fs.existsSync(cloudflaredExe)) {
+      startLocalhostRunFallbackTunnel();
+      return;
+    }
+
+    tunnelStarting = true;
+    try {
+      const child = spawn(
+        cloudflaredExe,
+        [
+          'tunnel',
+          '--protocol',
+          'http2',
+          '--edge-ip-version',
+          '4',
+          '--no-autoupdate',
+          '--url',
+          `http://127.0.0.1:${PORT}`,
+        ],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        }
+      );
+      tunnelProcess = child;
+      tunnelStarting = false;
+
+      const startupDeadline = setTimeout(() => {
+        if (!currentTunnelUrl && tunnelProcess === child) {
+          try {
+            child.kill();
+          } catch {}
+          tunnelProcess = null;
+          tunnelStarting = false;
+          startLocalhostRunFallbackTunnel();
+        }
+      }, 14000);
+
+      const onData = (chunk: Buffer) => {
+        const text = chunk.toString();
+        const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+        if (match) {
+          clearTimeout(startupDeadline);
+          updateTunnelUrl(match[0]);
+        }
+      };
+
+      child.stdout?.on('data', onData);
+      child.stderr?.on('data', onData);
+      child.on('close', () => {
+        clearTimeout(startupDeadline);
+        tunnelProcess = null;
+        tunnelStarting = false;
+        currentTunnelUrl = null;
+        currentTunnelQrDataUrl = null;
+        setTimeout(() => startOrEnsureCloudflareTunnel(), 3500);
+      });
+    } catch {
+      tunnelStarting = false;
+      startLocalhostRunFallbackTunnel();
+    }
+  };
+
+  // Healthcheck periódico del túnel móvil cada 30 segundos para reconectar solo si se cuelga
+  setInterval(async () => {
+    if (process.env.DISABLE_TUNNEL === 'true') return;
+    if (!currentTunnelUrl) {
+      if (!tunnelProcess && !tunnelStarting) {
+        startOrEnsureCloudflareTunnel();
+      }
+      return;
+    }
+    try {
+      const checkRes = await fetch(`${currentTunnelUrl}/api/health`, {
+        signal: AbortSignal.timeout(6500),
+      });
+      if (checkRes.ok) {
+        tunnelConsecutiveFailures = 0;
+      } else if (checkRes.status >= 502) {
+        tunnelConsecutiveFailures += 1;
+      }
+    } catch {
+      tunnelConsecutiveFailures += 1;
+    }
+    if (tunnelConsecutiveFailures >= 2) {
+      console.warn('[Túnel Móvil] Detectada caída del enlace público. Reiniciando túnel automáticamente...');
+      tunnelConsecutiveFailures = 0;
+      if (tunnelProcess) {
+        try {
+          tunnelProcess.kill();
+        } catch {}
+        tunnelProcess = null;
+      }
+      currentTunnelUrl = null;
+      currentTunnelQrDataUrl = null;
+      startOrEnsureCloudflareTunnel();
+    }
+  }, 30000);
 
   app.get('/api/tunnel/status', (_req, res) => {
     if (!currentTunnelUrl && !tunnelProcess) {
@@ -2433,8 +2788,9 @@ Devolvé EXCLUSIVAMENTE un array JSON válido (sin bloques markdown, sólo el JS
       }
       currentTunnelUrl = null;
       currentTunnelQrDataUrl = null;
+      tunnelConsecutiveFailures = 0;
       startOrEnsureCloudflareTunnel();
-      res.json({ ok: true, message: 'Reiniciando túnel seguro Cloudflare...' });
+      res.json({ ok: true, message: 'Reiniciando túnel móvil seguro...' });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || 'Error reiniciando túnel' });
     }

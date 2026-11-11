@@ -116,32 +116,32 @@ export const ESTADOS_FLUJO_CATALOGO: {
 }[] = [
   {
     value: 'SIN_CONTACTAR_1ER_MSJ',
-    label: '1. Nuevo · Sin 1er mensaje',
-    shortLabel: '1. Nuevo · Sin 1er mensaje',
+    label: '1. Nuevo · Sin contactar',
+    shortLabel: '1. Nuevo · Sin contactar',
     colorClass: 'bg-amber-100 text-amber-950 border-amber-300',
   },
   {
     value: 'FALTA_NOMBRE_Y_APELLIDO',
-    label: '1b. Nuevo · Falta Nombre',
-    shortLabel: '1b. Nuevo · Falta Nombre',
+    label: '1b. Nuevo · Falta nombre',
+    shortLabel: '1b. Nuevo · Falta nombre',
     colorClass: 'bg-rose-100 text-rose-950 border-rose-300',
   },
   {
     value: '1ER_MSJ_ENVIADO_SIN_RSP',
-    label: '2. 1er Msj Enviado · Esperando respuesta',
-    shortLabel: '2. 1er Msj Enviado · Esperando respuesta',
+    label: '2. Contactado · Sin respuesta',
+    shortLabel: '2. Contactado · Sin respuesta',
     colorClass: 'bg-slate-100 text-slate-800 border-slate-300',
   },
   {
     value: 'RESPONDIO_FALTA_DNI_O_ZONA',
-    label: '3. Respondió · Falta calle/esquina o día',
-    shortLabel: '3. Respondió · Falta calle/esquina o día',
+    label: '3. Respondió · Faltan datos',
+    shortLabel: '3. Respondió · Faltan datos',
     colorClass: 'bg-orange-100 text-orange-950 border-orange-300',
   },
   {
     value: 'PIDIO_MAS_INFO_ENVIADA',
-    label: '3b. Pidió más info (5 ejes enviados)',
-    shortLabel: '3b. Pidió más info (5 ejes enviados)',
+    label: '3b. Pidió más info',
+    shortLabel: '3b. Pidió más info',
     colorClass: 'bg-sky-50 text-sky-900 border-sky-300',
   },
   {
@@ -152,50 +152,50 @@ export const ESTADOS_FLUJO_CATALOGO: {
   },
   {
     value: 'PASO_DATOS_FALTA_CONFIRMAR',
-    label: '4. Pasó dirección/horario · Falta confirmar',
-    shortLabel: '4. Pasó dirección/horario · Falta confirmar',
+    label: '4. Pasó datos · Por confirmar',
+    shortLabel: '4. Pasó datos · Por confirmar',
     colorClass: 'bg-sky-100 text-sky-950 border-sky-300',
   },
   {
     value: 'ENCUENTRO_CONFIRMADO',
-    label: '5. Encuentro Confirmado (En Ruta)',
-    shortLabel: '5. Encuentro Confirmado (En Ruta)',
+    label: '5. Confirmado · En ruta',
+    shortLabel: '5. Confirmado · En ruta',
     colorClass: 'bg-indigo-100 text-indigo-950 border-indigo-300',
   },
   {
     value: 'RECORDATORIO_DIA_ENVIADO',
-    label: '6. Recordatorio / En Camino Enviado',
-    shortLabel: '6. Recordatorio / En Camino Enviado',
+    label: '6. En camino / Recordatorio',
+    shortLabel: '6. En camino / Recordatorio',
     colorClass: 'bg-teal-100 text-teal-950 border-teal-300',
   },
   {
     value: 'PENDIENTE_RETIRO_FICHAS',
-    label: '7. Llevó Fichas Extra · Pendiente Retiro',
-    shortLabel: '7. Llevó Fichas Extra · Pendiente Retiro',
+    label: '7. Fichas extra · Por retirar',
+    shortLabel: '7. Fichas extra · Por retirar',
     colorClass: 'bg-emerald-200 text-emerald-950 border-emerald-400',
   },
   {
     value: 'POSTERGO_SALUD_O_VIAJE',
-    label: '8. En Pausa (Viaje / Salud / Más adelante)',
-    shortLabel: '8. En Pausa (Viaje / Salud / Más adelante)',
+    label: '8. En pausa · Viaje o salud',
+    shortLabel: '8. En pausa · Viaje o salud',
     colorClass: 'bg-purple-100 text-purple-950 border-purple-300',
   },
   {
     value: 'YA_ADHIRIO_FIRMA_OK',
-    label: '9. ✅ Ya Firmó · Adhesión Completada',
-    shortLabel: '9. ✅ Ya Firmó · Adhesión Completada',
+    label: '9. ✅ Ya firmó',
+    shortLabel: '9. ✅ Ya firmó',
     colorClass: 'bg-emerald-100 text-emerald-950 border-emerald-400',
   },
   {
     value: 'SIN_DNI_CABA_PEDIR_REFERIDOS',
-    label: '10. Sin DNI en CABA · Pedir Referidos',
-    shortLabel: '10. Sin DNI en CABA · Pedir Referidos',
+    label: '10. Sin DNI CABA · Referidos',
+    shortLabel: '10. Sin DNI CABA · Referidos',
     colorClass: 'bg-slate-100 text-slate-700 border-slate-300',
   },
   {
     value: 'DESCARTADO_O_BAJA',
-    label: '11. Baja / Número Inválido / Descartado',
-    shortLabel: '11. Baja / Número Inválido / Descartado',
+    label: '11. Baja / Descartado',
+    shortLabel: '11. Baja / Descartado',
     colorClass: 'bg-red-50 text-red-800 border-red-200',
   },
 ];
@@ -203,9 +203,9 @@ export const ESTADOS_FLUJO_CATALOGO: {
 export function obtenerEtiquetaEstadoFlujo(estado: EstadoFlujo): string {
   const encontrado = ESTADOS_FLUJO_CATALOGO.find((e) => e.value === estado);
   if (encontrado) return encontrado.label;
-  if (estado === 'SEGUNDO_SEGUIMIENTO_SIN_RSP') return '2. 1er Msj Enviado · Esperando respuesta';
-  if (estado === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') return '9. ✅ Ya Firmó · Adhesión Completada';
-  return '2. 1er Msj Enviado · Esperando respuesta';
+  if (estado === 'SEGUNDO_SEGUIMIENTO_SIN_RSP') return '2. Contactado · Sin respuesta';
+  if (estado === 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO') return '9. ✅ Ya firmó';
+  return '2. Contactado · Sin respuesta';
 }
 
 export function parsearTextoAEstadoFlujo(textoRaw: string): EstadoFlujo | undefined {
@@ -227,26 +227,26 @@ export function parsearTextoAEstadoFlujo(textoRaw: string): EstadoFlujo | undefi
     return 'SIN_CONTACTAR_1ER_MSJ';
   if (/^2b\b|2°\s*seguimiento|2do\s*seguimiento|segundo seguimiento/i.test(low))
     return 'SEGUNDO_SEGUIMIENTO_SIN_RSP';
-  if (/^2\.\s*1er|1er mensaje enviado|1er msj enviado|esperando respuesta/i.test(low))
+  if (/^2\.\s*(?:1er|contactado)|1er mensaje enviado|1er msj enviado|esperando respuesta|contactado\s*·\s*sin respuesta/i.test(low))
     return '1ER_MSJ_ENVIADO_SIN_RSP';
-  if (/^3\.\s*respondi|validar dni|falta calle|falta corroborar|cambio de chip/i.test(low))
+  if (/^3\.\s*respondi|validar dni|falta calle|faltan datos|falta corroborar|cambio de chip/i.test(low))
     return 'RESPONDIO_FALTA_DNI_O_ZONA';
   if (/^3b\b|m[aá]s info/i.test(low))
     return 'PIDIO_MAS_INFO_ENVIADA';
-  if (/^4\.\s*datos pasados|^4\.\s*pas[oó]|datos pasados|proponer visita|falta confirmar/i.test(low))
+  if (/^4\.\s*datos pasados|^4\.\s*pas[oó]|datos pasados|proponer visita|falta confirmar|por confirmar/i.test(low))
     return 'PASO_DATOS_FALTA_CONFIRMAR';
   if (/^5\.\s*visita\/caf[eé]|^3c\b|visita\/caf[eé] propuesto|esperando ok|prefiere punto/i.test(low))
     return 'PREFIERE_CAFE_HUB_O_SEDE';
-  if (/^6\.\s*encuentro|^5\.\s*encuentro|encuentro agendado|encuentro confirmado|confirmado/i.test(low))
+  if (/^6\.\s*encuentro|^5\.\s*(?:encuentro|confirmado)|encuentro agendado|encuentro confirmado|confirmado/i.test(low))
     return 'ENCUENTRO_CONFIRMADO';
-  if (/^7\.\s*recordatorio|^6\.\s*recordatorio|recordatorio|en camino/i.test(low))
+  if (/^7\.\s*recordatorio|^6\.\s*(?:recordatorio|en camino)|recordatorio|en camino/i.test(low))
     return 'RECORDATORIO_DIA_ENVIADO';
-  if (/^8\.\s*en espera de retiro|^7\.\s*llev[oó] fichas|retiro de fichas|fichas|x1|x2|x3/i.test(low))
+  if (/^8\.\s*en espera de retiro|^7\.\s*(?:llev[oó] fichas|fichas extra)|retiro de fichas|por retirar|fichas|x1|x2|x3/i.test(low))
     return 'PENDIENTE_RETIRO_FICHAS';
   if (/^9b\b|agradecimiento enviado/i.test(low))
     return 'YA_ADHIRIO_AGRADECIMIENTO_ENVIADO';
   if (
-    /^9\.\s*¡?ya adhir|^9\.\s*✅|ya adhirió|ya firmó|adhesión completada|proceso terminado|ficha firmada|firmada|firmó/i.test(
+    /^9\.\s*¡?ya adhir|^9\.\s*✅|^9\.\s*ya firm|ya adhirió|ya firmó|adhesión completada|proceso terminado|ficha firmada|firmada|firmó/i.test(
       low
     )
   )
@@ -255,7 +255,7 @@ export function parsearTextoAEstadoFlujo(textoRaw: string): EstadoFlujo | undefi
     return 'SIN_DNI_CABA_PEDIR_REFERIDOS';
   if (/^11\.\s*baja|archivado|ya respondido|baja|descartado|inv[aá]lido/i.test(low))
     return 'DESCARTADO_O_BAJA';
-  if (/salud|viaje|pausa/i.test(low))
+  if (/^8\.\s*en pausa|salud|viaje|pausa/i.test(low))
     return 'POSTERGO_SALUD_O_VIAJE';
   if (low.includes('punto') || low.includes('café') || low.includes('sede'))
     return 'PREFIERE_CAFE_HUB_O_SEDE';
@@ -752,8 +752,35 @@ export function inferirEstadoFlujo(
   const rsp = (raw.rsp || '').toLowerCase().trim();
 
   // Si el contacto ya trae un estado explícito desde Google Sheets (Columna H) o desde la App,
-  // respetarlo de forma 1:1 (normalizando únicamente alias heredados).
+  // respetarlo de forma 1:1 (normalizando alias heredados).
   if (raw.estadoFlujo !== undefined) {
+    const tieneCamposEstructuradosApp =
+      !raw.estadoFlujoEtiqueta &&
+      Boolean(raw.calleOCruce && raw.calleOCruce.trim().length > 0) &&
+      (Boolean(raw.diasEncuentro && raw.diasEncuentro.trim()) ||
+        Boolean(raw.horarioEncuentro && raw.horarioEncuentro.trim()) ||
+        Boolean(raw.horaInicio && raw.horaInicio.trim()));
+
+    if (
+      (raw.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+        raw.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA') &&
+      tieneCamposEstructuradosApp
+    ) {
+      return 'PASO_DATOS_FALTA_CONFIRMAR';
+    }
+
+    if (raw.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' && !sinNombre && Boolean(raw.actualizadoEnAppAt)) {
+      if (
+        Boolean(calleOCruce && calleOCruce.trim().length > 0) ||
+        Boolean(raw.diasEncuentro && raw.diasEncuentro.trim()) ||
+        Boolean(raw.horarioEncuentro && raw.horarioEncuentro.trim()) ||
+        tieneNuevaInformacionEnColumnaG(raw.comentario || '')
+      ) {
+        return 'RESPONDIO_FALTA_DNI_O_ZONA';
+      }
+      return raw.primerContactoEnviado ? '1ER_MSJ_ENVIADO_SIN_RSP' : 'SIN_CONTACTAR_1ER_MSJ';
+    }
+
     if (raw.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' && sinNombre) {
       return 'FALTA_NOMBRE_Y_APELLIDO';
     }
@@ -909,7 +936,12 @@ export function desglosarComentarioEnCamposEstructurados(raw: {
     .replace(/1er\s*(?:mensaje|msj|contacto)\s*(?:auto\s*)?enviado[^·;\n\]]*/gi, '')
     .trim();
 
-  let calleOCruce = String(raw.calleOCruce || '').trim() || extraerCalleOCruce(sinNotasSistema);
+  const rawCalleLimpia = /lab\.\s*training\s*center|\([a-záéíóúñ\s]+$/i.test(
+    String(raw.calleOCruce || '').trim()
+  )
+    ? ''
+    : String(raw.calleOCruce || '').trim();
+  let calleOCruce = rawCalleLimpia || extraerCalleOCruce(sinNotasSistema);
   let pisoDepto = String(raw.pisoDepto || '').trim();
 
   // Si la calle tiene coma con timbre/piso/depto (ej: "Zapiola 2129, timbre 4"), separarlo opcionalmente
@@ -1102,13 +1134,17 @@ export function procesarContacto(
   const raw = sincronizarBarrioConDireccionComentario(rawDesfasado);
 
   const analisisNombre = analizarYCorregirNombreCompleto(raw.nombre);
-  const sinNombre = analisisNombre.sinNombre && !raw.vocativoOverride?.trim();
-  const primerNombre = raw.vocativoOverride?.trim()
-    ? raw.vocativoOverride.trim()
+  const vocativoOverrideValido =
+    raw.vocativoOverride?.trim() && !esCeldaSinNombre(raw.vocativoOverride.trim())
+      ? raw.vocativoOverride.trim()
+      : '';
+  const sinNombre = analisisNombre.sinNombre && !vocativoOverrideValido;
+  const primerNombre = vocativoOverrideValido
+    ? vocativoOverrideValido
     : analisisNombre.vocativo;
   const nombreCompletoCorregido =
-    sinNombre && raw.vocativoOverride?.trim()
-      ? raw.vocativoOverride.trim()
+    analisisNombre.sinNombre && vocativoOverrideValido
+      ? vocativoOverrideValido
       : analisisNombre.nombreCompletoOrdenado;
   const telWA = normalizarTelefonoWA(raw.telRaw);
   const com = (raw.comentario || '').toLowerCase();
@@ -1123,9 +1159,14 @@ export function procesarContacto(
     raw.horaFin !== undefined;
 
   const desglose = desglosarComentarioEnCamposEstructurados(raw);
+  const rawCalleSanitizada = /lab\.\s*training\s*center|\([a-záéíóúñ\s]+$/i.test(
+    (raw.calleOCruce || '').trim()
+  )
+    ? ''
+    : (raw.calleOCruce || '').trim();
   const calleOCruce = tieneCamposEstructurados
-    ? (raw.calleOCruce || '').trim()
-    : (raw.calleOCruce || '').trim() || extraerCalleOCruce(raw.comentario);
+    ? rawCalleSanitizada
+    : rawCalleSanitizada || extraerCalleOCruce(raw.comentario);
   const pisoDepto = (raw.pisoDepto ?? desglose.pisoDepto ?? '').trim();
   const diasEncuentro = tieneCamposEstructurados
     ? (raw.diasEncuentro || '').trim()

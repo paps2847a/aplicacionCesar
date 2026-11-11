@@ -320,7 +320,13 @@ export function fusionarContactosDesdeSheetsConControl(
   const adheridosPorNombre = new Set<string>();
 
   for (const prev of previosEnApp) {
-    mapaPreviosPorId.set(String(prev.id).trim(), prev);
+    const idTrim = String(prev.id).trim();
+    mapaPreviosPorId.set(idTrim, prev);
+    const idDigits = idTrim.replace(/\D+/g, '');
+    if (idDigits) {
+      mapaPreviosPorId.set(idDigits, prev);
+      mapaPreviosPorId.set(`#${idDigits}`, prev);
+    }
     const t = normalizarTelefonoWA(prev.telRaw);
     if (t) mapaPreviosPorTel.set(t, prev);
     if (yaAdhirioAntes(prev)) {
@@ -345,17 +351,36 @@ export function fusionarContactosDesdeSheetsConControl(
   const contactosFusionados = nuevosDesdeSheets.map((item, idx) => {
     const row = sincronizarBarrioConDireccionComentario(repararContactoDesfasado(item, idx));
     const idKey = String(row.id).trim();
+    const idDigits = idKey.replace(/\D+/g, '');
     const telKey = normalizarTelefonoWA(row.telRaw);
     const nomKey = (row.nombre || '').toLowerCase().replace(/\s+/g, ' ').trim();
     if (idKey) idsVistosEnSheet.add(idKey);
+    if (idDigits) {
+      idsVistosEnSheet.add(idDigits);
+      idsVistosEnSheet.add(`#${idDigits}`);
+    }
     if (telKey) telsVistosEnSheet.add(telKey);
 
-    const previo = mapaPreviosPorId.get(idKey) || (telKey ? mapaPreviosPorTel.get(telKey) : undefined);
+    const prevPorId =
+      mapaPreviosPorId.get(idKey) ||
+      (idDigits
+        ? mapaPreviosPorId.get(idDigits) || mapaPreviosPorId.get(`#${idDigits}`)
+        : undefined);
+    const prevPorTel = telKey ? mapaPreviosPorTel.get(telKey) : undefined;
+    const prevIdTel = prevPorId ? normalizarTelefonoWA(prevPorId.telRaw) : '';
+    const previo =
+      prevPorId && (!telKey || !prevIdTel || prevIdTel === telKey)
+        ? prevPorId
+        : prevPorTel;
     const tieneSnapshotPrevioSheet = Boolean(
       ultimosVistosEnSheetPorId && ultimosVistosEnSheetPorId.size > 0
     );
     const fotoPreviaSheet = tieneSnapshotPrevioSheet
-      ? ultimosVistosEnSheetPorId!.get(idKey)
+      ? ultimosVistosEnSheetPorId!.get(idKey) ||
+        (idDigits
+          ? ultimosVistosEnSheetPorId!.get(idDigits) ||
+            ultimosVistosEnSheetPorId!.get(`#${idDigits}`)
+          : undefined)
       : undefined;
     const baseComparacionSheet = fotoPreviaSheet || (!ultimosVistosEnSheetPorId ? previo : undefined);
 
@@ -507,6 +532,7 @@ export function fusionarContactosDesdeSheetsConControl(
         ...row,
         ...previo,
         ...metadatosPreservados,
+        id: row.id,
         nombre: previo.nombre || row.nombre,
         barrio: previo.barrio || row.barrio,
         email: previo.email || row.email,
@@ -552,12 +578,15 @@ export function fusionarContactosDesdeSheetsConControl(
       if (esSin1erMsj) {
         nuevosParaPrimerContactoCount++;
       }
-      const calleExtraida = extraerCalleOCruce(comentarioSheet || comentarioEfectivo);
+      const calleExtraida =
+        (row.calleOCruce || '').trim() ||
+        (!cambioEnSheetExplicito ? (previo?.calleOCruce || '').trim() : '') ||
+        extraerCalleOCruce(comentarioSheet || comentarioEfectivo);
       return sincronizarBarrioConDireccionComentario({
         ...row,
         ...metadatosPreservados,
         rsp: !esSin1erMsj && row.rsp === 'Nuevo' ? (previo?.rsp && previo.rsp !== 'Nuevo' ? previo.rsp : 'No') : row.rsp,
-        calleOCruce: calleExtraida || row.calleOCruce || undefined,
+        calleOCruce: calleExtraida || undefined,
         comentario: comentarioSheet || comentarioEfectivo,
         primerContactoEnviado: !esSin1erMsj,
         referidosCabaYaEnviado:
@@ -588,6 +617,7 @@ export function fusionarContactosDesdeSheetsConControl(
         ...row,
         ...previo,
         ...metadatosPreservados,
+        id: row.id,
         nombre: previo.nombre || row.nombre,
         barrio: previo.barrio || row.barrio,
         email: previo.email || row.email,
@@ -812,8 +842,7 @@ export function fusionarContactosDesdeSheetsConControl(
     const idKey = String(prev.id).trim();
     const telKey = normalizarTelefonoWA(prev.telRaw);
     const yaIncluidoPorId = Boolean(idKey && idsVistosEnSheet.has(idKey));
-    const yaIncluidoPorTelMismoNombre =
-      !idKey && Boolean(telKey) && telsVistosEnSheet.has(telKey);
+    const yaIncluidoPorTelMismoNombre = Boolean(telKey && telsVistosEnSheet.has(telKey));
     if (!yaIncluidoPorId && !yaIncluidoPorTelMismoNombre) {
       const estabaEnSheetsAntes = Boolean(idKey && ultimosVistosEnSheetPorId?.has(idKey));
       const recienCreadoEnApp =
@@ -994,9 +1023,13 @@ export function actualizarDatosContactoEnApp(
         : nuevaHoraIni || nuevaHoraFin || '';
   }
 
+  const cambioManualExplicitoEstado =
+    cambios.estadoFlujo !== undefined && cambios.estadoFlujo !== rawActual.estadoFlujo;
+
   const esReversionANuevo =
-    cambios.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
-    cambios.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO';
+    cambioManualExplicitoEstado &&
+    (cambios.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+      cambios.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO');
 
   if (esReversionANuevo) {
     comentarioCombinado = comentarioCombinado
@@ -1034,14 +1067,13 @@ export function actualizarDatosContactoEnApp(
   let estadoFinal = conBarrioSincronizado.estadoFlujo;
 
   // Si el usuario cambió manualmente el estatus en el selector de Estado:
-  if (cambios.estadoFlujo !== undefined) {
+  if (cambioManualExplicitoEstado && cambios.estadoFlujo !== undefined) {
     estadoFinal = cambios.estadoFlujo;
     if (
       cambios.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
       cambios.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
     ) {
       conBarrioSincronizado.primerContactoEnviado = false;
-      conBarrioSincronizado.actualizadoEnAppAt = undefined;
       if (cambios.rsp === undefined) {
         conBarrioSincronizado.rsp = 'Nuevo';
       }
@@ -1118,7 +1150,7 @@ export function actualizarDatosContactoEnApp(
       conBarrioSincronizado.adhirio = 'No';
       conBarrioSincronizado.referidosCabaYaEnviado = false;
     }
-  } else if (cambios.adhirio !== undefined) {
+  } else if (cambios.adhirio !== undefined && cambios.adhirio !== rawActual.adhirio) {
     if (cambios.adhirio === 'Sí') {
       conBarrioSincronizado.rsp = 'Sí';
       conBarrioSincronizado.primerContactoEnviado = true;
@@ -1157,9 +1189,16 @@ export function actualizarDatosContactoEnApp(
       );
     }
   } else {
-    const sinNom = esCeldaSinNombre(conBarrioSincronizado.nombre) && !conBarrioSincronizado.vocativoOverride?.trim();
-    const calle = conBarrioSincronizado.calleOCruce || '';
+    const vocativoValido =
+      conBarrioSincronizado.vocativoOverride?.trim() &&
+      !esCeldaSinNombre(conBarrioSincronizado.vocativoOverride.trim());
+    const sinNom = esCeldaSinNombre(conBarrioSincronizado.nombre) && !vocativoValido;
+    const calle = (conBarrioSincronizado.calleOCruce || '').trim();
     const fechas = extraerFechasMencionadas(conBarrioSincronizado.diasEncuentro || '');
+    const tieneHorarioExplicito = Boolean(
+      (conBarrioSincronizado.horarioEncuentro && conBarrioSincronizado.horarioEncuentro.trim()) ||
+        (conBarrioSincronizado.horaInicio && conBarrioSincronizado.horaInicio.trim())
+    );
     const franja = analizarFranjaHoraria(
       [conBarrioSincronizado.horarioEncuentro, conBarrioSincronizado.horaInicio].filter(Boolean).join(' ')
     );
@@ -1173,24 +1212,45 @@ export function actualizarDatosContactoEnApp(
     if (rawActual.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS') {
       estadoFinal = 'PENDIENTE_RETIRO_FICHAS';
     } else if (
-      modificoAgendaODir &&
-      (calle.length > 0 || fechas.length > 0 || Boolean(conBarrioSincronizado.horarioEncuentro)) &&
+      (modificoAgendaODir ||
+        rawActual.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+        rawActual.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO') &&
+      calle.length > 0 &&
+      (fechas.length > 0 || tieneHorarioExplicito || franja !== 'Flexible') &&
       conBarrioSincronizado.adhirio !== 'Sí' &&
       conBarrioSincronizado.adhirio !== 'No' &&
       conBarrioSincronizado.estadoFlujo !== 'ENCUENTRO_CONFIRMADO' &&
-      conBarrioSincronizado.estadoFlujo !== 'RECORDATORIO_DIA_ENVIADO'
+      conBarrioSincronizado.estadoFlujo !== 'RECORDATORIO_DIA_ENVIADO' &&
+      conBarrioSincronizado.estadoFlujo !== 'PREFIERE_CAFE_HUB_O_SEDE'
     ) {
       conBarrioSincronizado.rsp = 'Sí';
       conBarrioSincronizado.primerContactoEnviado = true;
       estadoFinal = 'PASO_DATOS_FALTA_CONFIRMAR';
     } else if (
-      cambios.nombre !== undefined &&
+      modificoAgendaODir &&
+      (calle.length > 0 || fechas.length > 0 || tieneHorarioExplicito) &&
+      (rawActual.estadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' ||
+        rawActual.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+        rawActual.estadoFlujo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+        rawActual.estadoFlujo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP')
+    ) {
+      conBarrioSincronizado.rsp = 'Sí';
+      conBarrioSincronizado.primerContactoEnviado = true;
+      estadoFinal =
+        calle.length > 0 && (fechas.length > 0 || tieneHorarioExplicito)
+          ? 'PASO_DATOS_FALTA_CONFIRMAR'
+          : 'RESPONDIO_FALTA_DNI_O_ZONA';
+    } else if (
       !sinNom &&
       conBarrioSincronizado.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
     ) {
-      estadoFinal = conBarrioSincronizado.primerContactoEnviado
-        ? '1ER_MSJ_ENVIADO_SIN_RSP'
-        : 'SIN_CONTACTAR_1ER_MSJ';
+      estadoFinal =
+        conBarrioSincronizado.rsp === 'Sí'
+          ? 'RESPONDIO_FALTA_DNI_O_ZONA'
+          : conBarrioSincronizado.primerContactoEnviado ||
+              Boolean(conBarrioSincronizado.ultimoMensajeCorteEnviadoAt)
+            ? '1ER_MSJ_ENVIADO_SIN_RSP'
+            : 'SIN_CONTACTAR_1ER_MSJ';
     } else if (rawActual.estadoFlujo) {
       estadoFinal = rawActual.estadoFlujo;
     } else {
@@ -1206,9 +1266,7 @@ export function actualizarDatosContactoEnApp(
 
   const actualizado: RawContactRow = {
     ...conBarrioSincronizado,
-    actualizadoEnAppAt: esReversionANuevo
-      ? undefined
-      : cambiosDefinidos.actualizadoEnAppAt || ahoraISO,
+    actualizadoEnAppAt: esReversionANuevo ? undefined : cambiosDefinidos.actualizadoEnAppAt || ahoraISO,
     estadoFlujo: estadoFinal,
     estadoFlujoEtiqueta: estadoFinal ? obtenerEtiquetaEstadoFlujo(estadoFinal) : undefined,
   };

@@ -53,10 +53,11 @@ export function describirCafeConDistanciaDesdeContacto(
   horarioCafe: string;
 } {
   const barrioNorm = normalizarBarrioCABA((contact.barrio || 'Palermo').split('/')[0].trim());
+  const geoLocal = geocodificarContactoLocal(contact.calleOCruce || '', barrioNorm);
   const geoContacto =
     typeof contact.lat === 'number' && typeof contact.lng === 'number'
-      ? { lat: contact.lat, lng: contact.lng }
-      : geocodificarContactoLocal(contact.calleOCruce || '', barrioNorm);
+      ? { lat: contact.lat, lng: contact.lng, exacta: geoLocal.exacta }
+      : geoLocal;
 
   let rawNombre = opciones?.cafeNombre || '';
   let rawDir = opciones?.cafeDireccion || '';
@@ -130,15 +131,20 @@ export function describirCafeConDistanciaDesdeContacto(
     latDest,
     lngDest
   );
-  const minutosAprox = Math.max(2, Math.min(18, Math.round(est.minutosCaminando)));
+  // NUNCA truncar a 18 minutos: mostrar siempre los minutos reales caminando y exigir <= 15 min para proponer café automáticamente
+  const minutosAprox = Math.max(2, Math.round(est.minutosCaminando));
 
   const lugarSugerido = (contact.calleOCruce || '').trim();
   const tieneLugarEspecifico =
-    Boolean(lugarSugerido) && !/chile\s*1408/i.test(lugarSugerido);
+    Boolean(lugarSugerido) && !/chile\s*1408/i.test(lugarSugerido) && geoContacto.exacta;
 
-  const fraseCafe = tieneLugarEspecifico
-    ? `el café *${cafeNombre}* (${cafeDireccion}, que está a unos ${minutosAprox} minutos de ${lugarSugerido})`
-    : `el café *${cafeNombre}* (${cafeDireccion}, a unos ${minutosAprox} minutos dentro de ${barrioNorm})`;
+  const cumpleTope15MinCaminando = geoContacto.exacta && minutosAprox <= 15;
+  const incluirEfectivo = opciones?.incluirCafe ?? cumpleTope15MinCaminando;
+
+  const fraseCafe =
+    tieneLugarEspecifico && (minutosAprox <= 15 || incluirEfectivo)
+      ? `el café *${cafeNombre}* (${cafeDireccion}, a unos ${minutosAprox} minutos de ${lugarSugerido} caminando)`
+      : `el café *${cafeNombre}* (${cafeDireccion}, en ${barrioNorm})`;
 
   const horarioCafe =
     opciones?.horarioTexto ||
@@ -146,7 +152,7 @@ export function describirCafeConDistanciaDesdeContacto(
     'esta semana por la tarde';
 
   return {
-    incluirCafe: opciones?.incluirCafe ?? true,
+    incluirCafe: incluirEfectivo,
     cafeNombre,
     cafeDireccion,
     minutosAprox,
@@ -210,44 +216,47 @@ export function seleccionarCafesHubPorCercaniaYFranja(
   // Priorizar estrictamente los cafés del mismo barrio del circuito (si existen en el catálogo) para nunca mezclar cafés de Saavedra/Puerto Madero en un circuito de Palermo
   const poolCafes = cafesMismoBarrio.length >= 1 ? cafesMismoBarrio : candidatosCaba;
 
-  const puntuados = poolCafes
+  const puntuadosTodos = poolCafes
     .map((cf: CafeHubCurado) => {
-      // Calcular distancia promedio real a todos los miembros del grupo (no sólo al centroide)
+      const miembrosConCoords = grupo.filter((m) => typeof m.lat === 'number' && typeof m.lng === 'number');
+      const tiemposMiembros = miembrosConCoords.map((m) =>
+        estimarMinutosCaminandoCABA(m.lat, m.lng, cf.lat, cf.lng)
+      );
+
+      // Calcular distancia promedio real y distancia máxima a todos los miembros del grupo
       const distPromedioMetros =
-        grupo.length > 0
+        tiemposMiembros.length > 0
           ? Math.round(
-              grupo.reduce(
-                (acc, m) =>
-                  acc +
-                  estimarMinutosCaminandoCABA(m.lat, m.lng, cf.lat, cf.lng).distanciaMetros,
-                0
-              ) / grupo.length
+              tiemposMiembros.reduce((acc, t) => acc + t.distanciaMetros, 0) /
+                tiemposMiembros.length
             )
           : estimarMinutosCaminandoCABA(centroLat, centroLng, cf.lat, cf.lng).distanciaMetros;
 
       const minPromedio =
-        grupo.length > 0
+        tiemposMiembros.length > 0
           ? Math.max(
               2,
               Math.round(
-                grupo.reduce(
-                  (acc, m) =>
-                    acc +
-                    estimarMinutosCaminandoCABA(m.lat, m.lng, cf.lat, cf.lng).minutosCaminando,
-                  0
-                ) / grupo.length
+                tiemposMiembros.reduce((acc, t) => acc + t.minutosCaminando, 0) /
+                  tiemposMiembros.length
               )
             )
           : Math.max(2, Math.round(estimarMinutosCaminandoCABA(centroLat, centroLng, cf.lat, cf.lng).minutosCaminando));
+
+      const maxMinutosMiembro =
+        tiemposMiembros.length > 0
+          ? Math.ceil(Math.max(...tiemposMiembros.map((t) => t.minutosCaminando)))
+          : minPromedio;
+
       const cuadrasPromedio = Math.max(1, Math.round(distPromedioMetros / 100));
 
-      // Ordenar estrictamente por la menor distancia geográfica real a las ubicaciones de los vecinos del circuito
-      // (sin que la selección de favoritos en Mapa condicione la propuesta óptima del Planificador)
       const mismoBarrio =
         cf.barrio.toLowerCase() === barrioReferencia.toLowerCase() ||
         grupo.some((m) => m.barrio.toLowerCase() === cf.barrio.toLowerCase());
 
-      const score = distPromedioMetros - (mismoBarrio ? 1200 : 0);
+      // Penalizar fuertemente cualquier café que exceda los 15 minutos caminando para algún miembro del grupo
+      const penalizacionExceso15Min = maxMinutosMiembro > 15 ? (maxMinutosMiembro - 15) * 2000 : 0;
+      const score = distPromedioMetros + penalizacionExceso15Min - (mismoBarrio ? 1200 : 0);
 
       return {
         cafe: {
@@ -259,17 +268,20 @@ export function seleccionarCafesHubPorCercaniaYFranja(
           lat: cf.lat,
           lng: cf.lng,
           distanciaMetros: distPromedioMetros,
-          minutosCaminando: minPromedio,
+          minutosCaminando: maxMinutosMiembro > 15 ? maxMinutosMiembro : minPromedio,
           cuadrasAprox: cuadrasPromedio,
         } satisfies CafeHubCercanoCluster,
+        maxMinutosMiembro,
         score,
       };
     })
-    .sort((a, b) => a.score - b.score)
-    .slice(0, 5);
+    .sort((a, b) => a.score - b.score);
+
+  const dentroDe15Min = puntuadosTodos.filter((p) => p.maxMinutosMiembro <= 15);
+  const puntuados = (dentroDe15Min.length > 0 ? dentroDe15Min : puntuadosTodos).slice(0, 5);
 
   const cafesRanking = puntuados.map((p) => p.cafe);
-  const mediaMinutosMejorCafe = cafesRanking[0]?.minutosCaminando ?? 10;
+  const mediaMinutosMejorCafe = puntuados[0]?.maxMinutosMiembro ?? cafesRanking[0]?.minutosCaminando ?? 18;
 
   return {
     cafesRanking,

@@ -136,6 +136,12 @@ export function calcularHojaDeRuta(
     idsConfirmados1a1?: Set<string>;
     contactosMismoDia?: Contact[];
     ahoraMs?: number;
+    origenPersonalizado?: {
+      lat: number;
+      lng: number;
+      nombre: string;
+      direccionMaps: string;
+    };
   }
 ): ParadaRuta[] {
   // Regla: considerar personas que aún NO han adherido (o que tienen retiro de fichas extra pendiente) y que tienen dirección o punto en Columna G ("Comentario")
@@ -188,13 +194,75 @@ export function calcularHojaDeRuta(
   const partidaResuelta = resolverCoordenadasPartidaPerfil(profile);
 
   // Función auxiliar para resolver la ubicación real de encuentro de cada contacto
-  // (si el vecino no tiene calle/altura propia y se reúne en Café HUB o Chile 1408, usa las coordenadas exactas del punto de encuentro)
+  // (si el vecino confirmó encuentro en un Café HUB, o el bloque es CAFE_HUB, usa las coordenadas y dirección del Café HUB en lugar de su domicilio)
   const obtenerUbicacionEncuentroContacto = (c: Contact): {
     lat: number;
     lng: number;
     destinoNombre: string;
     destinoDireccionMaps: string;
+    esCafeHubConfirmado?: boolean;
   } => {
+    const comLow = (c.comentario || '').toLowerCase();
+    const declinoCafe =
+      comLow.includes('declinó café') ||
+      comLow.includes('declino cafe') ||
+      comLow.includes('pasa a puerta a puerta') ||
+      comLow.includes('visita puerta a puerta') ||
+      comLow.includes('visita confirmada puerta a puerta') ||
+      /confirmado\s+1-a-1[^\]]*puerta\s+a\s+puerta/i.test(comLow);
+
+    const matchCafeEnComentario = (c.comentario || '').match(/Caf[eé]\s*Hub:\s*([^\])·]+)/i);
+    const confirmoEnCafeHub =
+      !declinoCafe &&
+      (Boolean(matchCafeEnComentario?.[1]?.trim()) ||
+        /encuentro\s+confirmado\s+en\s+caf[eé]|confirm[oó]\s+caf[eé]\s*hub|confirmado\s+1-a-1[^\]]*caf[eé]\s*hub/i.test(
+          comLow
+        ) ||
+        c.estadoFlujo === 'PREFIERE_CAFE_HUB_O_SEDE' ||
+        (opcionesRuta?.modalidadBloque === 'CAFE_HUB' && cafeDelBloque));
+
+    if (confirmoEnCafeHub) {
+      const textoCafe = matchCafeEnComentario?.[1]?.trim() || cafeDelBloque?.nombre || '';
+      const nombreLimpio = textoCafe.split('(')[0].replace(/—.*$/, '').trim().toLowerCase();
+      const catMatch = nombreLimpio
+        ? CATALOGO_CAFES_HUB_CABA.find(
+            (cf) =>
+              cf.nombre.toLowerCase().includes(nombreLimpio) ||
+              nombreLimpio.includes(cf.nombre.toLowerCase())
+          )
+        : undefined;
+      const cafeResuelto = catMatch
+        ? {
+            nombre: catMatch.nombre,
+            direccion: catMatch.direccion,
+            lat: catMatch.lat,
+            lng: catMatch.lng,
+          }
+        : cafeDelBloque;
+
+      if (cafeResuelto && cafeResuelto.lat !== undefined && cafeResuelto.lng !== undefined) {
+        const dirCortaCafe = cafeResuelto.direccion.split(',')[0].trim();
+        return {
+          lat: cafeResuelto.lat,
+          lng: cafeResuelto.lng,
+          destinoNombre: `☕ ${cafeResuelto.nombre} · ${dirCortaCafe} (${c.barrio || barrioModa})`,
+          destinoDireccionMaps: /argentina/i.test(cafeResuelto.direccion)
+            ? cafeResuelto.direccion
+            : `${cafeResuelto.direccion}, CABA, Argentina`,
+          esCafeHubConfirmado: true,
+        };
+      }
+    }
+
+    if (c.situacion === 'EVENTO_CHILE_1408') {
+      return {
+        lat: -34.6158,
+        lng: -58.3862,
+        destinoNombre: 'Chile 1408 (Monserrat)',
+        destinoDireccionMaps: 'Chile 1408, Monserrat, CABA, Argentina',
+      };
+    }
+
     if (c.calleOCruce && c.calleOCruce.trim().length > 0) {
       const barrioMaps = /chile\s+1408/i.test(c.calleOCruce) ? 'Monserrat' : c.barrio || 'Palermo';
       return {
@@ -204,20 +272,13 @@ export function calcularHojaDeRuta(
         destinoDireccionMaps: `${c.calleOCruce}, ${barrioMaps}, CABA, Argentina`,
       };
     }
-    if (c.situacion === 'EVENTO_CHILE_1408') {
-      return {
-        lat: -34.6158,
-        lng: -58.3862,
-        destinoNombre: 'Chile 1408 (Monserrat)',
-        destinoDireccionMaps: 'Chile 1408, Monserrat, CABA, Argentina',
-      };
-    }
+
     if (cafeDelBloque && cafeDelBloque.lat !== undefined && cafeDelBloque.lng !== undefined) {
       const dirCortaCafe = cafeDelBloque.direccion.split(',')[0].trim();
       return {
         lat: cafeDelBloque.lat,
         lng: cafeDelBloque.lng,
-        destinoNombre: `${cafeDelBloque.nombre} - ${dirCortaCafe} (${c.barrio || barrioModa})`,
+        destinoNombre: `☕ ${cafeDelBloque.nombre} · ${dirCortaCafe} (${c.barrio || barrioModa})`,
         destinoDireccionMaps: /argentina/i.test(cafeDelBloque.direccion)
           ? cafeDelBloque.direccion
           : `${cafeDelBloque.direccion}, Argentina`,
@@ -234,10 +295,17 @@ export function calcularHojaDeRuta(
   // Ordenar inicialmente priorizando:
   // 1) Vecinos con hora puntual pactada más temprana (para cumplir horarios fijos como Laura 10:00 hs o Felipe 15:00 hs)
   // 2) Vecinos con ventana horaria más acotada/temprana y cercanía geográfica desde la ubicación previa
+  const origenInicial = opcionesRuta?.origenPersonalizado || {
+    lat: partidaResuelta.lat,
+    lng: partidaResuelta.lng,
+    nombre: profile.direccionPartida,
+    direccionMaps: partidaResuelta.direccionMaps,
+  };
+
   const pendientes = [...paradasNoAdheridas];
   const ordenadas: Contact[] = [];
-  let actualLat = partidaResuelta.lat;
-  let actualLng = partidaResuelta.lng;
+  let actualLat = origenInicial.lat;
+  let actualLng = origenInicial.lng;
 
   while (pendientes.length > 0) {
     let mejorIdx = 0;
@@ -284,10 +352,10 @@ export function calcularHojaDeRuta(
   const ejecutarPasadaSecuencial = (secuenciaContactos: Contact[]): ParadaRuta[] => {
     const paradasCrudas: ParadaRuta[] = [];
     let cursorHora = horaSalidaStr;
-    let origenNombre = profile.direccionPartida;
-    let origenDireccionMaps = partidaResuelta.direccionMaps;
-    let origenLat = partidaResuelta.lat;
-    let origenLng = partidaResuelta.lng;
+    let origenNombre = origenInicial.nombre;
+    let origenDireccionMaps = origenInicial.direccionMaps;
+    let origenLat = origenInicial.lat;
+    let origenLng = origenInicial.lng;
     let finVisitaParadaAnteriorMin: number | null = null;
 
     for (let i = 0; i < secuenciaContactos.length; i++) {
@@ -362,18 +430,21 @@ export function calcularHojaDeRuta(
         ((pactadaExactaMin !== null && minutosActualesBA >= pactadaExactaMin + 5) ||
           ventanaColGYaVencidaHoy);
 
-      // Si es la ruta de HOY y esta parada NO es una cita o ventana ya vencida en el pasado ni una cita ya confirmada con hora fija,
-      // el promotor no puede salir hacia esta parada antes de la hora actual (`minutosActualesBA`).
+      // Si es la ruta de HOY y esta parada NO es una cita ya confirmada con hora fija ni ya vencida,
+      // dejar brecha prudente (mínimo 60 min desde ahora, o 30 min si ya está confirmado sin hora puntual)
+      // para darle tiempo a la persona de confirmar y al responsable de alistarse y salir (Puntos 3 y 6).
+      const brechaMinimaHoy = esContactoConfirmadoEnLista1a1(c) ? 20 : 60;
+      const minHoraSalidaHoy = Math.max(
+        9 * 60 + 30,
+        Math.ceil((minutosActualesBA + brechaMinimaHoy) / 15) * 15
+      );
       if (
         esRutaDeHoy &&
         !citaPuntualYaVencidaHoy &&
         !esConfirmadoConHoraExacta &&
-        minutosActualesBA >= 8 * 60 + 30 &&
-        minutosActualesBA < 19 * 60 + 30 &&
-        horaAMinutosDelDia(horaSalida) < minutosActualesBA
+        horaAMinutosDelDia(horaSalida) < minHoraSalidaHoy
       ) {
-        const salidaAhoraMin = Math.ceil(minutosActualesBA / 5) * 5;
-        horaSalida = sumarMinutosAHora('00:00', salidaAhoraMin);
+        horaSalida = sumarMinutosAHora('00:00', minHoraSalidaHoy);
       }
 
       const salidaActualMin = horaAMinutosDelDia(horaSalida);
@@ -1210,11 +1281,24 @@ export function generarCorteEstrategicoLocal(
   ];
 
   // Buscador inteligente de ventana horaria DIURNA REALISTA (09:30 a 20:00 hs, jamás de madrugada ni cruzando medianoche)
-  // que evita choques con los eventos de Google Calendar de ese día dejando margen de traslado hacia/desde el evento.
-  const intervalosOcupadosPorDia: Record<string, { ini: number; fin: number }[]> = {};
+  // que evita choques con los eventos de Google Calendar de ese día dejando margen de traslado hacia/desde el evento
+  // y encadena el traslado desde el KM 0 (1er plan del día) o desde el último punto del plan anterior.
+  const intervalosOcupadosPorDia: Record<
+    string,
+    {
+      ini: number;
+      fin: number;
+      finLat?: number;
+      finLng?: number;
+      finNombre?: string;
+      finDireccionMaps?: string;
+    }[]
+  > = {};
   for (const d of diasOperativos) {
     intervalosOcupadosPorDia[d.diaBA.ddmm] = [];
   }
+
+  const partidaKm0 = resolverCoordenadasPartidaPerfil(profile);
 
   const encontrarVentanaDiurnaSinChoqueCalendar = (params: {
     diaInfo: (typeof diasOperativos)[number];
@@ -1224,6 +1308,7 @@ export function generarCorteEstrategicoLocal(
     lngBarrio: number;
     ventanaColumnaG?: { minIni: number; minFin: number };
     horaPuntualPreferida?: string;
+    tieneConfirmados?: boolean;
   }): { horaInicio: string; notaCalendar: string; chocaForzado: boolean } => {
     const {
       diaInfo,
@@ -1233,12 +1318,20 @@ export function generarCorteEstrategicoLocal(
       lngBarrio,
       ventanaColumnaG,
       horaPuntualPreferida,
+      tieneConfirmados,
     } = params;
     const { diaBA, esHoy, eventos } = diaInfo;
 
+    const ocupadosAgenda = intervalosOcupadosPorDia[diaBA.ddmm] || [];
+    const ultimoOcupado =
+      ocupadosAgenda.length > 0 ? ocupadosAgenda[ocupadosAgenda.length - 1] : undefined;
+
+    const origenLat = ultimoOcupado?.finLat ?? partidaKm0.lat;
+    const origenLng = ultimoOcupado?.finLng ?? partidaKm0.lng;
+
     const trasladoDesdeBase = calcularMinutosTrasladoCABA(
-      profile.latPartida,
-      profile.lngPartida,
+      origenLat,
+      origenLng,
       latBarrio,
       lngBarrio
     ).minutos;
@@ -1249,25 +1342,35 @@ export function generarCorteEstrategicoLocal(
       franjaPreferida === 'Mañana' ||
       franjaPreferida === 'Mediodía';
 
-    const minInicioOperativo = tieneRestriccionMatutinaOPuntual
+    // Margen prudente para propuestas no confirmadas:
+    // - Nunca proponer al inicio mismo de la jornada sin margen de preparación/confirmación (mínimo 09:45 / 10:00 hs salvo cita ya confirmada).
+    // - Si es HOY y el bloque NO está confirmado, dejar al menos 75 min desde la hora actual antes de salir.
+    const minSalidaHoyConMargen = Math.min(
+      19 * 60,
+      Math.ceil((hoyBA.hour * 60 + hoyBA.minute + (tieneConfirmados ? 15 : 75)) / 15) * 15
+    );
+
+    const minInicioOperativo = esHoy
+      ? Math.max(tieneConfirmados ? 8 * 60 + 30 : 10 * 60, minSalidaHoyConMargen)
+      : tieneConfirmados && tieneRestriccionMatutinaOPuntual
       ? 8 * 60 + 30
-      : esHoy && hoyBA.hour >= 9 && hoyBA.hour < 16
-      ? Math.min(15 * 60, Math.ceil((hoyBA.hour * 60 + hoyBA.minute + 25) / 15) * 15)
-      : 9 * 60 + 30;
+      : tieneRestriccionMatutinaOPuntual
+      ? 9 * 60 + 45
+      : 10 * 60;
     const maxFinOperativo = 20 * 60; // Tope estricto 20:00 hs (nunca de noche ni madrugada)
 
-    // Determinar hora ideal de salida desde la base según hora puntual pactada (descontando traslado), ventana de Columna G o franja horaria
+    // Determinar hora ideal de salida desde el origen (KM 0 o fin del plan anterior) descontando el traslado real
     const horaBasePreferidaMin = horaPuntualPreferida
-      ? Math.max(8 * 60 + 15, horaAMinutosDelDia(horaPuntualPreferida) - trasladoDesdeBase)
+      ? Math.max(minInicioOperativo, horaAMinutosDelDia(horaPuntualPreferida) - trasladoDesdeBase)
       : ventanaColumnaG
-      ? Math.max(minInicioOperativo, ventanaColumnaG.minIni - Math.min(20, trasladoDesdeBase))
+      ? Math.max(minInicioOperativo, ventanaColumnaG.minIni - trasladoDesdeBase)
       : franjaPreferida === 'Mañana'
-      ? 9 * 60 + 45
+      ? Math.max(minInicioOperativo, 10 * 60 + 15 - trasladoDesdeBase)
       : franjaPreferida === 'Mediodía'
-      ? 12 * 60 + 15
+      ? Math.max(minInicioOperativo, 12 * 60 + 30 - trasladoDesdeBase)
       : franjaPreferida === 'Vespertino'
-      ? 17 * 60 + 30
-      : 15 * 60;
+      ? Math.max(minInicioOperativo, 17 * 60 + 30 - trasladoDesdeBase)
+      : Math.max(minInicioOperativo, 15 * 60 - trasladoDesdeBase);
 
     // Construir grilla completa de candidatos cada 15 min ordenada por cercanía a horaBasePreferidaMin
     // e incluir horaBasePreferidaMin explícitamente para respetar citas puntuales (ej. 10:00 hs -> salida ~09:41 hs)
@@ -1312,16 +1415,19 @@ export function generarCorteEstrategicoLocal(
       return Math.abs(a - horaBasePreferidaMin) - Math.abs(b - horaBasePreferidaMin);
     });
 
-    const ocupadosAgenda = intervalosOcupadosPorDia[diaBA.ddmm] || [];
-
     const evaluarCandidato = (iniMin: number, durMinEfectiva: number) => {
       const finMin = iniMin + durMinEfectiva;
       if (finMin > maxFinOperativo + 45) return null;
 
-      // Verificar que NO se solape con ningún otro bloque ya agendado ese mismo día (dejando 15 min de traslado entre bloques)
-      const chocaConOtroBloque = ocupadosAgenda.some(
-        (b) => iniMin < b.fin + 15 && finMin + 15 > b.ini
-      );
+      // Verificar que NO se solape con ningún otro bloque ya agendado ese mismo día,
+      // dejando el tiempo de traslado real desde el último punto del bloque anterior hasta este bloque
+      const chocaConOtroBloque = ocupadosAgenda.some((b) => {
+        const trasladoEntreBloques =
+          b.finLat !== undefined && b.finLng !== undefined
+            ? Math.max(15, calcularMinutosTrasladoCABA(b.finLat, b.finLng, latBarrio, lngBarrio).minutos)
+            : 18;
+        return iniMin < b.fin + 5 && finMin + trasladoEntreBloques > b.ini;
+      });
       if (chocaConOtroBloque) return null;
 
       // Verificar que NO choque con ningún evento de Google Calendar de ese día (incluyendo tiempo de traslado)
@@ -1527,8 +1633,24 @@ export function generarCorteEstrategicoLocal(
         )
       : eventosDelDia;
 
-    // 2. Calcular la Hoja de Ruta Casa x Casa REAL para las direcciones de este circuito,
-    //    pasando explícitamente el `mejorCafe` del bloque (sólo si agrupa >= 2 personas) y los `contactosMismoDia`
+    // 2. Resolver punto de partida encadenado:
+    //    - Si es el primer plan del día, parte desde el KM 0 (profile.direccionPartida).
+    //    - Si ya hubo un plan previo ese mismo día, parte desde el último punto del plan anterior.
+    const ocupadosPreviosHoy = intervalosOcupadosPorDia[fechaClave] || [];
+    const salidaBaseMin = horaAMinutosDelDia(horaSalidaBase);
+    const bloquePrevio = [...ocupadosPreviosHoy]
+      .filter((b) => b.finLat !== undefined && b.finLng !== undefined && b.fin <= salidaBaseMin + 45)
+      .sort((a, b) => b.fin - a.fin)[0];
+
+    const origenPersonalizadoBloque = bloquePrevio && bloquePrevio.finLat !== undefined && bloquePrevio.finLng !== undefined
+      ? {
+          lat: bloquePrevio.finLat,
+          lng: bloquePrevio.finLng,
+          nombre: bloquePrevio.finNombre || 'Último punto del plan anterior',
+          direccionMaps: bloquePrevio.finDireccionMaps || 'CABA, Argentina',
+        }
+      : undefined;
+
     const bufferPorParada = 10;
     const contactosMismoDiaRef = elegiblesAgendaConLugar.filter(
       (c) =>
@@ -1547,6 +1669,7 @@ export function generarCorteEstrategicoLocal(
       modalidadBloque: modalidadPreferida,
       contactosMismoDia: contactosMismoDiaRef,
       ahoraMs,
+      origenPersonalizado: origenPersonalizadoBloque,
     };
 
     let paradasRutaSugerida = calcularHojaDeRuta(
@@ -1559,9 +1682,14 @@ export function generarCorteEstrategicoLocal(
       opcionesCalculoRuta
     );
 
+    // El inicio del encuentro en territorio o Café HUB contempla el tiempo de traslado desde el KM 0 (1er plan) o desde el plan anterior
+    let horaSalidaDesdeOrigen = esSede
+      ? '18:05'
+      : paradasRutaSugerida[0]?.horaSalida || horaSalidaBase;
+
     let horaInicioReal = esSede
       ? '18:30'
-      : paradasRutaSugerida[0]?.horaSalida || horaSalidaBase;
+      : paradasRutaSugerida[0]?.horaLlegada || paradasRutaSugerida[0]?.horaSalida || horaSalidaBase;
 
     const calcularDuracionActivaRuta = (paradas: ParadaRuta[]) =>
       paradas.length > 0
@@ -1596,12 +1724,12 @@ export function generarCorteEstrategicoLocal(
 
     let horaFinReal = calcularFinReal(horaInicioReal, paradasRutaSugerida, duracionTotalMinutos);
 
-    // Garantizar que el intervalo real [horaInicioReal, horaFinReal] jamás se superponga con otro bloque del mismo día
+    // Garantizar que el intervalo completo [horaSalidaDesdeOrigen, horaFinReal] jamás se superponga con otro bloque del mismo día
     const ocupadosHoy = intervalosOcupadosPorDia[fechaClave] || [];
     const chocaConOcupados = (iniM: number, finM: number) =>
       ocupadosHoy.some((oc) => iniM < oc.fin + 5 && finM + 5 > oc.ini);
 
-    let iniMinReal = horaAMinutosDelDia(horaInicioReal);
+    let iniMinReal = horaAMinutosDelDia(horaSalidaDesdeOrigen);
     let finMinReal = Math.max(iniMinReal + 25, horaAMinutosDelDia(horaFinReal));
     const tieneContactoConfirmadoConHoraExacta = contactosGrupo.some((c) => {
       const disp = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(c));
@@ -1611,8 +1739,12 @@ export function generarCorteEstrategicoLocal(
     if (!esSede && !tieneContactoConfirmadoConHoraExacta && chocaConOcupados(iniMinReal, finMinReal)) {
       const basePrefMin = horaAMinutosDelDia(horaSalidaBase);
       const spanNecesario = Math.max(duracionTotalMinutos, finMinReal - iniMinReal);
+      const minCandHoy =
+        fechaClave === hoyBA.ddmm
+          ? Math.max(10 * 60, Math.ceil((hoyBA.hour * 60 + hoyBA.minute + 75) / 15) * 15)
+          : 9 * 60 + 30;
       const candsOrdenados: number[] = [];
-      for (let cand = 8 * 60 + 30; cand <= 20 * 60 + 30; cand += 15) {
+      for (let cand = minCandHoy; cand <= 20 * 60 + 30; cand += 15) {
         candsOrdenados.push(cand);
       }
       candsOrdenados.sort((a, b) => {
@@ -1625,6 +1757,9 @@ export function generarCorteEstrategicoLocal(
       for (const cand of candsOrdenados) {
         if (chocaConOcupados(cand, cand + duracionTotalMinutos)) continue;
         const candStr = sumarMinutosAHora('00:00', cand);
+        const prevEnCand = [...ocupadosHoy]
+          .filter((b) => b.finLat !== undefined && b.finLng !== undefined && b.fin <= cand + 5)
+          .sort((a, b) => b.fin - a.fin)[0];
         const paradasCand = calcularHojaDeRuta(
           contactosGrupo,
           candStr,
@@ -1632,17 +1767,30 @@ export function generarCorteEstrategicoLocal(
           profile,
           eventosParaCalculoRuta,
           fechaClave,
-          opcionesCalculoRuta
+          {
+            ...opcionesCalculoRuta,
+            origenPersonalizado:
+              prevEnCand && prevEnCand.finLat !== undefined && prevEnCand.finLng !== undefined
+                ? {
+                    lat: prevEnCand.finLat,
+                    lng: prevEnCand.finLng,
+                    nombre: prevEnCand.finNombre || 'Último punto del plan anterior',
+                    direccionMaps: prevEnCand.finDireccionMaps || 'CABA, Argentina',
+                  }
+                : opcionesCalculoRuta.origenPersonalizado,
+          }
         );
         const durCand =
           modalidadPreferida === 'PUERTA_A_PUERTA'
             ? calcularDuracionActivaRuta(paradasCand)
             : duracionCafeHubMin;
-        const iniCandStr = paradasCand[0]?.horaSalida || candStr;
+        const salidaCandStr = paradasCand[0]?.horaSalida || candStr;
+        const iniCandStr = paradasCand[0]?.horaLlegada || salidaCandStr;
         const finCandStr = calcularFinReal(iniCandStr, paradasCand, durCand);
-        const iniCandM = horaAMinutosDelDia(iniCandStr);
+        const iniCandM = horaAMinutosDelDia(salidaCandStr);
         const finCandM = Math.max(iniCandM + 25, horaAMinutosDelDia(finCandStr));
         if (!chocaConOcupados(iniCandM, finCandM) && finCandM <= 21 * 60 + 30) {
+          horaSalidaDesdeOrigen = salidaCandStr;
           horaInicioReal = iniCandStr;
           horaFinReal = finCandStr;
           paradasRutaSugerida = paradasCand;
@@ -1661,7 +1809,8 @@ export function generarCorteEstrategicoLocal(
           if (!chocaConOcupados(cand, finCompacto)) {
             iniMinReal = cand;
             finMinReal = finCompacto;
-            horaInicioReal = sumarMinutosAHora('00:00', iniMinReal);
+            horaSalidaDesdeOrigen = sumarMinutosAHora('00:00', iniMinReal);
+            horaInicioReal = sumarMinutosAHora(horaSalidaDesdeOrigen, 15);
             horaFinReal = sumarMinutosAHora('00:00', finMinReal);
             duracionTotalMinutos = finMinReal - iniMinReal;
             break;
@@ -1670,13 +1819,40 @@ export function generarCorteEstrategicoLocal(
       }
     }
 
-    // Registrar el intervalo completo del bloque en este día para que ningún bloque posterior se superponga con él
+    // Registrar el intervalo completo del bloque y su último punto físico en este día para encadenar el próximo plan
     if (!intervalosOcupadosPorDia[fechaClave]) {
       intervalosOcupadosPorDia[fechaClave] = [];
     }
+    const ultimaParadaBloque =
+      paradasRutaSugerida.length > 0
+        ? paradasRutaSugerida[paradasRutaSugerida.length - 1]
+        : undefined;
+    const finLatBloque =
+      modalidadPreferida === 'CAFE_HUB' && mejorCafe
+        ? mejorCafe.lat
+        : ultimaParadaBloque?.contact.lat ?? mejorCafe?.lat;
+    const finLngBloque =
+      modalidadPreferida === 'CAFE_HUB' && mejorCafe
+        ? mejorCafe.lng
+        : ultimaParadaBloque?.contact.lng ?? mejorCafe?.lng;
+    const finNombreBloque =
+      modalidadPreferida === 'CAFE_HUB' && mejorCafe
+        ? `${mejorCafe.nombre} (${mejorCafe.direccion.split(',')[0]})`
+        : ultimaParadaBloque?.destinoNombre || nombreMejorCafe;
+    const finDirMapsBloque =
+      modalidadPreferida === 'CAFE_HUB' && mejorCafe
+        ? `${mejorCafe.direccion}, CABA, Argentina`
+        : ultimaParadaBloque?.contact.calleOCruce
+        ? `${ultimaParadaBloque.contact.calleOCruce}, ${barrioPrincipal}, CABA, Argentina`
+        : `${barrioPrincipal}, CABA, Argentina`;
+
     intervalosOcupadosPorDia[fechaClave].push({
-      ini: horaAMinutosDelDia(horaInicioReal),
+      ini: horaAMinutosDelDia(horaSalidaDesdeOrigen),
       fin: horaAMinutosDelDia(horaFinReal),
+      finLat: finLatBloque,
+      finLng: finLngBloque,
+      finNombre: finNombreBloque,
+      finDireccionMaps: finDirMapsBloque,
     });
 
     // Franja horaria limpia para que sea 100% legible y apta para mensajes sin textos internos
@@ -1859,7 +2035,9 @@ export function generarCorteEstrategicoLocal(
   const gruposPorBarrioRemanentes: Record<string, Contact[]> = {};
   for (const c of remanentesConPunto) {
     const b = (c.barrio || 'Palermo').trim();
-    if (!gruposPorBarrioRemanentes[b]) gruposPorBarrioRemanentes[b] = [];
+    if (!gruposPorBarrioRemanentes[b]) {
+      gruposPorBarrioRemanentes[b] = [];
+    }
     gruposPorBarrioRemanentes[b].push(c);
   }
 
@@ -2099,9 +2277,36 @@ export function generarCorteEstrategicoLocal(
   }
 
   for (const [barrioRem, listaRem] of Object.entries(gruposPorBarrioRemanentes)) {
-    for (let i = 0; i < listaRem.length; i += 5) {
-      const lote = listaRem.slice(i, i + 5);
+    // Separar además en sub-lotes compatibles en horario para nunca mezclar mañana con tarde
+    const subLotesCompatibles: Contact[][] = [];
+    for (const c of listaRem) {
+      const subExistente = subLotesCompatibles.find(
+        (sub) => sub.length < 5 && sonHorariosCompatiblesEnCircuito(sub, c)
+      );
+      if (subExistente) {
+        subExistente.push(c);
+      } else {
+        subLotesCompatibles.push([c]);
+      }
+    }
+    subLotesCompatibles.forEach((lote, i) => {
       const coordsB = COORDENADAS_BARRIOS_CABA[barrioRem] || COORDENADAS_BARRIOS_CABA.Palermo;
+      const geoExactosLote = lote.filter((c) => c.tieneCoordenadasExactas !== false);
+      const selCafesLote =
+        lote.length >= 2 && geoExactosLote.length >= 2
+          ? seleccionarCafesHubPorCercaniaYFranja(
+              lote,
+              barrioRem,
+              hoyBA.ddmm,
+              profile
+            )
+          : undefined;
+      const convieneCafeLote = Boolean(
+        selCafesLote &&
+          selCafesLote.cafesRanking.length > 0 &&
+          ((selCafesLote.cafesRanking[0] as any).maxMinutosMiembro ??
+            selCafesLote.cafesRanking[0].minutosCaminando) <= 15
+      );
       circuitosCrudos.push(
         ...construirCircuitosAdaptadosSegunConfirmacion(
           `cluster-extra-${barrioRem.toLowerCase()}-${i}`,
@@ -2109,11 +2314,11 @@ export function generarCorteEstrategicoLocal(
           lote,
           coordsB.lat,
           coordsB.lng,
-          lote.length >= 2,
-          lote.map((c) => resolverFechaObjetivoContacto(c, ahoraMs)).find(Boolean)
+          convieneCafeLote,
+          undefined
         )
       );
-    }
+    });
   }
 
   // CONSOLIDACIÓN ANTI-SUPERPOSICIÓN POR DÍA, BARRIO Y COMPATIBILIDAD HORARIA REAL:
@@ -2138,6 +2343,14 @@ export function generarCorteEstrategicoLocal(
       ) {
         return false;
       }
+      // Si un miembro tiene fechas explícitas cargadas que NO incluyen la fecha del otro grupo, jamás fusionarlos
+      const fObjetivoUnion = ex.fechaExplicita || circ.fechaExplicita;
+      if (fObjetivoUnion) {
+        const todosAceptanFecha = [...ex.miembros, ...circ.miembros].every(
+          (m) => m.fechasMencionadas.length === 0 || m.fechasMencionadas.includes(fObjetivoUnion)
+        );
+        if (!todosAceptanFecha) return false;
+      }
 
       const modEx = ex.modalidadAdaptadaPorConfirmacion || (ex.convieneCafeHub ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
       const tienePreferenciaExplicitaDistinta =
@@ -2147,7 +2360,7 @@ export function generarCorteEstrategicoLocal(
       const esRemanenteIndividual = circ.miembros.length === 1 || ex.miembros.length === 1;
       if (modEx !== modCirc && !esRemanenteIndividual) return false;
 
-      if (circ.fechaExplicita === hoyBA.ddmm && modCirc === 'PUERTA_A_PUERTA' && modEx === 'PUERTA_A_PUERTA') {
+      if (fObjetivoUnion === hoyBA.ddmm) {
         return true;
       }
       return circ.miembros.every((m) => sonHorariosCompatiblesEnCircuito(ex.miembros, m));
@@ -2242,6 +2455,7 @@ export function generarCorteEstrategicoLocal(
   }
 
   circuitosParaAgendar.slice(0, 30).forEach((circ, idx) => {
+    const tieneConfirmadosCirc = circ.miembros.some(esContactoConfirmadoEnLista1a1);
     const matchDiaExplicito = circ.fechaExplicita
       ? diasOperativos.find((d) => d.diaBA.ddmm === circ.fechaExplicita)
       : undefined;
@@ -2276,6 +2490,7 @@ export function generarCorteEstrategicoLocal(
       lngBarrio: circ.centroLng,
       ventanaColumnaG: circ.ventanaColumnaGComun,
       horaPuntualPreferida: circ.horaPuntualMasTemprana,
+      tieneConfirmados: tieneConfirmadosCirc,
     });
 
     const etiquetaDiaLimpia =
@@ -2900,10 +3115,7 @@ export function generarMensajePropuestaBloqueAgenda(
         modalidadEfectiva === 'SEGUIMIENTO_PUNTO_ADHESION') &&
       infoCafe.incluirCafe
     ) {
-      const sugerenciaHorarioDomicilio = paradaVecino?.horaLlegada
-        ? ` (por ejemplo pasando cerca de las *${paradaVecino.horaLlegada} hs*)`
-        : '';
-      return `${saludo}\n\n${introDisculpas}Para *${diaLimpio}* entre las *${franjaLimpia}* voy a estar por *${contact.barrio}* y quería proponerte si te queda cómodo que nos encontremos 2 minutos en ${infoCafe.fraseCafe}, para firmar la ficha de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te viene bien pasar por *${infoCafe.cafeNombre}* en esa franja, o preferís que pase 2 minutos por *${dirVecino}*${sugerenciaHorarioDomicilio}? Gracias.`;
+      return `${saludo}\n\n${introDisculpas}Para *${diaLimpio}* entre las *${franjaLimpia}* voy a estar en ${infoCafe.fraseCafe}, y quería proponerte si te queda cómodo acercarte 2 minutos para firmar la ficha de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te viene bien acercarte a *${infoCafe.cafeNombre}* en esa franja? Si no llegás a poder en ese punto, avisame y coordinamos otro horario dentro del recorrido para pasar por tu dirección. Gracias.`;
     }
 
     // Modalidad PUERTA_A_PUERTA
@@ -3006,7 +3218,7 @@ export function generarMensajePersonalizadoCircuitoMapa(
         : `${saludo}\n\nSiguiendo lo que conversamos (${fechaTexto}), estoy armando el recorrido por *${contact.barrio}* (${franjaTexto}) para pasar 2 minutos por *${dirVecino}* y que firmemos tu ficha de adhesión en papel (acordate de tener el DNI físico de CABA a mano).${notaFichas}\n\n¿Me confirmás si te queda bien que pase por *${dirVecino}* en esa franja? Gracias.`;
     }
 
-    return `${saludo}\n\nPara *${fechaTexto}* (${franjaTexto}) voy a estar por *${contact.barrio}* y quería proponerte pasar o encontrarnos 2 minutos en ${infoCafe.fraseCafe}, para recibir tu firma de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te queda cómodo acercarte a *${infoCafe.cafeNombre}* en esa franja, o preferís que pase 2 minutos por *${dirVecino}*? Gracias.`;
+    return `${saludo}\n\nPara *${fechaTexto}* (${franjaTexto}) voy a estar en ${infoCafe.fraseCafe}, y quería proponerte encontrarnos 2 minutos ahí para recibir tu firma de adhesión en papel (acordate de traer tu DNI físico con domicilio en CABA).${notaFichas}\n\n¿Me confirmás si te queda cómodo acercarte a *${infoCafe.cafeNombre}* en esa franja? Si no podés acercarte al café, avisame y coordinamos otro horario dentro de la planificación para pasar por tu dirección. Gracias.`;
   };
 
   return aplicarReglaSaludoMismoDia(construirMsgMapa(), contact, 'AUTO_MISMO_DIA');

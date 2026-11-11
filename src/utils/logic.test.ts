@@ -1172,10 +1172,11 @@ test('a las 10:18 del 21/10 detecta visitas/encuentros vencidos sin adherir y re
     ahora1018
   );
 
-  // A las 10:18 AM, Laura Masson (10:00 hs), Felipe (desde 20/10) y Santiago (desde 20/10) deben figurar como alertas vencidas para reprogramar
+  // A las 10:18 AM, Laura Masson (10:00 hs) debe figurar como alerta vencida para reprogramar,
+  // mientras que Felipe (20 al 24/10) y Santiago (20 o 21/10 por la tarde) tienen fechas/opciones aún vigentes
   assert.ok(
-    corte.alertasPendientesVencidos.length >= 3,
-    `Debe detectar al menos 3 alertas vencidas sin adherir a las 10:18 AM, se obtuvieron: ${corte.alertasPendientesVencidos.length}`
+    corte.alertasPendientesVencidos.length >= 1,
+    `Debe detectar al menos 1 alerta vencida sin adherir a las 10:18 AM, se obtuvieron: ${corte.alertasPendientesVencidos.length}`
   );
   assert.equal(
     corte.metricas.alertasVencidasReprogramar,
@@ -1940,20 +1941,20 @@ test('Búsqueda sin tildes, no regresión de estado al enviar WA, retiro de fich
 
 test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y análisis de Columnas E, F y G', () => {
   const CHIPS_OFICIALES_RESTAURADOS = [
-    '1. Nuevo · Sin 1er mensaje',
-    '1b. Nuevo · Falta Nombre',
-    '2. 1er Msj Enviado · Esperando respuesta',
-    '3. Respondió · Falta calle/esquina o día',
-    '3b. Pidió más info (5 ejes enviados)',
+    '1. Nuevo · Sin contactar',
+    '1b. Nuevo · Falta nombre',
+    '2. Contactado · Sin respuesta',
+    '3. Respondió · Faltan datos',
+    '3b. Pidió más info',
     '3c. Prefiere Punto / Sede',
-    '4. Pasó dirección/horario · Falta confirmar',
-    '5. Encuentro Confirmado (En Ruta)',
-    '6. Recordatorio / En Camino Enviado',
-    '7. Llevó Fichas Extra · Pendiente Retiro',
-    '8. En Pausa (Viaje / Salud / Más adelante)',
-    '9. ✅ Ya Firmó · Adhesión Completada',
-    '10. Sin DNI en CABA · Pedir Referidos',
-    '11. Baja / Número Inválido / Descartado',
+    '4. Pasó datos · Por confirmar',
+    '5. Confirmado · En ruta',
+    '6. En camino / Recordatorio',
+    '7. Fichas extra · Por retirar',
+    '8. En pausa · Viaje o salud',
+    '9. ✅ Ya firmó',
+    '10. Sin DNI CABA · Referidos',
+    '11. Baja / Descartado',
   ];
 
   // 1. Verificar que el catálogo de la App tenga exactamente los mismos 14 chips carácter por carácter
@@ -1972,6 +1973,15 @@ test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y aná
       `El estado ${item.value} debe devolver exactamente el chip "${item.label}"`
     );
   }
+
+  // 2b. Verificar retrocompatibilidad con etiquetas históricas de Google Sheets
+  assert.equal(parsearTextoAEstadoFlujo('1. Nuevo · Sin 1er mensaje'), 'SIN_CONTACTAR_1ER_MSJ');
+  assert.equal(parsearTextoAEstadoFlujo('2. 1er Msj Enviado · Esperando respuesta'), '1ER_MSJ_ENVIADO_SIN_RSP');
+  assert.equal(parsearTextoAEstadoFlujo('3. Respondió · Falta calle/esquina o día'), 'RESPONDIO_FALTA_DNI_O_ZONA');
+  assert.equal(parsearTextoAEstadoFlujo('4. Pasó dirección/horario · Falta confirmar'), 'PASO_DATOS_FALTA_CONFIRMAR');
+  assert.equal(parsearTextoAEstadoFlujo('7. Llevó Fichas Extra · Pendiente Retiro'), 'PENDIENTE_RETIRO_FICHAS');
+  assert.equal(parsearTextoAEstadoFlujo('9. ✅ Ya Firmó · Adhesión Completada'), 'YA_ADHIRIO_FIRMA_OK');
+  assert.equal(parsearTextoAEstadoFlujo('11. Baja / Número Inválido / Descartado'), 'DESCARTADO_O_BAJA');
 
   // 3. Verificar análisis de Columnas E, F y G sobre casos reales de Google Sheets
   const previoEnApp = [
@@ -2014,14 +2024,14 @@ test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y aná
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(laura.estadoFlujo, 'PASO_DATOS_FALTA_CONFIRMAR');
-  assert.equal(laura.estadoFlujoEtiqueta, '4. Pasó dirección/horario · Falta confirmar');
+  assert.equal(laura.estadoFlujoEtiqueta, '4. Pasó datos · Por confirmar');
 
   const carolina = procesarContacto(
     contactosFusionados.find((c) => c.id === '12')!,
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(carolina.estadoFlujo, 'YA_ADHIRIO_FIRMA_OK');
-  assert.equal(carolina.estadoFlujoEtiqueta, '9. ✅ Ya Firmó · Adhesión Completada');
+  assert.equal(carolina.estadoFlujoEtiqueta, '9. ✅ Ya firmó');
   assert.equal(carolina.adhirio, 'Sí');
 
   const anaClara = procesarContacto(
@@ -2036,35 +2046,35 @@ test('Sincronización 1:1 de los 14 Chips de Estado oficiales restaurados y aná
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(florencia.estadoFlujo, 'PENDIENTE_RETIRO_FICHAS');
-  assert.equal(florencia.estadoFlujoEtiqueta, '7. Llevó Fichas Extra · Pendiente Retiro');
+  assert.equal(florencia.estadoFlujoEtiqueta, '7. Fichas extra · Por retirar');
 
   const belen = procesarContacto(
     contactosFusionados.find((c) => c.id === '25')!,
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(belen.estadoFlujo, 'POSTERGO_SALUD_O_VIAJE');
-  assert.equal(belen.estadoFlujoEtiqueta, '8. En Pausa (Viaje / Salud / Más adelante)');
+  assert.equal(belen.estadoFlujoEtiqueta, '8. En pausa · Viaje o salud');
 
   const martin = procesarContacto(
     contactosFusionados.find((c) => c.id === '73')!,
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(martin.estadoFlujo, 'PIDIO_MAS_INFO_ENVIADA');
-  assert.equal(martin.estadoFlujoEtiqueta, '3b. Pidió más info (5 ejes enviados)');
+  assert.equal(martin.estadoFlujoEtiqueta, '3b. Pidió más info');
 
   const sofia = procesarContacto(
     contactosFusionados.find((c) => c.id === '133')!,
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(sofia.estadoFlujo, 'RESPONDIO_FALTA_DNI_O_ZONA');
-  assert.equal(sofia.estadoFlujoEtiqueta, '3. Respondió · Falta calle/esquina o día');
+  assert.equal(sofia.estadoFlujoEtiqueta, '3. Respondió · Faltan datos');
 
   const sinNom186 = procesarContacto(
     contactosFusionados.find((c) => c.id === '186')!,
     DEFAULT_VOICE_PROFILE
   );
   assert.equal(sinNom186.estadoFlujo, 'FALTA_NOMBRE_Y_APELLIDO');
-  assert.equal(sinNom186.estadoFlujoEtiqueta, '1b. Nuevo · Falta Nombre');
+  assert.equal(sinNom186.estadoFlujoEtiqueta, '1b. Nuevo · Falta nombre');
 });
 
 test('Feedback-8: Sincronización bidireccional App <-> Google Sheets nunca revierte un cambio reciente en la App y refleja cambios en Sheets para los 14 estados', () => {
@@ -2288,6 +2298,278 @@ test('coincideBusquedaUniversal con #ID busca exclusivamente por ID exacto sin c
   assert.equal(contactosFusionados.length, 1, 'Solo debe quedar #493 tras eliminar #494 en Google Sheets');
   assert.equal(contactosFusionados[0].id, '493');
 });
+
+test('Sincronización Sheets: celdas multilínea (\\n) no desfasan filas y filas duplicadas (#284 Lucía Moavro) no se duplican ni triplican al editar', () => {
+  const tsvConMultilineaYDuplicado = [
+    '#\tNombre y Apellido\tBarrio\tTeléfono\tRSP\tAdhirió\tDía(s)\tHorario\tDirección / Punto\tComentario\tEstado (App)',
+    '274\tMorena Ríos\tPalermo\t54 9 11 3945-9797\tSí\tPendiente\t\t\t\tRespondió en WA: "Hola César, bien..\nMe llamo Morena Ríos, y si tengo dni con domicilio en caba."\t3. Respondió · Falta calle/esquina o día',
+    '284\tLucía Moavro\tPalermo\t54 9 11 3062-4194\tSí\tPendiente\t\t\t\tRespondió en WA: "Sí tengo Dni físico con domicilio en CABA"\t3. Respondió · Falta calle/esquina o día',
+    '284\tLucía Moavro\tPalermo\t54 9 11 3062-4194\tSí\tPendiente\t05/11\t11:00 a 17:00\tScalabrini Ortiz, Raul 3020 (28 B)\t\t3. Respondió · Falta calle/esquina o día',
+    '285\t\tPalermo\t54 9 11 5108-8916\tNo\tPendiente\t\t\t\t\t2. 1er Msj Enviado · Esperando respuesta',
+  ].join('\n');
+
+  const parsed = parsearTSVoCSVContactos(tsvConMultilineaYDuplicado, true);
+  assert.equal(parsed.length, 3, 'Debe reconstruir la celda multilínea de #274 y unificar el duplicado de #284 dejando exactamente 3 contactos (#274, #284, #285)');
+  assert.equal(parsed[0].id, '274');
+  assert.ok(parsed[0].comentario.includes('Me llamo Morena Ríos'), 'El comentario de #274 debe conservar la segunda línea tras el salto de línea');
+  assert.equal(parsed[1].id, '284');
+  assert.equal(parsed[1].nombre, 'Lucía Moavro');
+  assert.equal(parsed[1].diasEncuentro, '05/11');
+  assert.equal(parsed[1].horarioEncuentro, '11:00 a 17:00');
+  assert.equal(parsed[1].calleOCruce, 'Scalabrini Ortiz, Raul 3020 (28 B)');
+  assert.equal(parsed[2].id, '285');
+  assert.equal(parsed[2].telRaw, '54 9 11 5108-8916');
+
+  // Incluso si en memoria previa de la App existían clones #285 y #286 de Lucía Moavro recién editados,
+  // al fusionar con Sheets jamás debe volver a inyectarlos ni pisar al verdadero #285
+  const previosConClones = [
+    parsed[0],
+    parsed[1],
+    {
+      ...parsed[1],
+      id: '285',
+      actualizadoEnAppAt: new Date().toISOString(),
+    },
+    {
+      ...parsed[1],
+      id: '286',
+      actualizadoEnAppAt: new Date().toISOString(),
+    },
+  ];
+
+  const { contactosFusionados } = fusionarContactosDesdeSheetsConControl(
+    parsed,
+    previosConClones as any,
+    new Set(),
+    false
+  );
+
+  const lucias = contactosFusionados.filter((c) => c.telRaw.includes('3062-4194'));
+  assert.equal(lucias.length, 1, 'Lucía Moavro debe aparecer una única vez (#284) sin triplicarse');
+  assert.equal(lucias[0].id, '284');
+  const c285 = contactosFusionados.find((c) => c.id === '285');
+  assert.equal(c285?.telRaw, '54 9 11 5108-8916', 'El contacto #285 real no debe ser pisado por el clon de #284');
+});
+
+test('Correcciones Puntos 2, 3 y 4: sin falsa dirección LAB Training Center, rangos con fechas futuras no figuran vencidos y adaptador de respuestas contextual', () => {
+  const ahora05Nov = new Date('2026-11-05T10:00:00-03:00').getTime();
+
+  // Punto 2: mencionar "por Palermo o por Saavedra" jamás debe asignar "LAB. Training Center & Coffee Shop (Palermo"
+  const c279 = procesarContacto(
+    {
+      id: '279',
+      nombre: "María Josefina D'Andreiz",
+      barrio: 'Palermo',
+      telRaw: '54 9 11 5760-8585',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      calleOCruce: 'LAB. Training Center & Coffee Shop (Palermo',
+      comentario:
+        'Respondió en WA: "Hola cesar! Como estas? / Mi nombre es Maria Josefina D\'Andreiz y cuento con DNI en CABA / Me encuentro disponible a partir de las 18hs generalmente por Palermo o por Saavedra dependiendo el dia"',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahora05Nov
+  );
+  assert.equal(
+    Boolean(c279.calleOCruce),
+    false,
+    'No debe conservar ni inferir LAB. Training Center & Coffee Shop (Palermo como dirección'
+  );
+
+  // Punto 4: rango de fechas "04/11 al 06/11" evaluado el 05/11 NO debe marcarse como vencido y debe pasar a PASO_DATOS_FALTA_CONFIRMAR
+  const c206 = procesarContacto(
+    {
+      id: '206',
+      nombre: 'Ariel Abadi',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 4471-8622',
+      rsp: 'No',
+      adhirio: 'Pendiente',
+      comentario: '',
+      diasEncuentro: '04/11 al 06/11',
+      horarioEncuentro: '10:00 a 16:00',
+      calleOCruce: 'República Árabe Siria 3026',
+      estadoFlujo: '1ER_MSJ_ENVIADO_SIN_RSP',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahora05Nov
+  );
+  assert.equal(
+    c206.alertaVencido,
+    undefined,
+    'Un rango 04/11 al 06/11 con días vigentes (05/11 y 06/11) jamás debe figurar como vencido'
+  );
+  assert.equal(
+    c206.estadoFlujo,
+    'PASO_DATOS_FALTA_CONFIRMAR',
+    'Al tener calleOCruce + diasEncuentro + horarioEncuentro debe subir a 4. Pasó dirección/horario · Falta confirmar'
+  );
+
+  // Punto 3: adaptarMensajeConRespuestaVecinoLocal responde al contenido real sin repetir el texto entre paréntesis
+  const c272 = procesarContacto(
+    {
+      id: '272',
+      nombre: 'Florencia Mariana Valls',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 4174-2298',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      comentario: '',
+      ultimoMensajeCorteEnviadoAt: new Date(ahora05Nov - 3600_000).toISOString(),
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahora05Nov
+  );
+  const respViajeOnline = adaptarMensajeConRespuestaVecinoLocal(
+    c272,
+    'stoy de viaje por el Mundo, ahora en Costa Rica. No vuelvo a Argentina hasta octubre de 2027 Te sirve si firmo online ?',
+    c272.mensajeSugerido,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(
+    respViajeOnline.includes('(stoy de viaje'),
+    false,
+    'No debe pegar literalmente el mensaje del contacto entre paréntesis'
+  );
+  assert.ok(
+    /f[ií]sica|papel|presencial/i.test(respViajeOnline),
+    'Debe responder que la Justicia Electoral pide firma física en papel'
+  );
+  assert.ok(
+    /viaje|familiares|amigos/i.test(respViajeOnline),
+    'Debe contemplar el viaje largo y consultar por familiares/amigos en CABA'
+  );
+
+  const respAmiga = adaptarMensajeConRespuestaVecinoLocal(
+    c272,
+    'Hola Cesar, tengo una amiga que también está completando el formulario y ya quedé con ella firmar este viernes',
+    c272.mensajeSugerido,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.ok(
+    /viernes|amiga|genial/i.test(respAmiga),
+    'Debe responder naturalmente cuando ya quedó en firmar con una amiga'
+  );
+});
+
+test('Feedback-16: Vocativos compuestos, salida automática de 1b, exclusión de fechas futuras de HOY, Café HUB <= 15 min caminando sin ofrecer domicilio simultáneo y encadenamiento de traslados KM 0 -> Bloque 1 -> Bloque 2', () => {
+  const ahora11Nov = new Date('2026-11-11T10:30:00-03:00').getTime();
+
+  // 1. Vocativo usa sólo primer nombre salvo compuestos reales (Juan Pablo, María Josefina)
+  assert.equal(extraerPrimerNombre('Juliana Nicole Salazar'), 'Juliana');
+  assert.equal(extraerPrimerNombre('Juan Pablo Rodríguez'), 'Juan Pablo');
+  assert.equal(extraerPrimerNombre("María Josefina D'Andreiz"), 'María Josefina');
+
+  // 2. Contacto en 1b. Sin Nombre que recibe nombre real en la App sale automáticamente de FALTA_NOMBRE_Y_APELLIDO
+  const rawSinNombre = {
+    id: '220',
+    nombre: '',
+    barrio: 'Palermo',
+    telRaw: '54 9 11 4455-6677',
+    rsp: 'Sí' as const,
+    adhirio: 'Pendiente' as const,
+    comentario: 'Respondió en WA',
+    estadoFlujo: 'FALTA_NOMBRE_Y_APELLIDO' as const,
+    primerContactoEnviado: true,
+  };
+  const { actualizado: conNombreCargado } = actualizarDatosContactoEnApp(rawSinNombre, {
+    nombre: 'Martín Gómez',
+  });
+  assert.notEqual(
+    conNombreCargado.estadoFlujo,
+    'FALTA_NOMBRE_Y_APELLIDO',
+    'Al cargar nombre real el contacto debe salir automáticamente de 1b. Sin Nombre'
+  );
+
+  // 3. Juliana Nicole Salazar (12/11 al 13/11) jamás entra en el bloque de HOY (11/11)
+  const rawContactos11Nov = [
+    {
+      id: '501',
+      nombre: 'Vecino Hoy Uno',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 5001-0001',
+      rsp: 'Sí' as const,
+      adhirio: 'Pendiente' as const,
+      calleOCruce: 'Thames 1850',
+      diasEncuentro: '11/11',
+      horarioEncuentro: '14:00 a 17:00',
+      comentario: '',
+      estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR' as const,
+    },
+    {
+      id: '502',
+      nombre: 'Vecino Hoy Dos',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 5001-0002',
+      rsp: 'Sí' as const,
+      adhirio: 'Pendiente' as const,
+      calleOCruce: 'Borges 1920',
+      diasEncuentro: '11/11',
+      horarioEncuentro: '14:00 a 17:00',
+      comentario: '',
+      estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR' as const,
+    },
+    {
+      id: '508',
+      nombre: 'Juliana Nicole Salazar',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 5001-0508',
+      rsp: 'Sí' as const,
+      adhirio: 'Pendiente' as const,
+      calleOCruce: 'Gurruchaga 1780',
+      diasEncuentro: '12/11 al 13/11',
+      horarioEncuentro: '10:00 a 16:00',
+      comentario: '',
+      estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR' as const,
+    },
+  ];
+  const proc11Nov = rawContactos11Nov.map((r) =>
+    procesarContacto(r, DEFAULT_VOICE_PROFILE, ahora11Nov)
+  );
+  const corte11Nov = generarCorteEstrategicoLocal(
+    proc11Nov,
+    DEFAULT_VOICE_PROFILE,
+    'Todos',
+    [],
+    ahora11Nov
+  );
+  const bloquesHoy11Nov = corte11Nov.agendaSugeridaDias.filter((b) => b.fechaClave === '11/11');
+  for (const bHoy of bloquesHoy11Nov) {
+    assert.equal(
+      bHoy.contactosIncluidos.some((c) => c.id === '508'),
+      false,
+      'Juliana (#508, 12/11 al 13/11) jamás debe incluirse en un bloque de HOY 11/11'
+    );
+    // Además, el inicio propuesto para HOY (10:30 hs actual) debe respetar el margen mínimo de preparación/confirmación (>= 11:45 hs)
+    assert.ok(
+      (bHoy.horaInicioCalculada || '12:00') >= '11:45',
+      `El bloque no confirmado de HOY a las 10:30 debe iniciar al menos a las 11:45 hs, inició a las ${bHoy.horaInicioCalculada}`
+    );
+  }
+
+  // 4. Cuando se propone un Café HUB, el mensaje NO ofrece pasar simultáneamente por el domicilio en esa misma franja
+  const bloqueCafe = bloquesHoy11Nov.find((b) => b.modalidad === 'CAFE_HUB') || {
+    ...bloquesHoy11Nov[0],
+    modalidad: 'CAFE_HUB' as const,
+  };
+  const msjCafe = generarMensajePropuestaBloqueAgenda(
+    proc11Nov[0],
+    bloqueCafe,
+    DEFAULT_VOICE_PROFILE
+  );
+  assert.equal(
+    /o\s+si\s+prefer[ií]s\s+que\s+pase\s+2\s+minutos\s+por/i.test(msjCafe),
+    false,
+    `La propuesta de Café HUB no debe ofrecer pasar por la casa en la misma franja del café: ${msjCafe}`
+  );
+  assert.ok(
+    /coordinamos\s+otro\s+horario/i.test(msjCafe),
+    `La propuesta de Café HUB debe ofrecer coordinar otro horario si no puede acercarse al café: ${msjCafe}`
+  );
+});
+
+
+
 
 
 

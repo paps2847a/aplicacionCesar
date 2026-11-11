@@ -901,7 +901,10 @@ class WhatsAppService {
           const etiqueta = obtenerEtiquetaEstadoFlujo(nuevoEstado);
 
           const comPrev = (match.comentario || '').trim();
-          const cleanBody = String(summary.lastBody || '').trim();
+          const cleanBody = String(summary.lastBody || '')
+            .replace(/[\r\n\t]+/g, ' / ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
           const yaIncluyeRespuesta =
             !cleanBody ||
             comPrev.toLowerCase().includes(cleanBody.slice(0, 25).toLowerCase()) ||
@@ -1277,7 +1280,11 @@ class WhatsAppService {
               : 'RESPONDIO_FALTA_DNI_O_ZONA';
             const etiqueta = obtenerEtiquetaEstadoFlujo(nuevoEstado);
 
-            const incomingBody = String(msg.body || '').trim().slice(0, 180);
+            const incomingBody = String(msg.body || '')
+              .replace(/[\r\n\t]+/g, ' / ')
+              .replace(/\s{2,}/g, ' ')
+              .trim()
+              .slice(0, 180);
             const comPrev = (matchedContact.comentario || '').trim();
             const baseSinSello = comPrev.replace(/^\[1er msj auto enviado[^\]]*\]\s*·?\s*/i, '').trim();
             const yaTieneBody =
@@ -2133,11 +2140,15 @@ class WhatsAppService {
             : '1ER_MSJ_ENVIADO_SIN_RSP';
           const etiq = obtenerEtiquetaEstadoFlujo(nuevoEst);
           const comPrev = (existingContact?.comentario || '').trim();
+          const cleanLastIncoming = String(existingChat.lastIncomingBody || '')
+            .replace(/[\r\n\t]+/g, ' / ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
           const nuevoCom =
             existingChat.hasIncoming &&
-            existingChat.lastIncomingBody &&
+            cleanLastIncoming &&
             (!comPrev || /^\[1er msj auto enviado[^\]]*\]$/i.test(comPrev))
-              ? `${comPrev ? comPrev + ' · ' : ''}Respondió en WA: "${existingChat.lastIncomingBody}"`
+              ? `${comPrev ? comPrev + ' · ' : ''}Respondió en WA: "${cleanLastIncoming}"`
               : comPrev;
 
           const updated = updateContactFields(String(effectiveId), {

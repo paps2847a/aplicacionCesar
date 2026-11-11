@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CandidateCard } from '../pipeline/CandidateCard';
+import { PopurriDropdown } from '../common/PopurriDropdown';
 import type {
   CorteResultado,
   BloqueAgendaRecomendado,
@@ -228,6 +229,17 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
 
   // Mensajes editables por contacto en el Planificador
   const [propuestaTexts, setPropuestaTexts] = useState<Record<string, string>>({});
+  // Snapshot de horarios y textos por bloque al iniciar el envío de propuestas para evitar que al enviar al 1er vecino salten los horarios de los demás
+  const [lockedBloqueSnapshots, setLockedBloqueSnapshots] = useState<
+    Record<
+      string,
+      {
+        franjaHoraria: string;
+        paradasHoras: Record<string, string>;
+        textosPorContacto: Record<string, string>;
+      }
+    >
+  >({});
   // Reprogramación / Edición de planificación por contacto (día, hora puntual, dirección, modalidad, café)
   const [reprogFecha, setReprogFecha] = useState<Record<string, string>>({});
   const [reprogHora, setReprogHora] = useState<Record<string, string>>({});
@@ -444,12 +456,59 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   const obtenerTextoPropuestaContacto = (contact: Contact, bloque: BloqueAgendaRecomendado) => {
     const key = `${bloque.id}_${contact.id}`;
     if (propuestaTexts[key] !== undefined) return propuestaTexts[key];
+    const lockedText = lockedBloqueSnapshots[bloque.id]?.textosPorContacto?.[contact.id];
+    if (lockedText !== undefined) return lockedText;
     const modOver = getModalidadOver(bloque);
     const cafeOver = getCafeOver(bloque);
     return generarMensajePropuestaBloqueAgenda(contact, bloque, voiceProfile, {
       modalidad: modOver,
       cafeHubNombre: cafeOver?.nombre,
       cafeHubDireccion: cafeOver?.direccion,
+    });
+  };
+
+  const congelarSnapshotBloqueAlEnviar = (bloque: BloqueAgendaRecomendado) => {
+    const paradasHoras: Record<string, string> = {};
+    for (const p of bloque.paradasRutaSugerida || []) {
+      if (p.horaLlegada) {
+        paradasHoras[p.contact.id] = p.horaLlegada;
+      }
+    }
+    const textosPorContacto: Record<string, string> = {};
+    const nuevosPropuestaTexts: Record<string, string> = {};
+    for (const c of bloque.contactosIncluidos) {
+      const k = `${bloque.id}_${c.id}`;
+      const txt = obtenerTextoPropuestaContacto(c, bloque);
+      textosPorContacto[c.id] = txt;
+      nuevosPropuestaTexts[k] = txt;
+    }
+    setLockedBloqueSnapshots((prev) => ({
+      ...prev,
+      [bloque.id]: prev[bloque.id] || {
+        franjaHoraria: bloque.franjaHoraria,
+        paradasHoras,
+        textosPorContacto,
+      },
+    }));
+    setPropuestaTexts((prev) => ({
+      ...nuevosPropuestaTexts,
+      ...prev,
+    }));
+  };
+
+  const limpiarSnapshotBloque = (bloqueId: string) => {
+    setLockedBloqueSnapshots((prev) => {
+      if (!prev[bloqueId]) return prev;
+      const next = { ...prev };
+      delete next[bloqueId];
+      return next;
+    });
+    setPropuestaTexts((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (k.startsWith(`${bloqueId}_`)) delete next[k];
+      }
+      return next;
     });
   };
 
@@ -754,7 +813,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl min-w-0 overflow-x-hidden px-2.5 sm:px-6 py-3 sm:py-5 space-y-4">
+    <div className="mx-auto w-full max-w-6xl min-w-0 overflow-x-clip px-2.5 sm:px-6 py-3 sm:py-5 space-y-4">
       {/* 1. Cabecera Compacta con Conmutador de Modo + Selector Desplegable de Día */}
       <div className="rounded-2xl border-2 border-[#323232] bg-white p-3.5 sm:p-4 shadow-[4px_4px_0px_#323232] space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
@@ -809,18 +868,22 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
             <label className="text-xs font-bold font-display uppercase text-[#5A5955] shrink-0">
               Día:
             </label>
-            <select
-              value={selectedDia}
-              onChange={(e) => setSelectedDia(e.target.value)}
-              className="flex-1 sm:w-64 min-w-0 rounded-xl border-2 border-[#323232] bg-[#FFF06B]/60 px-3 py-1.5 text-xs font-bold font-display text-[#323232] shadow-[2px_2px_0px_#323232] focus:outline-none cursor-pointer"
-            >
-              {diasUnicos.map((dia) => (
-                <option key={dia} value={dia}>
-                  {/hoy/i.test(dia) ? `🔴 ${dia}` : dia}
-                </option>
-              ))}
-              <option value="Todos">📅 Todos los días ({bloques.length} circuitos)</option>
-            </select>
+            <div className="flex-1 sm:w-64 min-w-0">
+              <PopurriDropdown
+                value={selectedDia}
+                onChange={(val) => setSelectedDia(val)}
+                headerLabel="Elegir día del recorrido:"
+                menuWidth={280}
+                options={[
+                  ...diasUnicos.map((dia) => ({
+                    value: dia,
+                    label: /hoy/i.test(dia) ? `🔴 ${dia}` : dia,
+                  })),
+                  { value: 'Todos', label: `📅 Todos los días (${bloques.length} circuitos)` },
+                ]}
+                triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-[#FFF06B]/60 px-3 py-1.5 text-xs font-bold font-display text-[#323232] shadow-[2px_2px_0px_#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+              />
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
@@ -1074,7 +1137,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                           {bloque.barrio}
                         </span>
                         <span className="rounded-lg bg-white px-2.5 py-0.5 text-xs font-bold font-display text-[#323232] border border-[#323232]">
-                          {bloque.franjaHoraria}
+                          {lockedBloqueSnapshots[bloque.id]?.franjaHoraria || bloque.franjaHoraria}
                         </span>
                         <span
                           className={`rounded-lg px-2.5 py-0.5 text-xs font-bold font-display border border-[#323232] ${
@@ -1142,13 +1205,14 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                               </span>
                               <button
                                 type="button"
-                                onClick={() =>
+                                onClick={() => {
+                                  limpiarSnapshotBloque(bloque.id);
                                   setBloqueModalidadOverride((prev) => ({
                                     ...prev,
                                     [bloque.id]: 'PUERTA_A_PUERTA',
                                     [getBloqueOverrideKey(bloque)]: 'PUERTA_A_PUERTA',
-                                  }))
-                                }
+                                  }));
+                                }}
                                 className={`inline-flex items-center gap-1 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display cursor-pointer ${
                                   modalidadActiva === 'PUERTA_A_PUERTA'
                                     ? 'bg-[#29B8FF] text-[#323232]'
@@ -1166,13 +1230,14 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                               {bloque.cafesHubOpciones && bloque.cafesHubOpciones.length > 0 && (
                                 <button
                                   type="button"
-                                  onClick={() =>
+                                  onClick={() => {
+                                    limpiarSnapshotBloque(bloque.id);
                                     setBloqueModalidadOverride((prev) => ({
                                       ...prev,
                                       [bloque.id]: 'CAFE_HUB',
                                       [getBloqueOverrideKey(bloque)]: 'CAFE_HUB',
-                                    }))
-                                  }
+                                    }));
+                                  }}
                                   className={`inline-flex items-center gap-1 rounded-lg border border-[#323232] px-2.5 py-1 text-xs font-bold font-display cursor-pointer ${
                                     modalidadActiva === 'CAFE_HUB'
                                       ? 'bg-[#FFF06B] text-[#323232]'
@@ -1195,36 +1260,39 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                 <span className="text-[11px] font-bold text-[#5A5955] shrink-0">
                                   Café:
                                 </span>
-                                <select
-                                  value={
-                                    cafeUnicoCircuito?.nombre || bloque.cafesHubOpciones[0].nombre
-                                  }
-                                  onChange={(e) => {
-                                    const found = bloque.cafesHubOpciones?.find(
-                                      (cf) => cf.nombre === e.target.value
-                                    );
-                                    if (found) {
-                                      const val = {
-                                        nombre: found.nombre,
-                                        direccion: found.direccion,
-                                      };
-                                      setBloqueCafeOverride((prev) => ({
-                                        ...prev,
-                                        [bloque.id]: val,
-                                        [getBloqueOverrideKey(bloque)]: val,
-                                      }));
+                                <div className="w-full sm:w-72 min-w-0">
+                                  <PopurriDropdown
+                                    value={
+                                      cafeUnicoCircuito?.nombre || bloque.cafesHubOpciones[0].nombre
                                     }
-                                  }}
-                                  className="w-full sm:max-w-xs min-w-0 truncate rounded-lg border-2 border-[#323232] bg-[#FFF06B]/40 px-2.5 py-1 text-xs font-bold text-[#323232]"
-                                >
-                                  {bloque.cafesHubOpciones.map((cf, i) => (
-                                    <option key={cf.nombre} value={cf.nombre}>
-                                      {i === 0 ? '⭐ ' : ''}
-                                      {cf.nombre} ({cf.direccion.split(',')[0]} · ~
-                                      {cf.minutosCaminando} min)
-                                    </option>
-                                  ))}
-                                </select>
+                                    onChange={(val) => {
+                                      const found = bloque.cafesHubOpciones?.find(
+                                        (cf) => cf.nombre === val
+                                      );
+                                      if (found) {
+                                        limpiarSnapshotBloque(bloque.id);
+                                        const nextCafe = {
+                                          nombre: found.nombre,
+                                          direccion: found.direccion,
+                                        };
+                                        setBloqueCafeOverride((prev) => ({
+                                          ...prev,
+                                          [bloque.id]: nextCafe,
+                                          [getBloqueOverrideKey(bloque)]: nextCafe,
+                                        }));
+                                      }
+                                    }}
+                                    headerLabel="Café Hub recomendado para el circuito:"
+                                    menuWidth={320}
+                                    options={bloque.cafesHubOpciones.map((cf, i) => ({
+                                      value: cf.nombre,
+                                      label: `${i === 0 ? '⭐ ' : ''}${cf.nombre} (${
+                                        cf.direccion.split(',')[0]
+                                      } · ~${cf.minutosCaminando} min)`,
+                                    }))}
+                                    triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-lg border-2 border-[#323232] bg-[#FFF06B]/40 px-2.5 py-1 text-xs font-bold text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+                                  />
+                                </div>
                               </div>
                             )}
                           </div>
@@ -1302,7 +1370,9 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                     {paradaRef && (
                                       <span className="rounded-md bg-[#FFF06B] px-2 py-0.5 font-mono text-xs font-bold text-[#323232] border border-[#323232]">
                                         {yaConfirmado ? 'Ruta:' : 'Sugerido:'}{' '}
-                                        {paradaRef.horaLlegada} hs
+                                        {lockedBloqueSnapshots[bloque.id]?.paradasHoras?.[contact.id] ||
+                                          paradaRef.horaLlegada}{' '}
+                                        hs
                                       </span>
                                     )}
                                     {contact.alertaVencido?.activa && (
@@ -1454,25 +1524,26 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                         <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
                                           Modalidad del encuentro:
                                         </label>
-                                        <select
+                                        <PopurriDropdown
                                           value={reprogModalidad[contact.id] || 'PUERTA_A_PUERTA'}
-                                          onChange={(e) =>
+                                          onChange={(val) =>
                                             setReprogModalidad((prev) => ({
                                               ...prev,
-                                              [contact.id]: e.target.value as
-                                                | 'PUERTA_A_PUERTA'
-                                                | 'CAFE_HUB',
+                                              [contact.id]: val as 'PUERTA_A_PUERTA' | 'CAFE_HUB',
                                             }))
                                           }
-                                          className="w-full rounded-lg border-2 border-[#323232] bg-[#FFF06B]/50 px-2.5 py-1.5 text-xs font-bold text-[#323232]"
-                                        >
-                                          <option value="PUERTA_A_PUERTA">
-                                            🏠 Pasar por su Domicilio
-                                          </option>
-                                          <option value="CAFE_HUB">
-                                            ☕ Encuentro en Café Hub
-                                          </option>
-                                        </select>
+                                          options={[
+                                            {
+                                              value: 'PUERTA_A_PUERTA',
+                                              label: '🏠 Pasar por su Domicilio',
+                                            },
+                                            {
+                                              value: 'CAFE_HUB',
+                                              label: '☕ Encuentro en Café Hub',
+                                            },
+                                          ]}
+                                          triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-lg border-2 border-[#323232] bg-[#FFF06B]/50 px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+                                        />
                                       </div>
 
                                       <div>
@@ -1486,32 +1557,28 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                           'CAFE_HUB' &&
                                         bloque.cafesHubOpciones &&
                                         bloque.cafesHubOpciones.length > 0 ? (
-                                          <select
+                                          <PopurriDropdown
                                             value={
                                               reprogCafe[contact.id] ||
                                               `${bloque.cafesHubOpciones[0].nombre} (${
                                                 bloque.cafesHubOpciones[0].direccion.split(',')[0]
                                               })`
                                             }
-                                            onChange={(e) =>
+                                            onChange={(val) =>
                                               setReprogCafe((prev) => ({
                                                 ...prev,
-                                                [contact.id]: e.target.value,
+                                                [contact.id]: val,
                                               }))
                                             }
-                                            className="w-full rounded-lg border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232]"
-                                          >
-                                            {bloque.cafesHubOpciones.map((cf) => {
+                                            menuWidth={300}
+                                            options={bloque.cafesHubOpciones.map((cf) => {
                                               const val = `${cf.nombre} (${
                                                 cf.direccion.split(',')[0]
                                               })`;
-                                              return (
-                                                <option key={cf.nombre} value={val}>
-                                                  {val}
-                                                </option>
-                                              );
+                                              return { value: val, label: val };
                                             })}
-                                          </select>
+                                            triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-lg border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                                          />
                                         ) : (
                                           <input
                                             type="text"
@@ -1580,7 +1647,10 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                         {onSendDirectWA && phone && (
                                           <button
                                             type="button"
-                                            onClick={() => handleSendWA(contact, textoProp)}
+                                            onClick={() => {
+                                              congelarSnapshotBloqueAlEnviar(bloque);
+                                              handleSendWA(contact, textoProp);
+                                            }}
                                             disabled={sendingId === contact.id}
                                             className={`inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${
                                               countdownSending?.contactId === contact.id
@@ -1924,25 +1994,26 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                           <label className="block text-[11px] font-bold text-[#5A5955] mb-1">
                                             Modalidad:
                                           </label>
-                                          <select
+                                          <PopurriDropdown
                                             value={reprogModalidad[c.id] || 'PUERTA_A_PUERTA'}
-                                            onChange={(e) =>
+                                            onChange={(val) =>
                                               setReprogModalidad((prev) => ({
                                                 ...prev,
-                                                [c.id]: e.target.value as
-                                                  | 'PUERTA_A_PUERTA'
-                                                  | 'CAFE_HUB',
+                                                [c.id]: val as 'PUERTA_A_PUERTA' | 'CAFE_HUB',
                                               }))
                                             }
-                                            className="w-full rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
-                                          >
-                                            <option value="PUERTA_A_PUERTA">
-                                              🏠 Pasar por su Domicilio
-                                            </option>
-                                            <option value="CAFE_HUB">
-                                              ☕ Encuentro en Café Hub
-                                            </option>
-                                          </select>
+                                            options={[
+                                              {
+                                                value: 'PUERTA_A_PUERTA',
+                                                label: '🏠 Pasar por su Domicilio',
+                                              },
+                                              {
+                                                value: 'CAFE_HUB',
+                                                label: '☕ Encuentro en Café Hub',
+                                              },
+                                            ]}
+                                            triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                                          />
                                         </div>
 
                                         <div>
@@ -1956,32 +2027,28 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                             'CAFE_HUB' &&
                                           bloque.cafesHubOpciones &&
                                           bloque.cafesHubOpciones.length > 0 ? (
-                                            <select
+                                            <PopurriDropdown
                                               value={
                                                 reprogCafe[c.id] ||
                                                 `${bloque.cafesHubOpciones[0].nombre} (${
                                                   bloque.cafesHubOpciones[0].direccion.split(',')[0]
                                                 })`
                                               }
-                                              onChange={(e) =>
+                                              onChange={(val) =>
                                                 setReprogCafe((prev) => ({
                                                   ...prev,
-                                                  [c.id]: e.target.value,
+                                                  [c.id]: val,
                                                 }))
                                               }
-                                              className="w-full rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232]"
-                                            >
-                                              {bloque.cafesHubOpciones.map((cf) => {
+                                              menuWidth={300}
+                                              options={bloque.cafesHubOpciones.map((cf) => {
                                                 const val = `${cf.nombre} (${
                                                   cf.direccion.split(',')[0]
                                                 })`;
-                                                return (
-                                                  <option key={cf.nombre} value={val}>
-                                                    {val}
-                                                  </option>
-                                                );
+                                                return { value: val, label: val };
                                               })}
-                                            </select>
+                                              triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                                            />
                                           ) : (
                                             <input
                                               type="text"
@@ -2036,32 +2103,32 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                       <label className="text-[11px] font-bold uppercase tracking-wider text-[#323232] font-display">
                                         Mensaje en Vivo para esta Parada (Editable):
                                       </label>
-                                      <select
-                                        value={modoActual}
-                                        onChange={(e) => {
-                                          const nextModo = e.target.value as ModoMensajeTerrenoRuta;
-                                          if (
-                                            nextModo === 'EN_CAMINO_HORA_CALC' &&
-                                            !estaConfirmado
-                                          ) {
-                                            setParadaUnlockEnCamino((prev) => ({
+                                      <div className="w-full sm:w-80">
+                                        <PopurriDropdown
+                                          value={modoActual}
+                                          onChange={(val) => {
+                                            const nextModo = val as ModoMensajeTerrenoRuta;
+                                            if (
+                                              nextModo === 'EN_CAMINO_HORA_CALC' &&
+                                              !estaConfirmado
+                                            ) {
+                                              setParadaUnlockEnCamino((prev) => ({
+                                                ...prev,
+                                                [c.id]: true,
+                                              }));
+                                            }
+                                            setParadaModoMsj((prev) => ({
                                               ...prev,
-                                              [c.id]: true,
+                                              [c.id]: nextModo,
                                             }));
-                                          }
-                                          setParadaModoMsj((prev) => ({
-                                            ...prev,
-                                            [c.id]: nextModo,
-                                          }));
-                                        }}
-                                        className="rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#323232]"
-                                      >
-                                        {MODOS_MENSAJE_TERRENO.map((m) => (
-                                          <option key={m.value} value={m.value}>
-                                            {m.label}
-                                          </option>
-                                        ))}
-                                      </select>
+                                          }}
+                                          headerLabel="Modo de mensaje para esta parada:"
+                                          align="right"
+                                          menuWidth={320}
+                                          options={MODOS_MENSAJE_TERRENO}
+                                          triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-lg border-2 border-[#323232] bg-white px-2.5 py-1 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                                        />
+                                      </div>
                                     </div>
 
                                     <textarea
@@ -2242,7 +2309,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-2.5 sm:p-5 overflow-y-auto"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-2.5 sm:p-5 overflow-y-auto overflow-x-hidden"
             onClick={() => setModalContactId(null)}
           >
             <motion.div
@@ -2250,7 +2317,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.96, y: 12 }}
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-2xl border-2 border-[#323232] bg-[#F5F4F0] p-3 sm:p-4 shadow-[6px_6px_0px_#323232] space-y-3"
+              className="w-full max-w-5xl max-h-[92vh] overflow-y-auto overflow-x-hidden popurri-dropdown-scroll rounded-2xl border-2 border-[#323232] bg-[#F5F4F0] p-3 sm:p-4 shadow-[6px_6px_0px_#323232] space-y-3"
             >
               <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-[#323232] pb-2.5">
                 <div className="flex items-center gap-2">

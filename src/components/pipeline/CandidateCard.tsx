@@ -52,6 +52,7 @@ import {
   ScheduleAndAddressPicker,
   type ScheduleAndAddressValues,
 } from './ScheduleAndAddressPicker';
+import { PopurriDropdown } from '../common/PopurriDropdown';
 
 function formatTimestampSutil(isoOrDate?: string): string {
   if (!isoOrDate || isoOrDate === '2025-05-14') return '';
@@ -137,98 +138,98 @@ export const LISTA_ESTADOS_FLUJO_UNIFICADOS: {
 }[] = [
   {
     value: 'SIN_CONTACTAR_1ER_MSJ',
-    label: '1. Nuevo · Sin 1er mensaje',
-    shortLabel: '1. Sin 1er Msj',
+    label: '1. Nuevo · Sin contactar',
+    shortLabel: '1. Nuevo · Sin contactar',
     rsp: 'Nuevo',
     adhirio: 'Pendiente',
   },
   {
     value: 'FALTA_NOMBRE_Y_APELLIDO',
-    label: '1b. Nuevo · Falta Nombre',
-    shortLabel: '1b. Falta Nombre',
+    label: '1b. Nuevo · Falta nombre',
+    shortLabel: '1b. Nuevo · Falta nombre',
     rsp: 'Nuevo',
     adhirio: 'Pendiente',
   },
   {
     value: '1ER_MSJ_ENVIADO_SIN_RSP',
-    label: '2. 1er Msj Enviado · Esperando respuesta',
-    shortLabel: '2. 1er Msj (Sin Rsp)',
+    label: '2. Contactado · Sin respuesta',
+    shortLabel: '2. Contactado · Sin respuesta',
     rsp: 'No',
     adhirio: 'Pendiente',
   },
   {
     value: 'RESPONDIO_FALTA_DNI_O_ZONA',
-    label: '3. Respondió · Falta calle/esquina o día',
-    shortLabel: '3. Falta Calle/Día',
+    label: '3. Respondió · Faltan datos',
+    shortLabel: '3. Respondió · Faltan datos',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
   {
     value: 'PIDIO_MAS_INFO_ENVIADA',
-    label: '3b. Pidió más info (5 ejes enviados)',
-    shortLabel: '3b. Pidió Más Info',
+    label: '3b. Pidió más info',
+    shortLabel: '3b. Pidió más info',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
   {
     value: 'PREFIERE_CAFE_HUB_O_SEDE',
     label: '3c. Prefiere Punto / Sede',
-    shortLabel: '3c. Prefiere Punto/Sede',
+    shortLabel: '3c. Prefiere Punto / Sede',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
   {
     value: 'PASO_DATOS_FALTA_CONFIRMAR',
-    label: '4. Pasó dirección/horario · Falta confirmar',
-    shortLabel: '4. Falta Confirmar',
+    label: '4. Pasó datos · Por confirmar',
+    shortLabel: '4. Pasó datos · Por confirmar',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
   {
     value: 'ENCUENTRO_CONFIRMADO',
-    label: '5. Encuentro Confirmado (En Ruta)',
-    shortLabel: '5. Confirmado (Ruta)',
+    label: '5. Confirmado · En ruta',
+    shortLabel: '5. Confirmado · En ruta',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
   {
     value: 'RECORDATORIO_DIA_ENVIADO',
-    label: '6. Recordatorio / En Camino Enviado',
-    shortLabel: '6. En Camino / Record.',
+    label: '6. En camino / Recordatorio',
+    shortLabel: '6. En camino / Recordatorio',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
   {
     value: 'PENDIENTE_RETIRO_FICHAS',
-    label: '7. Llevó Fichas Extra · Pendiente Retiro',
-    shortLabel: '7. Retiro Fichas',
+    label: '7. Fichas extra · Por retirar',
+    shortLabel: '7. Fichas extra · Por retirar',
     rsp: 'Sí',
     adhirio: 'Sí',
   },
   {
     value: 'POSTERGO_SALUD_O_VIAJE',
-    label: '8. En Pausa (Viaje / Salud / Más adelante)',
-    shortLabel: '8. En Pausa',
+    label: '8. En pausa · Viaje o salud',
+    shortLabel: '8. En pausa · Viaje o salud',
     rsp: 'Sí',
     adhirio: 'Pendiente',
   },
   {
     value: 'YA_ADHIRIO_FIRMA_OK',
-    label: '9. ✅ Ya Firmó · Adhesión Completada',
-    shortLabel: '9. ✅ Ya Firmó',
+    label: '9. ✅ Ya firmó',
+    shortLabel: '9. ✅ Ya firmó',
     rsp: 'Sí',
     adhirio: 'Sí',
   },
   {
     value: 'SIN_DNI_CABA_PEDIR_REFERIDOS',
-    label: '10. Sin DNI en CABA · Pedir Referidos',
-    shortLabel: '10. Sin DNI CABA',
+    label: '10. Sin DNI CABA · Referidos',
+    shortLabel: '10. Sin DNI CABA · Referidos',
     rsp: 'Sí',
     adhirio: 'No',
   },
   {
     value: 'DESCARTADO_O_BAJA',
-    label: '11. Baja / Número Inválido / Descartado',
+    label: '11. Baja / Descartado',
     shortLabel: '11. Baja / Descartado',
     rsp: 'No',
     adhirio: 'No',
@@ -452,9 +453,48 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
         : null;
       const barrioFinal = barrioInferido || editBarrio.trim() || contact.barrio || 'Palermo';
 
-      const defEstado = LISTA_ESTADOS_FLUJO_UNIFICADOS.find((it) => it.value === editEstadoFlujo);
+      const tieneDir = Boolean(editCalle.trim());
+      const tieneDiaOHora = Boolean(
+        editDiasEncuentro.trim() || editHorarioEncuentro.trim() || editHoraInicio.trim()
+      );
+      const tieneNombreCargado = Boolean(
+        (editNombre.trim() &&
+          !/^(?:tel[eé]fono|sin\s*nombre|s\/n|desconocido)/i.test(editNombre.trim())) ||
+          (editVocativo.trim() &&
+            !/^(?:tel[eé]fono|sin\s*nombre|s\/n|desconocido)/i.test(editVocativo.trim()))
+      );
+      let estadoEfectivo: EstadoFlujo = editEstadoFlujo;
+      if (
+        tieneDir &&
+        tieneDiaOHora &&
+        (estadoEfectivo === 'SIN_CONTACTAR_1ER_MSJ' ||
+          estadoEfectivo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+          estadoEfectivo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+          estadoEfectivo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP' ||
+          estadoEfectivo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+          estadoEfectivo === 'PIDIO_MAS_INFO_ENVIADA')
+      ) {
+        estadoEfectivo = 'PASO_DATOS_FALTA_CONFIRMAR';
+      } else if (
+        (tieneDir || tieneDiaOHora) &&
+        (estadoEfectivo === 'SIN_CONTACTAR_1ER_MSJ' ||
+          estadoEfectivo === 'FALTA_NOMBRE_Y_APELLIDO' ||
+          estadoEfectivo === '1ER_MSJ_ENVIADO_SIN_RSP' ||
+          estadoEfectivo === 'SEGUNDO_SEGUIMIENTO_SIN_RSP')
+      ) {
+        estadoEfectivo = 'RESPONDIO_FALTA_DNI_O_ZONA';
+      } else if (tieneNombreCargado && estadoEfectivo === 'FALTA_NOMBRE_Y_APELLIDO') {
+        estadoEfectivo =
+          contact.rsp === 'Sí'
+            ? 'RESPONDIO_FALTA_DNI_O_ZONA'
+            : contact.primerContactoEnviado || Boolean(contact.ultimoMensajeCorteEnviadoAt)
+              ? '1ER_MSJ_ENVIADO_SIN_RSP'
+              : 'SIN_CONTACTAR_1ER_MSJ';
+      }
+
+      const defEstado = LISTA_ESTADOS_FLUJO_UNIFICADOS.find((it) => it.value === estadoEfectivo);
       const esRevertidoANuevo =
-        editEstadoFlujo === 'SIN_CONTACTAR_1ER_MSJ' || editEstadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO';
+        estadoEfectivo === 'SIN_CONTACTAR_1ER_MSJ' || estadoEfectivo === 'FALTA_NOMBRE_Y_APELLIDO';
 
       await onUpdateContact(contact.id, {
         nombre: editNombre.trim(),
@@ -468,7 +508,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
         pisoDepto: editPisoDepto.trim(),
         barrio: barrioFinal,
         comentario: editComentario.trim(),
-        estadoFlujo: editEstadoFlujo,
+        estadoFlujo: estadoEfectivo,
         rsp: defEstado ? defEstado.rsp : contact.rsp,
         adhirio: defEstado ? defEstado.adhirio : contact.adhirio,
         primerContactoEnviado: !esRevertidoANuevo,
@@ -532,12 +572,25 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   const handleSaveQuickName = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onUpdateContact || !quickFullName.trim()) return;
+    const tieneDir = Boolean((contact.calleOCruce || '').trim());
+    const tieneDiaOHora = Boolean(
+      (contact.diasEncuentro || '').trim() ||
+        (contact.horarioEncuentro || '').trim() ||
+        contact.fechasMencionadas.length > 0
+    );
+    const proximoEstado: EstadoFlujo | undefined =
+      contact.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
+        ? tieneDir && tieneDiaOHora
+          ? 'PASO_DATOS_FALTA_CONFIRMAR'
+          : tieneDir || tieneDiaOHora || contact.rsp === 'Sí'
+            ? 'RESPONDIO_FALTA_DNI_O_ZONA'
+            : contact.primerContactoEnviado || Boolean(contact.ultimoMensajeCorteEnviadoAt)
+              ? '1ER_MSJ_ENVIADO_SIN_RSP'
+              : 'SIN_CONTACTAR_1ER_MSJ'
+        : contact.estadoFlujo;
     await onUpdateContact(contact.id, {
       nombre: quickFullName.trim(),
-      estadoFlujo:
-        contact.estadoFlujo === 'FALTA_NOMBRE_Y_APELLIDO'
-          ? 'SIN_CONTACTAR_1ER_MSJ'
-          : contact.estadoFlujo,
+      estadoFlujo: proximoEstado,
     });
   };
 
@@ -607,8 +660,8 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     setMessageText(gen.texto);
   };
 
-  const handleMarkFichasExtra = async (cantidad: 1 | 2 | 3, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleMarkFichasExtra = async (cantidad: 1 | 2 | 3, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     if (!onUpdateContact) return;
     const xCant: 'X1' | 'X2' | 'X3' = cantidad === 1 ? 'X1' : cantidad === 3 ? 'X3' : 'X2';
     const actualizado = marcarEntregaFichasExtra(contact, xCant, Date.now());
@@ -626,8 +679,8 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
     setShowFichasMenu(false);
   };
 
-  const handleGranularStatusSelect = async (nuevoEstado: EstadoFlujo, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleGranularStatusSelect = async (nuevoEstado: EstadoFlujo, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     setShowStageMenu(false);
     if (!onUpdateContact) return;
     const def = LISTA_ESTADOS_FLUJO_UNIFICADOS.find((it) => it.value === nuevoEstado);
@@ -737,7 +790,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
   // ==========================================
   return (
     <div
-      className={`relative rounded-2xl border-2 bg-white transition-all duration-150 ${
+      className={`relative rounded-2xl border-2 bg-white overflow-hidden max-w-full min-w-0 transition-all duration-150 ${
         showStageMenu || isEditingInline || contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS'
           ? 'z-40'
           : 'z-0'
@@ -821,17 +874,16 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 <label className="block text-[10px] font-black uppercase text-[#5A5955] mb-0.5">
                   Estado Operativo
                 </label>
-                <select
+                <PopurriDropdown
                   value={editEstadoFlujo}
-                  onChange={(e) => setEditEstadoFlujo(e.target.value as EstadoFlujo)}
-                  className="w-full rounded-xl border-2 border-[#323232] bg-white px-2 py-1.5 text-xs font-bold text-[#323232]"
-                >
-                  {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((st) => (
-                    <option key={st.value} value={st.value}>
-                      {st.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setEditEstadoFlujo(val as EstadoFlujo)}
+                  options={LISTA_ESTADOS_FLUJO_UNIFICADOS}
+                  headerLabel={`Estado Operativo de #${contact.id}:`}
+                  align="right"
+                  menuWidth={310}
+                  maxHeight={320}
+                  triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                />
               </div>
             </div>
 
@@ -947,163 +999,10 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 </div>
               )}
           </div>
-        ) : contact.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' ? (
-          /* =========================================================
-             FICHA ESPECIAL DEDICADA: COORDINACIÓN DE RETIRO DE FICHAS EXTRA
-             ========================================================= */
-          <div onClick={(e) => e.stopPropagation()} className="space-y-3 w-full min-w-0">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b-2 border-[#323232]/15">
-              <div className="flex flex-wrap items-center gap-2 min-w-0">
-                <span className="rounded-lg bg-[#323232] px-2 py-0.5 font-mono text-xs font-bold text-[#FFF06B]">
-                  #{contact.id}
-                </span>
-                <h4 className="text-base font-black font-display text-[#323232] break-words">
-                  {fullName}
-                </h4>
-                <span className="inline-flex items-center gap-1 rounded-lg bg-[#FFF06B] px-2.5 py-0.5 text-xs font-black text-[#323232] border-2 border-[#323232] shadow-[1px_1px_0px_#323232]">
-                  <FilePlus2 className="h-3.5 w-3.5" />
-                  📦 Retiro de Fichas ({contact.fichasExtrasCantidad || 'X2'})
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-lg bg-[#DFF4FF] px-2 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]">
-                  <MapPin className="h-3 w-3" />
-                  {editBarrio || contact.barrio || 'CABA'}
-                </span>
-                {contact.retiroConfirmado ? (
-                  <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-200 px-2.5 py-0.5 text-xs font-black text-emerald-950 border border-[#323232]">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-800" />
-                    ✓ Encuentro Confirmado (En Ruta)
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-950 border border-amber-400">
-                    ⏳ Por coordinar retiro (En Planificador)
-                  </span>
-                )}
-                {savedBadgeVisible && (
-                  <span className="inline-flex items-center gap-1 rounded-md border border-[#323232] bg-emerald-200 px-2 py-0.5 text-[10px] font-black text-emerald-950">
-                    ✓ Guardado
-                  </span>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-1.5">
-                {phone && (
-                  <button
-                    type="button"
-                    onClick={handleCopyPhone}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[#323232]/40 bg-[#F5F4F0] px-2 py-1 text-[11px] font-mono font-bold text-[#323232] hover:bg-[#FFF06B]"
-                  >
-                    <span>{phone}</span>
-                    {copiedPhone ? <Check className="h-3 w-3 text-emerald-700" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setIsEditingInline(true)}
-                  className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
-                  title="Editar datos generales o cambiar estado"
-                >
-                  <Edit3 className="h-3 w-3" />
-                  <span>Ficha completa</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Coordinador directo de Nuevo Encuentro para Retiro (Día/s, Horario y Dirección previa por defecto) */}
-            <div className="rounded-xl border-2 border-[#323232] bg-[#FFFDF5] p-3">
-              <ScheduleAndAddressPicker
-                compact={true}
-                showInternalComment={true}
-                addressLabel="Dirección de Retiro (sostiene por defecto la dirección anterior)"
-                values={{
-                  diasEncuentro: editDiasEncuentro,
-                  horaInicio: editHoraInicio,
-                  horaFin: editHoraFin,
-                  horarioEncuentro: editHorarioEncuentro,
-                  calleOCruce: editCalle,
-                  pisoDepto: editPisoDepto,
-                  barrio: editBarrio,
-                  comentario: editComentario,
-                }}
-                onChange={(next) => {
-                  setEditDiasEncuentro(next.diasEncuentro);
-                  setEditHoraInicio(next.horaInicio);
-                  setEditHoraFin(next.horaFin);
-                  setEditHorarioEncuentro(next.horarioEncuentro);
-                  setEditCalle(next.calleOCruce);
-                  setEditPisoDepto(next.pisoDepto);
-                  setEditBarrio(next.barrio);
-                  setEditComentario(next.comentario);
-                }}
-              />
-            </div>
-
-            {/* Botonera de Coordinación de Retiro -> Planificador & Hoy -> Ruta -> Fichas Retiradas */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => void handleSaveRetiroCoordination(undefined, undefined)}
-                  className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-[#FFF06B] px-3 py-1.5 text-xs font-black text-[#323232] hover:bg-[#ffe838] shadow-[2px_2px_0px_#323232] cursor-pointer"
-                >
-                  <Save className="h-3.5 w-3.5" />
-                  <span>Guardar Agenda Retiro</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    void handleSaveRetiroCoordination(undefined, !contact.retiroConfirmado)
-                  }
-                  className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-black transition shadow-[2px_2px_0px_#323232] cursor-pointer ${
-                    contact.retiroConfirmado
-                      ? 'bg-white text-[#323232] hover:bg-stone-100'
-                      : 'bg-[#29B8FF] text-[#323232] hover:bg-[#1aa8f0]'
-                  }`}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>
-                    {contact.retiroConfirmado
-                      ? '↺ Pasar a Por Confirmar'
-                      : '✓ Confirmar Retiro (Sumar a Ruta)'}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleCompleteRetiroFichas}
-                  className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-200 px-3 py-1.5 text-xs font-black text-emerald-950 hover:bg-emerald-300 shadow-[2px_2px_0px_#323232] cursor-pointer"
-                  title="Marcar que ya retiraste las fichas y cerrar como Ya Firmó"
-                >
-                  <UserCheck className="h-3.5 w-3.5 text-emerald-800" />
-                  <span>✅ Fichas Retiradas</span>
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedTemplate('retiro_fichas');
-                  if (onToggleExpand) onToggleExpand(contact);
-                  else onSelect(contact);
-                }}
-                className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-3 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] cursor-pointer ${
-                  isExpanded
-                    ? 'bg-[#29B8FF] text-[#323232]'
-                    : 'bg-white text-[#323232] hover:bg-[#FFF06B]'
-                }`}
-              >
-                <MessageSquare className="h-3.5 w-3.5" />
-                <span>{isExpanded ? 'Ocultar Msj' : 'Msj Retiro WA'}</span>
-                <ChevronDown
-                  className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                />
-              </button>
-            </div>
-          </div>
         ) : (
-          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3 sm:gap-4 w-full min-w-0">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-3 w-full max-w-full min-w-0 items-start">
             {/* 1. Identidad, Vocativo y Teléfono */}
-            <div className="w-full min-w-0 lg:w-1/3 lg:min-w-[210px] space-y-1.5">
+            <div className="w-full min-w-0 lg:col-span-3 space-y-1.5">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="rounded-lg bg-[#323232] px-2 py-0.5 font-mono text-xs font-bold text-[#FFF06B]">
                   #{contact.id}
@@ -1168,7 +1067,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
             </div>
 
             {/* 2. Barrio, Día(s), Horario, Dirección y Alertas */}
-            <div className="w-full min-w-0 lg:w-1/4 lg:min-w-[180px] space-y-1.5">
+            <div className="w-full min-w-0 lg:col-span-3 space-y-1.5">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="inline-flex items-center gap-1 rounded-lg bg-[#DFF4FF] px-2.5 py-0.5 text-xs font-bold text-[#323232] border border-[#323232]">
                   <MapPin className="h-3.5 w-3.5 text-[#323232]" />
@@ -1249,7 +1148,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
             </div>
 
             {/* 3. Comentario interno (sólo notas y aclaraciones personales) */}
-            <div className="w-full min-w-0 lg:w-1/4 lg:min-w-[170px]">
+            <div className="w-full min-w-0 lg:col-span-3">
               {cleanComment ? (
                 <div className="rounded-xl border border-[#323232]/30 bg-[#F5F4F0] p-2.5 text-xs text-[#323232] font-medium break-words">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A5955] block mb-0.5 font-display">
@@ -1265,68 +1164,25 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
             </div>
 
             {/* 4. Selector de Estado Unificado & Botones Rápidos (Editar, Firmó, Mensaje) */}
-            <div className="w-full lg:w-auto flex flex-wrap lg:flex-col items-start lg:items-end justify-between gap-2 shrink-0 min-w-0">
-              {/* Selector directo de Estado Operativo (mismos estados del filtro) */}
-              <div className="relative max-w-full" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  onClick={() => setShowStageMenu((prev) => !prev)}
-                  className={`inline-flex items-center gap-1.5 max-w-full rounded-xl border-2 border-[#323232] px-2.5 sm:px-3 py-1 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${stageDef.badgeBg} ${stageDef.badgeText}`}
-                >
-                  <span className="truncate">{officialChipLabel}</span>
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                </button>
-
-                {showStageMenu && (
-                  <>
-                    <div
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowStageMenu(false);
-                      }}
-                      className="fixed inset-0 z-[65] bg-black/30 lg:bg-transparent"
-                    />
-                    <div className="fixed inset-x-3 bottom-4 lg:absolute lg:inset-auto lg:right-0 lg:top-full lg:mt-1.5 z-[70] lg:w-80 max-h-[72vh] lg:max-h-80 overflow-y-auto rounded-2xl border-2 border-[#323232] bg-white p-2 shadow-[6px_6px_0px_#323232]">
-                      <div className="flex items-center justify-between px-2.5 py-1 border-b border-[#323232]/15 mb-1">
-                        <span className="text-[10px] font-bold uppercase text-[#5A5955] font-display">
-                          Estado de #{contact.id}:
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowStageMenu(false);
-                          }}
-                          className="text-xs font-bold text-[#323232] px-1 lg:hidden"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((item) => {
-                        const isCur = contact.estadoFlujo === item.value;
-                        return (
-                          <button
-                            key={item.value}
-                            type="button"
-                            onClick={(e) => handleGranularStatusSelect(item.value, e)}
-                            className={`w-full flex items-center justify-between rounded-xl px-2.5 py-1.5 text-xs font-bold text-left transition ${
-                              isCur
-                                ? 'bg-[#FFF06B] text-[#323232]'
-                                : 'text-[#323232] hover:bg-[#F5F4F0]'
-                            }`}
-                          >
-                            <span className="truncate">{item.label}</span>
-                            {isCur && <Check className="h-3.5 w-3.5 shrink-0" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
+            <div className="w-full max-w-full min-w-0 md:col-span-2 lg:col-span-3 flex flex-wrap lg:flex-col items-start lg:items-end justify-between gap-2">
+              {/* Selector directo de Estado Operativo (mismos estados del filtro, flotante en Portal) */}
+              <div className="relative w-full sm:w-auto max-w-full min-w-0" onClick={(e) => e.stopPropagation()}>
+                <PopurriDropdown
+                  value={contact.estadoFlujo}
+                  onChange={(val) => {
+                    void handleGranularStatusSelect(val as EstadoFlujo);
+                  }}
+                  options={LISTA_ESTADOS_FLUJO_UNIFICADOS}
+                  headerLabel={`Estado de #${contact.id}:`}
+                  align="right"
+                  menuWidth={290}
+                  maxHeight={400}
+                  triggerClassName={`w-full sm:w-auto inline-flex items-center justify-between gap-1.5 max-w-full min-w-0 rounded-xl border-2 border-[#323232] px-2.5 py-1 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] cursor-pointer ${stageDef.badgeBg} ${stageDef.badgeText}`}
+                />
               </div>
 
               {/* Botones de Acción Directa en la Tarjeta */}
-              <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+              <div className="flex flex-wrap items-center lg:justify-end gap-1.5 max-w-full" onClick={(e) => e.stopPropagation()}>
                 {canDeleteContact && onDeleteContact && (
                   confirmingDelete ? (
                     <div className="inline-flex items-center gap-1 rounded-xl border-2 border-[#FF2C00] bg-[#F5817F]/20 px-2 py-1 shadow-[2px_2px_0px_#323232]">
@@ -1359,7 +1215,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                     <button
                       type="button"
                       onClick={() => setConfirmingDelete(true)}
-                      className="inline-flex items-center justify-center rounded-xl border-2 border-[#323232] bg-white px-2 py-1.5 text-xs font-bold font-display text-[#FF2C00] hover:bg-[#F5817F]/30 transition shadow-[2px_2px_0px_#323232]"
+                      className="inline-flex items-center justify-center rounded-xl border-2 border-[#323232] bg-white px-2 py-1 text-xs font-bold font-display text-[#FF2C00] hover:bg-[#F5817F]/30 transition shadow-[2px_2px_0px_#323232]"
                       title="Eliminar contacto de la App y Google Sheets (Solo Admin)"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -1369,7 +1225,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsEditingInline(true)}
-                  className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232]"
+                  className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232]"
                   title="Editar día(s), horario, dirección con Maps o nota interna"
                 >
                   <Edit3 className="h-3.5 w-3.5" />
@@ -1382,7 +1238,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                     onClick={() => {
                       if (onStageChange) onStageChange(contact, 'adheridos');
                     }}
-                    className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2.5 py-1.5 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200 transition shadow-[2px_2px_0px_#323232]"
+                    className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-emerald-100 px-2 py-1 text-xs font-bold font-display text-emerald-950 hover:bg-emerald-200 transition shadow-[2px_2px_0px_#323232]"
                     title="Marcar que ya firmó la ficha física"
                   >
                     <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
@@ -1393,7 +1249,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
                 <button
                   type="button"
                   onClick={() => (onToggleExpand ? onToggleExpand(contact) : onSelect(contact))}
-                  className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-2.5 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${
+                  className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-2 py-1 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] ${
                     isExpanded
                       ? 'bg-[#29B8FF] text-[#323232]'
                       : 'bg-[#FFF06B] text-[#323232] hover:bg-[#ffe838]'
@@ -1481,32 +1337,26 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
 
               {/* Botón rápido: Entregué Fichas Extra (X1/X2/X3 · Retiro en 1 semana) */}
               <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowFichasMenu((prev) => !prev)}
-                  className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#DFF4FF] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#29B8FF]"
+                <PopurriDropdown
+                  value=""
+                  placeholder="📦 + Fichas Extra"
+                  headerLabel="Firmó + Dejé fichas (Retiro 7d):"
+                  align="right"
+                  menuWidth={240}
+                  options={[
+                    { value: '1', label: 'Dejé X1 ficha (Abrir ficha retiro)' },
+                    { value: '2', label: 'Dejé X2 fichas (Abrir ficha retiro)' },
+                    { value: '3', label: 'Dejé X3 fichas (Abrir ficha retiro)' },
+                  ]}
+                  onChange={(val) => {
+                    const cant = Number(val) as 1 | 2 | 3;
+                    if (cant === 1 || cant === 2 || cant === 3) {
+                      void handleMarkFichasExtra(cant);
+                    }
+                  }}
+                  triggerClassName="inline-flex items-center justify-between gap-1 rounded-lg border-2 border-[#323232] bg-[#DFF4FF] px-2.5 py-1 text-xs font-bold font-display text-[#323232] hover:bg-[#29B8FF] cursor-pointer"
                   title="Registrar que firmó y se le dejaron fichas extra para retirar en 1 semana"
-                >
-                  <FilePlus2 className="h-3.5 w-3.5" />
-                  <span>+ Fichas Extra</span>
-                </button>
-                {showFichasMenu && (
-                  <div className="absolute right-0 top-full mt-1 z-40 w-56 rounded-xl border-2 border-[#323232] bg-white p-1.5 shadow-[4px_4px_0px_#323232]">
-                    <p className="px-2 py-1 text-[10px] font-bold uppercase text-[#5A5955]">
-                      Firmó + Dejé fichas (Retiro 7d):
-                    </p>
-                    {([1, 2, 3] as const).map((cant) => (
-                      <button
-                        key={cant}
-                        type="button"
-                        onClick={(e) => handleMarkFichasExtra(cant, e)}
-                        className="w-full text-left rounded-lg px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]"
-                      >
-                        Dejé X{cant} ficha{cant > 1 ? 's' : ''} (Abrir ficha retiro)
-                      </button>
-                    ))}
-                  </div>
-                )}
+                />
               </div>
 
               {/* Botón rápido: Sin DNI CABA */}
@@ -1559,30 +1409,28 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
               <label className="block text-[11px] font-bold uppercase tracking-wider text-[#323232] mb-1 font-display">
                 Tipo de Mensaje WhatsApp ({LISTA_PLANTILLAS_WA_COMPLETA.length} opciones):
               </label>
-              <select
+              <PopurriDropdown
                 value={selectedTemplate}
-                onChange={(e) => setSelectedTemplate(e.target.value as TipoPlantillaWA)}
-                className="w-full rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold text-[#323232]"
-              >
-                {LISTA_PLANTILLAS_WA_COMPLETA.map((tpl) => (
-                  <option key={tpl.value} value={tpl.value}>
-                    {tpl.label}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setSelectedTemplate(val as TipoPlantillaWA)}
+                options={LISTA_PLANTILLAS_WA_COMPLETA}
+                headerLabel="Elegir plantilla de mensaje WhatsApp:"
+                menuWidth={360}
+                maxHeight={320}
+                triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+              />
             </div>
 
             <div>
               <label className="block text-[11px] font-bold uppercase tracking-wider text-[#323232] mb-1 font-display">
                 ¿Te respondió algo puntual recién? Pegalo para adaptar el mensaje:
               </label>
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 w-full min-w-0">
                 <input
                   type="text"
                   value={liveReplyInput}
                   onChange={(e) => setLiveReplyInput(e.target.value)}
                   placeholder="Ej: 'Puedo mañana jueves después de las 17 hs por casa'"
-                  className="flex-1 rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-medium text-[#323232]"
+                  className="flex-1 min-w-0 rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-medium text-[#323232]"
                 />
                 <button
                   type="button"
@@ -1610,7 +1458,7 @@ export const CandidateCard: React.FC<CandidateCardProps> = ({
               rows={4}
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              className="w-full border-0 bg-transparent p-3 text-xs text-[#323232] leading-relaxed font-medium focus:outline-hidden block"
+              className="w-full border-0 bg-transparent p-3 text-xs text-[#323232] leading-relaxed font-medium focus:outline-hidden block popurri-dropdown-scroll"
             />
           </div>
 

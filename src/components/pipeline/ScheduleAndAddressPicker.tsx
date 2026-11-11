@@ -10,8 +10,15 @@ import {
   X,
   Check,
   MessageSquareText,
+  Plus,
 } from 'lucide-react';
-import { inferirBarrioDesdeTextoCABA, obtenerPartesFechaHoraBA } from '../../utils/logic';
+import {
+  inferirBarrioDesdeTextoCABA,
+  limpiarDireccionPegadaMaps,
+  obtenerPartesFechaHoraBA,
+  registrarGeocodeMapsEnCache,
+} from '../../utils/logic';
+import { PopurriDropdown } from '../common/PopurriDropdown';
 
 interface CabaSuggestion {
   direccionFormateada: string;
@@ -149,6 +156,30 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
       .filter((d): d is Date => d !== null);
   });
 
+  // Estado interno para filas adicionales de Día + Horario (ej. cuando la persona da horarios distintos según el día)
+  const [extraSlots, setExtraSlots] = useState<
+    Array<{ dias: string; horaInicio: string; horaFin: string }>
+  >(() => {
+    const rawH = (values.horarioEncuentro || '').trim();
+    if (!rawH.includes('|')) return [];
+    const partes = rawH
+      .split('|')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (partes.length <= 1) return [];
+    return partes.slice(1).map((seg) => {
+      const mFecha = seg.match(/^(\d{1,2}\/\d{1,2}(?:\s+al\s+\d{1,2}\/\d{1,2})?)\s+(.*)$/i);
+      const dias = mFecha ? mFecha[1].trim() : '';
+      const restoH = mFecha ? mFecha[2].trim() : seg;
+      const mRango = restoH.match(/(\d{1,2}:\d{2})\s*(?:a|-|hasta)\s*(\d{1,2}:\d{2})/i);
+      if (mRango) {
+        return { dias, horaInicio: mRango[1], horaFin: mRango[2] };
+      }
+      const mPuntual = restoH.match(/(\d{1,2}:\d{2})/);
+      return { dias, horaInicio: mPuntual ? mPuntual[1] : '', horaFin: '' };
+    });
+  });
+
   // Autocompletado de calles CABA (USIG + Geodatos)
   const [suggestions, setSuggestions] = useState<CabaSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -158,7 +189,10 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
   const triggerButtonRef = useRef<HTMLButtonElement>(null);
   const calendarPopupRef = useRef<HTMLDivElement>(null);
   const addressRef = useRef<HTMLDivElement>(null);
+  const addressInputRef = useRef<HTMLInputElement>(null);
+  const suggestionsPopupRef = useRef<HTMLDivElement>(null);
   const [floatingStyle, setFloatingStyle] = useState<React.CSSProperties>({});
+  const [suggestionsStyle, setSuggestionsStyle] = useState<React.CSSProperties>({});
 
   const updateCalendarPosition = useCallback(() => {
     const btn = triggerButtonRef.current;
@@ -173,7 +207,24 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
       top: fitsBelow ? rect.bottom + 6 : Math.max(8, rect.top - estimatedHeight - 6),
       left,
       width: popupWidth,
-      zIndex: 9999,
+      zIndex: 99999,
+    });
+  }, []);
+
+  const updateSuggestionsPosition = useCallback(() => {
+    const inp = addressInputRef.current;
+    if (!inp) return;
+    const rect = inp.getBoundingClientRect();
+    const width = Math.min(Math.max(rect.width, 280), window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const estimatedHeight = 240;
+    const fitsBelow = rect.bottom + 4 + estimatedHeight <= window.innerHeight || rect.top < estimatedHeight;
+    setSuggestionsStyle({
+      position: 'fixed',
+      top: fitsBelow ? rect.bottom + 4 : Math.max(8, rect.top - estimatedHeight - 4),
+      left,
+      width,
+      zIndex: 99999,
     });
   }, []);
 
@@ -189,6 +240,17 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
   }, [isCalendarOpen, updateCalendarPosition]);
 
   useEffect(() => {
+    if (!showSuggestions || suggestions.length === 0) return;
+    updateSuggestionsPosition();
+    window.addEventListener('scroll', updateSuggestionsPosition, true);
+    window.addEventListener('resize', updateSuggestionsPosition);
+    return () => {
+      window.removeEventListener('scroll', updateSuggestionsPosition, true);
+      window.removeEventListener('resize', updateSuggestionsPosition);
+    };
+  }, [showSuggestions, suggestions.length, updateSuggestionsPosition]);
+
+  useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
       const target = e.target as Node;
       const insideTrigger = calendarRef.current && calendarRef.current.contains(target);
@@ -196,7 +258,10 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
       if (!insideTrigger && !insidePopup) {
         setIsCalendarOpen(false);
       }
-      if (addressRef.current && !addressRef.current.contains(target)) {
+      const insideAddress = addressRef.current && addressRef.current.contains(target);
+      const insideSuggestions =
+        suggestionsPopupRef.current && suggestionsPopupRef.current.contains(target);
+      if (!insideAddress && !insideSuggestions) {
         setShowSuggestions(false);
       }
     };
@@ -225,18 +290,126 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
     return () => clearTimeout(timer);
   }, [values.calleOCruce, showSuggestions]);
 
-  const updateHorarioPair = (newIni: string, newFin: string) => {
-    const iniClean = newIni.trim();
-    const finClean = newFin.trim();
-    const horarioEncuentro =
+  const buildCombinedScheduleStrings = (
+    primaryDias: string,
+    primaryIni: string,
+    primaryFin: string,
+    slots: Array<{ dias: string; horaInicio: string; horaFin: string }>
+  ) => {
+    const iniClean = primaryIni.trim();
+    const finClean = primaryFin.trim();
+    const primaryHorario =
       iniClean && finClean && finClean !== iniClean
         ? `${iniClean} a ${finClean}`
         : iniClean || finClean || '';
+
+    const activeExtras = slots.filter(
+      (s) => s.dias.trim() || s.horaInicio.trim() || s.horaFin.trim()
+    );
+    if (activeExtras.length === 0) {
+      return {
+        diasEncuentro: primaryDias,
+        horarioEncuentro: primaryHorario,
+      };
+    }
+
+    const baseDiasList = primaryDias
+      .split(/\s*,\s*/)
+      .map((d) => d.trim())
+      .filter(Boolean);
+    const primaryFirstDay = baseDiasList[0] || primaryDias.trim();
+    const extraDays = activeExtras.map((s) => s.dias.trim()).filter(Boolean);
+    const allDays = Array.from(new Set([primaryFirstDay, ...extraDays].filter(Boolean))).join(', ');
+
+    const segments: string[] = [];
+    if (primaryFirstDay || primaryHorario) {
+      segments.push([primaryFirstDay, primaryHorario].filter(Boolean).join(' ').trim());
+    }
+    for (const s of activeExtras) {
+      const sIni = s.horaInicio.trim();
+      const sFin = s.horaFin.trim();
+      const sHor =
+        sIni && sFin && sFin !== sIni ? `${sIni} a ${sFin}` : sIni || sFin || '';
+      segments.push([s.dias.trim(), sHor].filter(Boolean).join(' ').trim());
+    }
+    return {
+      diasEncuentro: allDays || primaryDias,
+      horarioEncuentro: segments.filter(Boolean).join(' | '),
+    };
+  };
+
+  const updateHorarioPair = (newIni: string, newFin: string) => {
+    const iniClean = newIni.trim();
+    const finClean = newFin.trim();
+    const combined = buildCombinedScheduleStrings(
+      values.diasEncuentro,
+      iniClean,
+      finClean,
+      extraSlots
+    );
     onChange({
       ...values,
+      diasEncuentro: combined.diasEncuentro,
       horaInicio: iniClean,
       horaFin: finClean,
-      horarioEncuentro,
+      horarioEncuentro: combined.horarioEncuentro,
+    });
+  };
+
+  const handleUpdateExtraSlot = (
+    idx: number,
+    patch: Partial<{ dias: string; horaInicio: string; horaFin: string }>
+  ) => {
+    const nextSlots = extraSlots.map((s, i) => (i === idx ? { ...s, ...patch } : s));
+    setExtraSlots(nextSlots);
+    const primaryFirstDay =
+      (values.diasEncuentro || '')
+        .split(/\s*,\s*/)[0]
+        ?.trim() || '';
+    const combined = buildCombinedScheduleStrings(
+      primaryFirstDay,
+      values.horaInicio,
+      values.horaFin,
+      nextSlots
+    );
+    onChange({
+      ...values,
+      diasEncuentro: combined.diasEncuentro,
+      horarioEncuentro: combined.horarioEncuentro,
+    });
+  };
+
+  const handleRemoveExtraSlot = (idx: number) => {
+    const nextSlots = extraSlots.filter((_, i) => i !== idx);
+    setExtraSlots(nextSlots);
+    const primaryFirstDay =
+      (values.diasEncuentro || '')
+        .split(/\s*,\s*/)[0]
+        ?.trim() || '';
+    const combined = buildCombinedScheduleStrings(
+      primaryFirstDay,
+      values.horaInicio,
+      values.horaFin,
+      nextSlots
+    );
+    onChange({
+      ...values,
+      diasEncuentro: combined.diasEncuentro,
+      horarioEncuentro: combined.horarioEncuentro,
+    });
+  };
+
+  const applyPrimaryDateSelection = (newPrimaryDias: string) => {
+    const combined = buildCombinedScheduleStrings(
+      newPrimaryDias,
+      values.horaInicio,
+      values.horaFin,
+      extraSlots
+    );
+    onChange({
+      ...values,
+      diasEncuentro: combined.diasEncuentro,
+      horarioEncuentro: combined.horarioEncuentro,
     });
   };
 
@@ -246,12 +419,12 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
         setRangeStart(clickedDate);
         setRangeEnd(null);
         const ddmm = formatDdMm(clickedDate);
-        onChange({ ...values, diasEncuentro: ddmm });
+        applyPrimaryDateSelection(ddmm);
       } else {
         if (sameCalendarDay(clickedDate, rangeStart)) {
           setRangeEnd(null);
           const ddmm = formatDdMm(clickedDate);
-          onChange({ ...values, diasEncuentro: ddmm });
+          applyPrimaryDateSelection(ddmm);
           setIsCalendarOpen(false);
         } else {
           const [first, second] =
@@ -260,10 +433,7 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
               : [rangeStart, clickedDate];
           setRangeStart(first);
           setRangeEnd(second);
-          onChange({
-            ...values,
-            diasEncuentro: `${formatDdMm(first)} al ${formatDdMm(second)}`,
-          });
+          applyPrimaryDateSelection(`${formatDdMm(first)} al ${formatDdMm(second)}`);
         }
       }
     } else {
@@ -274,10 +444,7 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
         : [...separateDates, clickedDate].sort((a, b) => a.getTime() - b.getTime());
       setSeparateDates(nextDates);
       const formatted = nextDates.map((d) => formatDdMm(d)).join(', ');
-      onChange({
-        ...values,
-        diasEncuentro: formatted,
-      });
+      applyPrimaryDateSelection(formatted);
     }
   };
 
@@ -288,7 +455,7 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
     setRangeStart(base);
     setRangeEnd(null);
     setSeparateDates([base]);
-    onChange({ ...values, diasEncuentro: ddmm });
+    applyPrimaryDateSelection(ddmm);
   };
 
   const calendarDays = useMemo(() => {
@@ -607,57 +774,125 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
               {(values.horaInicio || values.horaFin || values.horarioEncuentro) && (
                 <button
                   type="button"
-                  onClick={() =>
-                    onChange({ ...values, horaInicio: '', horaFin: '', horarioEncuentro: '' })
-                  }
+                  onClick={() => {
+                    setExtraSlots([]);
+                    onChange({ ...values, horaInicio: '', horaFin: '', horarioEncuentro: '' });
+                  }}
                   className="px-1.5 py-0.5 rounded border border-rose-300 bg-rose-50 text-[10px] font-black text-rose-700 cursor-pointer"
                   title="Limpiar horario"
                 >
                   ✕
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() =>
+                  setExtraSlots((prev) => [
+                    ...prev,
+                    { dias: '', horaInicio: '', horaFin: '' },
+                  ])
+                }
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-[#323232] bg-[#FFF06B] hover:bg-[#ffe838] text-[10px] font-black text-[#323232] cursor-pointer"
+                title="Agregar otro día con un horario distinto"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Día/Horario</span>
+              </button>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-1.5">
-            <div className="flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-white px-2 py-1">
-              <span className="text-[10px] font-black uppercase text-[#5A5955] shrink-0">
-                Hora/Desde:
-              </span>
-              <select
-                value={values.horaInicio}
-                onChange={(e) => updateHorarioPair(e.target.value, values.horaFin)}
-                className="min-w-0 flex-1 bg-transparent text-xs font-black text-[#323232] focus:outline-none cursor-pointer"
-              >
-                <option value="">--:--</option>
-                {timeOptions.map((t) => (
-                  <option key={`ini-${t}`} value={t}>
-                    {t} hs
-                  </option>
-                ))}
-              </select>
-            </div>
+            <PopurriDropdown
+              value={values.horaInicio}
+              onChange={(val) => updateHorarioPair(val, values.horaFin)}
+              prefixText="Hora/Desde:"
+              headerLabel="Hora puntual o inicio de franja"
+              options={[
+                { value: '', label: '--:--' },
+                ...timeOptions.map((t) => ({ value: t, label: `${t} hs` })),
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-1 rounded-lg border-2 border-[#323232] bg-white px-2 py-1 text-xs font-black text-[#323232] hover:bg-[#FFF06B]/30 transition cursor-pointer"
+              menuWidth={180}
+              maxHeight={260}
+            />
 
-            <div className="flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-white px-2 py-1">
-              <span className="text-[10px] font-black uppercase text-[#5A5955] shrink-0">
-                Hasta (opc.):
-              </span>
-              <select
-                value={values.horaFin}
-                onChange={(e) => updateHorarioPair(values.horaInicio, e.target.value)}
-                className="min-w-0 flex-1 bg-transparent text-xs font-black text-[#323232] focus:outline-none cursor-pointer"
-              >
-                <option value="">Puntual</option>
-                {timeOptions.map((t) => (
-                  <option key={`fin-${t}`} value={t}>
-                    {t} hs
-                  </option>
-                ))}
-              </select>
-            </div>
+            <PopurriDropdown
+              value={values.horaFin}
+              onChange={(val) => updateHorarioPair(values.horaInicio, val)}
+              prefixText="Hasta (opc.):"
+              headerLabel="Fin de franja horaria (opcional)"
+              options={[
+                { value: '', label: 'Puntual' },
+                ...timeOptions.map((t) => ({ value: t, label: `${t} hs` })),
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-1 rounded-lg border-2 border-[#323232] bg-white px-2 py-1 text-xs font-black text-[#323232] hover:bg-[#FFF06B]/30 transition cursor-pointer"
+              menuWidth={180}
+              maxHeight={260}
+            />
           </div>
         </div>
       </div>
+
+      {/* Filas adicionales de Día + Horario cuando el vecino ofrece distintos horarios según el día */}
+      {extraSlots.length > 0 && (
+        <div className="space-y-1.5 pt-1">
+          {extraSlots.map((slot, idx) => (
+            <div
+              key={`extra-slot-${idx}`}
+              className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center rounded-xl border border-[#323232]/40 bg-[#FFFDF5] p-2"
+            >
+              <div className="md:col-span-5 flex items-center gap-1.5">
+                <CalendarIcon className="w-3.5 h-3.5 text-[#323232] shrink-0" />
+                <input
+                  type="text"
+                  value={slot.dias}
+                  onChange={(e) => handleUpdateExtraSlot(idx, { dias: e.target.value })}
+                  placeholder="Otro día (ej: 14/11 o 15/11 al 16/11)"
+                  className="min-w-0 flex-1 px-2 py-1 rounded-lg border border-[#323232] bg-white text-xs font-bold text-[#323232]"
+                />
+              </div>
+              <div className="md:col-span-6 grid grid-cols-2 gap-1.5">
+                <PopurriDropdown
+                  value={slot.horaInicio}
+                  onChange={(val) => handleUpdateExtraSlot(idx, { horaInicio: val })}
+                  prefixText="Desde:"
+                  headerLabel="Hora o inicio para este día"
+                  options={[
+                    { value: '', label: '--:--' },
+                    ...timeOptions.map((t) => ({ value: t, label: `${t} hs` })),
+                  ]}
+                  triggerClassName="w-full flex items-center justify-between gap-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-xs font-black text-[#323232] hover:bg-[#FFF06B]/30 transition cursor-pointer"
+                  menuWidth={180}
+                  maxHeight={240}
+                />
+                <PopurriDropdown
+                  value={slot.horaFin}
+                  onChange={(val) => handleUpdateExtraSlot(idx, { horaFin: val })}
+                  prefixText="Hasta:"
+                  headerLabel="Fin de franja para este día"
+                  options={[
+                    { value: '', label: 'Puntual' },
+                    ...timeOptions.map((t) => ({ value: t, label: `${t} hs` })),
+                  ]}
+                  triggerClassName="w-full flex items-center justify-between gap-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-xs font-black text-[#323232] hover:bg-[#FFF06B]/30 transition cursor-pointer"
+                  menuWidth={180}
+                  maxHeight={240}
+                />
+              </div>
+              <div className="md:col-span-1 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => handleRemoveExtraSlot(idx)}
+                  className="p-1 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer"
+                  title="Quitar este día/horario adicional"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Fila 2: Dirección / Punto con Autocompletado CABA (USIG + Google Maps) + Piso/Depto + Barrio */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5" ref={addressRef}>
@@ -683,15 +918,55 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
 
           <div className="flex items-center gap-1.5">
             <input
+              ref={addressInputRef}
               type="text"
               value={values.calleOCruce}
               onFocus={() => setShowSuggestions(true)}
+              onBlur={() => {
+                const rawCalle = (values.calleOCruce || '').trim();
+                if (!rawCalle) return;
+                const limpia = limpiarDireccionPegadaMaps(rawCalle);
+                const barrioAuto =
+                  inferirBarrioDesdeTextoCABA(rawCalle, values.barrio) ||
+                  inferirBarrioDesdeTextoCABA(limpia, values.barrio) ||
+                  values.barrio;
+                if (limpia !== rawCalle || (barrioAuto !== 'CABA' && barrioAuto !== values.barrio)) {
+                  onChange({
+                    ...values,
+                    calleOCruce: limpia,
+                    barrio: barrioAuto !== 'CABA' ? barrioAuto : values.barrio,
+                  });
+                }
+                fetch('/api/geo/geocode-caba', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    address: limpia,
+                    barrio: barrioAuto || values.barrio || '',
+                  }),
+                })
+                  .then((r) => r.json())
+                  .then((d) => {
+                    if (d?.ok && typeof d.lat === 'number' && typeof d.lng === 'number') {
+                      registrarGeocodeMapsEnCache(limpia, d.lat, d.lng);
+                    }
+                  })
+                  .catch(() => {});
+              }}
               onChange={(e) => {
-                const nextCalle = e.target.value;
+                const rawInput = e.target.value;
+                const tieneSufijoMaps =
+                  /\b[A-Z]?\d{4}[A-Z]{0,3}\b\s*(?:Cdad\.|Ciudad)/i.test(rawInput) ||
+                  /Cdad\.\s*Aut[oó]noma\s*de\s*Buenos\s*Aires/i.test(rawInput);
+                const nextCalle = tieneSufijoMaps
+                  ? limpiarDireccionPegadaMaps(rawInput)
+                  : rawInput;
                 setShowSuggestions(true);
                 setPendingStreetWithoutNumber(null);
                 const barrioAuto =
-                  inferirBarrioDesdeTextoCABA(nextCalle, values.barrio) || values.barrio;
+                  inferirBarrioDesdeTextoCABA(rawInput, values.barrio) ||
+                  inferirBarrioDesdeTextoCABA(nextCalle, values.barrio) ||
+                  values.barrio;
                 onChange({
                   ...values,
                   calleOCruce: nextCalle,
@@ -756,34 +1031,47 @@ export const ScheduleAndAddressPicker: React.FC<ScheduleAndAddressPickerProps> =
             </div>
           )}
 
-          {/* Lista desplegable de sugerencias USIG / CABA */}
-          {showSuggestions && suggestions.length > 0 && (
-            <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-xl border-2 border-[#323232] bg-white shadow-[4px_4px_0px_#323232] overflow-hidden divide-y divide-stone-200">
-              {suggestions.map((s, idx) => (
-                <button
-                  key={`${s.direccionFormateada}-${idx}`}
-                  type="button"
-                  onClick={() => handleSelectSuggestion(s)}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <MapPin className="w-3.5 h-3.5 shrink-0 text-[#323232]" />
-                    <span className="truncate">{s.direccionFormateada}</span>
-                    {s.esCalleSinAltura && !s.esCruce && (
-                      <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-300 shrink-0">
-                        + Elegir altura
-                      </span>
-                    )}
-                  </div>
-                  {s.barrio && (
-                    <span className="px-1.5 py-0.5 rounded bg-[#DFF4FF] border border-[#323232] text-[10px] font-black text-[#323232] shrink-0">
-                      {s.barrio}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Lista desplegable flotante en Portal de sugerencias USIG / CABA */}
+          {showSuggestions &&
+            suggestions.length > 0 &&
+            typeof document !== 'undefined' &&
+            createPortal(
+              <div
+                ref={suggestionsPopupRef}
+                style={suggestionsStyle}
+                className="rounded-2xl border-2 border-[#323232] bg-[#FFFDF5] shadow-[5px_5px_0px_#323232] overflow-hidden divide-y divide-[#323232]/15"
+              >
+                <div className="px-3 py-1.5 bg-[#ECEAE2]/70 border-b border-[#323232]/15 text-[10px] font-black uppercase tracking-wider text-[#5A5955]">
+                  Sugerencias USIG CABA
+                </div>
+                <div className="max-h-56 overflow-y-auto popurri-dropdown-scroll divide-y divide-stone-200/70">
+                  {suggestions.map((s, idx) => (
+                    <button
+                      key={`${s.direccionFormateada}-${idx}`}
+                      type="button"
+                      onClick={() => handleSelectSuggestion(s)}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-xs font-bold text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <MapPin className="w-3.5 h-3.5 shrink-0 text-[#323232]" />
+                        <span className="truncate">{s.direccionFormateada}</span>
+                        {s.esCalleSinAltura && !s.esCruce && (
+                          <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded border border-amber-300 shrink-0">
+                            + Elegir altura
+                          </span>
+                        )}
+                      </div>
+                      {s.barrio && (
+                        <span className="px-1.5 py-0.5 rounded bg-[#DFF4FF] border border-[#323232] text-[10px] font-black text-[#323232] shrink-0">
+                          {s.barrio}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>,
+              document.body
+            )}
         </div>
 
         {/* Piso / Depto / Timbre */}

@@ -1146,7 +1146,11 @@ export default function App() {
                   recentLocal &&
                   (activePushCountRef.current > 0 || nowMs - recentLocal.timestamp < 600000)
                 ) {
-                  return recentLocal.row;
+                  const rowTel = normalizarTelefonoWA(row.telRaw);
+                  const recentTel = normalizarTelefonoWA(recentLocal.row.telRaw);
+                  if (!rowTel || !recentTel || rowTel === recentTel) {
+                    return { ...recentLocal.row, id: row.id };
+                  }
                 }
                 return row;
               });
@@ -1948,7 +1952,7 @@ export default function App() {
       )}
 
       {/* 2. Vistas Principales Desacopladas por Etapas */}
-      <main className="flex-1 w-full max-w-full min-w-0 overflow-x-hidden pb-16">
+      <main className="flex-1 w-full max-w-full min-w-0 overflow-x-clip pb-16">
         {activeTab === 'pipeline' && (
           <CandidatePipelineView
             contacts={contacts}
@@ -1984,7 +1988,7 @@ export default function App() {
         )}
 
         {activeTab === 'mapa' && (
-          <div className="mx-auto w-full max-w-7xl min-w-0 overflow-x-hidden px-3 sm:px-6 py-4 sm:py-6">
+          <div className="mx-auto w-full max-w-7xl min-w-0 overflow-x-clip px-3 sm:px-6 py-4 sm:py-6">
             <InteractiveMapPanel
               contacts={contacts}
               clusters={microClusters}
@@ -2452,7 +2456,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="p-4 sm:p-5 space-y-4 max-h-[82vh] overflow-y-auto">
+                <div className="p-4 sm:p-5 space-y-4 max-h-[82vh] overflow-y-auto overflow-x-hidden popurri-dropdown-scroll">
                   {/* 1. Los 3 Contadores Principales + Adhesiones Extras del Formulario */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="p-3.5 rounded-xl border-2 border-[#323232] bg-[#F5F4F0] shadow-[2px_2px_0px_#323232]">
@@ -2801,7 +2805,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="p-4 sm:p-5 space-y-4 max-h-[82vh] overflow-y-auto">
+            <div className="p-4 sm:p-5 space-y-4 max-h-[82vh] overflow-y-auto overflow-x-hidden popurri-dropdown-scroll">
               <div className="p-3.5 rounded-xl border-2 border-dashed border-[#323232] bg-[#F5F4F0] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                 <div className="text-xs text-[#323232]">
                   <p className="font-black">

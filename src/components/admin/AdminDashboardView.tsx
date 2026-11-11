@@ -24,6 +24,7 @@ import {
 import type { Contact, ControlEnvioRegistro, EstadoFlujo } from '../../types';
 import type { AppUserAccount } from '../auth/LoginModal';
 import { crearEnlaceWhatsApp } from '../../domain/messaging/greetingsAndTone';
+import { PopurriDropdown } from '../common/PopurriDropdown';
 
 export type VolunteerUser = AppUserAccount;
 
@@ -499,17 +500,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               <label className="block text-[11px] font-bold text-[#323232] mb-1">
                 Barrio / Zona base
               </label>
-              <select
+              <PopurriDropdown
                 value={newVolBarrio}
-                onChange={(e) => setNewVolBarrio(e.target.value)}
-                className="w-full rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold text-[#323232]"
-              >
-                {safeBarrios.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setNewVolBarrio(val)}
+                headerLabel="Barrio o zona base:"
+                searchable={true}
+                searchPlaceholder="Buscar barrio..."
+                menuWidth={220}
+                options={safeBarrios.map((b) => ({ value: b, label: b }))}
+                triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+              />
             </div>
           </div>
 
@@ -570,24 +570,26 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    <select
-                      value={targetReassign}
-                      onChange={(e) =>
-                        setReassignTargetByFromUser((prev) => ({
-                          ...prev,
-                          [vol.username]: e.target.value,
-                        }))
-                      }
-                      className="rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232]"
-                    >
-                      {volunteers
-                        .filter((v) => v.username !== vol.username)
-                        .map((v) => (
-                          <option key={v.username} value={v.username}>
-                            Reasignar a: {v.nombre}
-                          </option>
-                        ))}
-                    </select>
+                    <div className="w-52">
+                      <PopurriDropdown
+                        value={targetReassign}
+                        onChange={(val) =>
+                          setReassignTargetByFromUser((prev) => ({
+                            ...prev,
+                            [vol.username]: val,
+                          }))
+                        }
+                        headerLabel="Reasignar contactos a:"
+                        menuWidth={240}
+                        options={volunteers
+                          .filter((v) => v.username !== vol.username)
+                          .map((v) => ({
+                            value: v.username,
+                            label: `Reasignar a: ${v.nombre}`,
+                          }))}
+                        triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                      />
+                    </div>
 
                     <button
                       type="button"
@@ -659,37 +661,50 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <label className="block text-[11px] font-bold text-[#323232] mb-1">
               1. Filtrar por Barrio:
             </label>
-            <select
+            <PopurriDropdown
               value={assignBarrio}
-              onChange={(e) => setAssignBarrio(e.target.value)}
-              className="w-full rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold text-[#323232]"
-            >
-              <option value="Todos">Todos los barrios CABA</option>
-              {safeBarrios.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
+              onChange={(val) => setAssignBarrio(val)}
+              headerLabel="Filtrar contactos por barrio:"
+              searchable={true}
+              searchPlaceholder="Buscar barrio..."
+              menuWidth={240}
+              options={[
+                { value: 'Todos', label: 'Todos los barrios CABA' },
+                ...safeBarrios.map((b) => ({ value: b, label: b })),
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+            />
           </div>
 
           <div>
             <label className="block text-[11px] font-bold text-[#323232] mb-1">
               2. Filtrar por Estado:
             </label>
-            <select
+            <PopurriDropdown
               value={assignEstado}
-              onChange={(e) => setAssignEstado(e.target.value)}
-              className="w-full rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold text-[#323232]"
-            >
-              <option value="SIN_CONTACTAR_1ER_MSJ">1. Nuevo · Sin 1er mensaje</option>
-              <option value="FALTA_NOMBRE_Y_APELLIDO">1b. Nuevo · Falta Nombre</option>
-              <option value="1ER_MSJ_ENVIADO_SIN_RSP">2. 1er Msj Enviado · Esperando respuesta</option>
-              <option value="RESPONDIO_FALTA_DNI_O_ZONA">3. Respondió · Falta calle/esquina o día</option>
-              <option value="PASO_DATOS_FALTA_CONFIRMAR">4. Pasó dirección/horario · Falta confirmar</option>
-              <option value="ENCUENTRO_CONFIRMADO">5. Encuentro Confirmado (En Ruta)</option>
-              <option value="TODOS">Todos los estados</option>
-            </select>
+              onChange={(val) => setAssignEstado(val)}
+              headerLabel="Filtrar contactos por estado:"
+              menuWidth={300}
+              options={[
+                { value: 'SIN_CONTACTAR_1ER_MSJ', label: '1. Nuevo · Sin contactar' },
+                { value: 'FALTA_NOMBRE_Y_APELLIDO', label: '1b. Nuevo · Falta nombre' },
+                {
+                  value: '1ER_MSJ_ENVIADO_SIN_RSP',
+                  label: '2. Contactado · Sin respuesta',
+                },
+                {
+                  value: 'RESPONDIO_FALTA_DNI_O_ZONA',
+                  label: '3. Respondió · Faltan datos',
+                },
+                {
+                  value: 'PASO_DATOS_FALTA_CONFIRMAR',
+                  label: '4. Pasó datos · Por confirmar',
+                },
+                { value: 'ENCUENTRO_CONFIRMADO', label: '5. Confirmado · En ruta' },
+                { value: 'TODOS', label: 'Todos los estados' },
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+            />
           </div>
 
           <div>
@@ -710,17 +725,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <label className="block text-[11px] font-bold text-[#323232] mb-1">
               4. Asignar al Voluntario:
             </label>
-            <select
+            <PopurriDropdown
               value={assignTargetUser}
-              onChange={(e) => setAssignTargetUser(e.target.value)}
-              className="w-full rounded-xl border-2 border-[#323232] bg-[#FFF06B]/40 px-3 py-2 text-xs font-black text-[#323232]"
-            >
-              {volunteers.map((v) => (
-                <option key={v.username} value={v.username}>
-                  {v.nombre} (@{v.username})
-                </option>
-              ))}
-            </select>
+              onChange={(val) => setAssignTargetUser(val)}
+              headerLabel="Elegir voluntario destino:"
+              menuWidth={260}
+              options={volunteers.map((v) => ({
+                value: v.username,
+                label: `${v.nombre} (@${v.username})`,
+              }))}
+              triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-[#FFF06B]/40 px-3 py-2 text-xs font-black text-[#323232] hover:bg-[#FFF06B] transition cursor-pointer"
+            />
           </div>
 
           <div>

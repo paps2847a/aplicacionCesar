@@ -40,9 +40,35 @@ interface ContactRowDb {
   updated_at: string;
 }
 
+function canonicalContactId(rawId: unknown): string {
+  const clean = String(rawId ?? '')
+    .trim()
+    .replace(/^#+/, '')
+    .trim();
+  if (/^\d+$/.test(clean)) {
+    return String(Number(clean));
+  }
+  return clean;
+}
+
+function extractPhoneLast8(rawPhone: unknown): string {
+  const digits = String(rawPhone ?? '').replace(/\D+/g, '');
+  return digits.length >= 8 ? digits.slice(-8) : '';
+}
+
+function normalizeNameForDedupe(rawName: unknown): string {
+  return String(rawName ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function mapDbToContact(row: ContactRowDb): RawContactRow {
   return {
-    id: row.id,
+    id: canonicalContactId(row.id) || row.id,
     nombre: row.nombre || '',
     vocativoOverride: row.vocativo_override || undefined,
     diasEncuentro: row.dias_encuentro || undefined,
@@ -141,13 +167,59 @@ export function getAllContacts(filters?: {
 
 export function getContactById(id: string): RawContactRow | null {
   const db = getDatabase();
-  const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(String(id).trim()) as unknown as ContactRowDb | undefined;
+  const cleanId = canonicalContactId(id);
+  const rawId = String(id).trim();
+  const row = (db
+    .prepare(
+      `SELECT * FROM contacts
+       WHERE id = ? OR id = ? OR LOWER(REPLACE(TRIM(id), '#', '')) = LOWER(?)
+       ORDER BY updated_at DESC LIMIT 1`
+    )
+    .get(cleanId, rawId, cleanId) as unknown as ContactRowDb | undefined);
   return row ? mapDbToContact(row) : null;
+}
+
+function resolveExistingContactRowForUpsert(c: RawContactRow): ContactRowDb | undefined {
+  const db = getDatabase();
+  const cleanId = canonicalContactId(c.id);
+  const rawId = String(c.id).trim();
+
+  const byId = db
+    .prepare(
+      `SELECT * FROM contacts
+       WHERE id = ? OR id = ? OR LOWER(REPLACE(TRIM(id), '#', '')) = LOWER(?)
+       ORDER BY updated_at DESC LIMIT 1`
+    )
+    .get(cleanId, rawId, cleanId) as unknown as ContactRowDb | undefined;
+  if (byId) return byId;
+
+  const telLast8 = extractPhoneLast8((c as any).telefonoNorm || c.tel || c.telRaw);
+  const normName = normalizeNameForDedupe(c.nombre);
+  if (telLast8) {
+    const candidates = db
+      .prepare(`SELECT * FROM contacts WHERE tel_norm LIKE ? OR tel_raw LIKE ?`)
+      .all(`%${telLast8}`, `%${telLast8}%`) as unknown as ContactRowDb[];
+    for (const cand of candidates) {
+      const candLast8 = extractPhoneLast8(cand.tel_norm || cand.tel_raw);
+      if (candLast8 === telLast8) {
+        const candName = normalizeNameForDedupe(cand.nombre);
+        if (!normName || !candName || candName === normName) {
+          return cand;
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 export function upsertContact(c: RawContactRow): RawContactRow {
   const db = getDatabase();
-  const id = String(c.id).trim();
+  const existingRow = resolveExistingContactRowForUpsert(c);
+  const id = canonicalContactId(c.id) || (existingRow ? canonicalContactId(existingRow.id) : String(c.id).trim());
+  if (existingRow && existingRow.id !== id) {
+    // Si existía con otro formato de ID (ej: "#284" vs "284") o fila desplazada del mismo vecino, migrar sin duplicar
+    db.prepare('DELETE FROM contacts WHERE id = ?').run(existingRow.id);
+  }
   const telNorm = (c as any).telefonoNorm || c.tel || (c.telRaw ? String(c.telRaw).replace(/\D+/g, '') : '');
 
   const stmt = db.prepare(`
@@ -256,15 +328,15 @@ export function bulkUpsertContacts(contacts: RawContactRow[], replaceAll = false
     const validIds: string[] = [];
     for (const c of contacts) {
       if (!c.id) continue;
-      validIds.push(String(c.id).trim());
-      upsertContact(c);
+      const upserted = upsertContact(c);
+      validIds.push(canonicalContactId(upserted.id));
     }
     if (replaceAll && validIds.length > 0) {
       const placeholders = validIds.map(() => '?').join(',');
       db.prepare(`DELETE FROM contacts WHERE id NOT IN (${placeholders})`).run(...validIds);
     }
     db.exec('COMMIT;');
-    return contacts.length;
+    return validIds.length;
   } catch (err) {
     db.exec('ROLLBACK;');
     throw err;
@@ -286,7 +358,11 @@ export function updateContactFields(id: string, updates: Partial<RawContactRow>)
 
 export function deleteContact(id: string): boolean {
   const db = getDatabase();
-  const res = db.prepare('DELETE FROM contacts WHERE id = ?').run(String(id).trim());
+  const cleanId = canonicalContactId(id);
+  const rawId = String(id).trim();
+  const res = db
+    .prepare('DELETE FROM contacts WHERE id = ? OR id = ? OR LOWER(REPLACE(TRIM(id), \'#\', \'\')) = LOWER(?)')
+    .run(cleanId, rawId, cleanId);
   return res.changes > 0;
 }
 

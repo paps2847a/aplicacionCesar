@@ -23,13 +23,13 @@
     background-color: #F5F4F0;
     font-family: 'Raleway', -apple-system, BlinkMacSystemFont, sans-serif;
     width: 100%;
-    max-width: 100vw;
+    max-width: 100%;
     overflow-x: clip;
   }
 
   body, #root {
     width: 100%;
-    max-width: 100vw;
+    max-width: 100%;
     overflow-x: clip;
     -webkit-tap-highlight-color: transparent;
     background-color: #F5F4F0;
@@ -105,6 +105,25 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Barra desplazadora estilizada Popurrí sin flechas nativas de Windows */
+.popurri-dropdown-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.popurri-dropdown-scroll::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.popurri-dropdown-scroll::-webkit-scrollbar-track {
+  background: #ECEAE2;
+  border-radius: 9999px;
+}
+.popurri-dropdown-scroll::-webkit-scrollbar-thumb {
+  background-color: #323232;
+  border-radius: 9999px;
 }
 
 /* Pines expandibles del mapa interactivo de CABA */

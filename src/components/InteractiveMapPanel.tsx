@@ -32,6 +32,7 @@ import {
   geocodificarEventoCalendar,
 } from '../utils/logic';
 import { COORDENADAS_BARRIOS_CABA } from '../data/estatusPopurriData';
+import { PopurriDropdown } from './common/PopurriDropdown';
 import {
   CATALOGO_CAFES_HUB_CABA,
   CafeHubCurado,
@@ -521,19 +522,18 @@ export function InteractiveMapPanel({
                 <label className="block text-[11px] font-bold text-[#323232] mb-1">
                   Barrio CABA *
                 </label>
-                <select
+                <PopurriDropdown
                   value={newCafeBarrio}
-                  onChange={(e) => setNewCafeBarrio(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border-2 border-[#323232] rounded-lg bg-white text-[#323232] font-semibold"
-                >
-                  {Object.keys(COORDENADAS_BARRIOS_CABA)
+                  onChange={(val) => setNewCafeBarrio(val)}
+                  headerLabel="Barrio del Café Hub:"
+                  searchable={true}
+                  searchPlaceholder="Buscar barrio..."
+                  menuWidth={240}
+                  options={Object.keys(COORDENADAS_BARRIOS_CABA)
                     .sort()
-                    .map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                </select>
+                    .map((b) => ({ value: b, label: b }))}
+                  triggerClassName="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs border-2 border-[#323232] rounded-lg bg-white text-[#323232] font-semibold hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                />
               </div>
               <div>
                 <label className="block text-[11px] font-bold text-[#323232] mb-1">
@@ -575,21 +575,25 @@ export function InteractiveMapPanel({
             >
               Filtrar por Barrio
             </label>
-            <select
-              id="map-barrio-filter"
+            <PopurriDropdown
               value={selectedBarrio}
-              onChange={(e) => setSelectedBarrio(e.target.value)}
-              className="w-full px-3 py-2 text-xs sm:text-sm border-2 border-[#323232] rounded-xl bg-white text-[#323232] font-bold focus:outline-none"
-            >
-              <option value="Todos">
-                Todos los barrios ({allPendingCabaContacts.length} pendientes · {allCafesCatalog.length} cafés)
-              </option>
-              {dynamicBarrios.map(([barrio, count]) => (
-                <option key={barrio} value={barrio}>
-                  {barrio} ({count} vecinos)
-                </option>
-              ))}
-            </select>
+              onChange={(val) => setSelectedBarrio(val)}
+              headerLabel="Filtrar mapa por barrio CABA:"
+              searchable={true}
+              searchPlaceholder="Buscar barrio..."
+              menuWidth={280}
+              options={[
+                {
+                  value: 'Todos',
+                  label: `Todos los barrios (${allPendingCabaContacts.length} pendientes · ${allCafesCatalog.length} cafés)`,
+                },
+                ...dynamicBarrios.map(([barrio, count]) => ({
+                  value: barrio,
+                  label: `${barrio} (${count} vecinos)`,
+                })),
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs sm:text-sm border-2 border-[#323232] rounded-xl bg-white text-[#323232] font-bold hover:bg-[#FFF06B]/40 transition cursor-pointer"
+            />
           </div>
 
           <div>

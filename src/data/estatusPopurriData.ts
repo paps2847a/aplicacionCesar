@@ -463,13 +463,16 @@ export const COORDENADAS_DIRECCIONES_CABA: {
   { match: 'coronel díaz 2277', lat: -34.5862, lng: -58.4095, label: 'Av. Cnel. Díaz 2277, Palermo', barrio: 'Palermo' },
   { match: 'coronel diaz 2277', lat: -34.5862, lng: -58.4095, label: 'Av. Cnel. Díaz 2277, Palermo', barrio: 'Palermo' },
   { match: 'bullrich', lat: -34.5772, lng: -58.4262, label: 'Av. Int. Bullrich, Palermo', barrio: 'Palermo' },
-  ...CATALOGO_CAFES_HUB_CABA.map((cafe) => ({
-    match: cafe.direccion.split(',')[0].toLowerCase().trim(),
-    lat: cafe.lat,
-    lng: cafe.lng,
-    label: `${cafe.nombre} (${cafe.direccion.split(',')[0]}, ${cafe.barrio})`,
-    barrio: cafe.barrio,
-  })).filter((item) => item.match.length >= 5),
+  ...CATALOGO_CAFES_HUB_CABA.map((cafe) => {
+    const calleConAltura = cafe.direccion.split(',')[0].trim();
+    return {
+      match: calleConAltura.toLowerCase(),
+      lat: cafe.lat,
+      lng: cafe.lng,
+      label: `${calleConAltura}, ${cafe.barrio}`,
+      barrio: cafe.barrio,
+    };
+  }).filter((item) => item.match.length >= 6 && /\b\d{2,4}\b/.test(item.match)),
 ];
 
 export const INITIAL_RAW_CONTACTS: RawContactRow[] = [

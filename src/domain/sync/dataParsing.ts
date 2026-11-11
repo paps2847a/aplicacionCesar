@@ -1,6 +1,6 @@
 import { normalizarBarrioCABA, sincronizarBarrioConDireccionComentario } from '../geo/cabaLocations';
 import { Contact, EstadoFlujo, RawContactRow } from '../../types';
-import { esTelefonoValido } from '../contacts/phoneUtils';
+import { esTelefonoValido, normalizarTelefonoWA } from '../contacts/phoneUtils';
 import {
   ESTADOS_FLUJO_CATALOGO,
   UMBRAL_ID_SIN_PRIMER_CONTACTO,
@@ -58,10 +58,39 @@ export function parsearTSVoCSVContactos(
   marcarEnSheets: boolean = true
 ): RawContactRow[] {
   if (!texto || !texto.trim()) return [];
-  const lineasRaw = texto
+  const lineasFisicas = texto
     .split(/\r?\n/)
     .filter((l) => l.replace(/[\s,;\t"]/g, '').length > 0);
-  if (lineasRaw.length === 0) return [];
+  if (lineasFisicas.length === 0) return [];
+
+  // Reconstruir filas lógicas cuando una celda (ej. Comentario) contiene un salto de línea interno `\n`
+  const esFormatoTab = lineasFisicas[0].includes('\t');
+  const headerTabsCount = (lineasFisicas[0].match(/\t/g) || []).length;
+  const minFullRowTabs = Math.max(5, headerTabsCount - 1);
+  const lineasRaw: string[] = [];
+  for (let i = 0; i < lineasFisicas.length; i++) {
+    const lin = lineasFisicas[i];
+    if (i === 0 || !esFormatoTab) {
+      lineasRaw.push(lin);
+      continue;
+    }
+    const currTabs = (lin.match(/\t/g) || []).length;
+    const startsWithRowId = /^\s*#?\d+\t/.test(lin);
+    const prevLin = lineasRaw[lineasRaw.length - 1] || '';
+    const prevTabs = (prevLin.match(/\t/g) || []).length;
+    const tieneTelEnLinea = lin.split('\t').some((c) => esTelefonoValido(c.trim()));
+
+    if (
+      lineasRaw.length > 1 &&
+      !startsWithRowId &&
+      !tieneTelEnLinea &&
+      (currTabs <= 2 || prevTabs < minFullRowTabs)
+    ) {
+      lineasRaw[lineasRaw.length - 1] = `${prevLin} / ${lin.trim()}`;
+    } else {
+      lineasRaw.push(lin);
+    }
+  }
 
   const matriz = lineasRaw.map(dividirLineaTSVoCSV);
 
@@ -213,29 +242,59 @@ export function parsearTSVoCSVContactos(
 
   const resultado: RawContactRow[] = [];
   const idsUsados = new Set<string>();
+  const idxPorId = new Map<string, number>();
+  const idxPorTelNorm = new Map<string, number>();
   let ultimoIdNumerico = 0;
 
   for (let i = 0; i < filasNormalizadas.length; i++) {
     const cols = filasNormalizadas[i];
     const idRaw = idxId >= 0 ? String(cols[idxId] || '').trim() : '';
+    const idCandidato = idRaw && esIdFilaValido(idRaw) ? idRaw.replace(/^#/, '').trim() : '';
+    const telRawPeek = String(cols[idxTel] || '').trim();
+    const telNormPeek = normalizarTelefonoWA(telRawPeek);
+
+    // Detectar si esta fila es un duplicado accidental en Sheets de una fila ya leída (mismo ID + mismo teléfono, o mismo teléfono + mismo nombre)
+    let duplicateTargetIdx: number | undefined;
+    if (idCandidato && idxPorId.has(idCandidato)) {
+      const prevIdx = idxPorId.get(idCandidato)!;
+      const prevRow = resultado[prevIdx];
+      const prevTel = normalizarTelefonoWA(prevRow.telRaw);
+      if (telNormPeek && prevTel && telNormPeek === prevTel) {
+        duplicateTargetIdx = prevIdx;
+      }
+    }
+    if (duplicateTargetIdx === undefined && telNormPeek && idxPorTelNorm.has(telNormPeek)) {
+      const prevIdx = idxPorTelNorm.get(telNormPeek)!;
+      const prevRow = resultado[prevIdx];
+      const nomPeek = String(cols[idxNombre] || '').trim().toLowerCase();
+      const prevNom = String(prevRow.nombre || '').trim().toLowerCase();
+      if (
+        (nomPeek && prevNom && nomPeek === prevNom && !esCeldaSinNombre(nomPeek)) ||
+        (idCandidato && idCandidato === prevRow.id)
+      ) {
+        duplicateTargetIdx = prevIdx;
+      }
+    }
+
     let id = '';
-    if (idRaw && esIdFilaValido(idRaw)) {
-      const idCandidato = idRaw.replace(/^#/, '').trim();
-      if (!idsUsados.has(idCandidato)) {
+    if (duplicateTargetIdx !== undefined) {
+      id = resultado[duplicateTargetIdx].id;
+    } else {
+      if (idCandidato && !idsUsados.has(idCandidato)) {
         id = idCandidato;
       }
-    }
-    if (!id) {
-      let siguienteNum = Math.max(i + 1, ultimoIdNumerico + 1);
-      while (idsUsados.has(String(siguienteNum))) {
-        siguienteNum += 1;
+      if (!id) {
+        let siguienteNum = Math.max(i + 1, ultimoIdNumerico + 1);
+        while (idsUsados.has(String(siguienteNum))) {
+          siguienteNum += 1;
+        }
+        id = String(siguienteNum);
       }
-      id = String(siguienteNum);
-    }
-    idsUsados.add(id);
-    const numActual = Number(id);
-    if (Number.isFinite(numActual) && numActual > ultimoIdNumerico) {
-      ultimoIdNumerico = numActual;
+      idsUsados.add(id);
+      const numActual = Number(id);
+      if (Number.isFinite(numActual) && numActual > ultimoIdNumerico) {
+        ultimoIdNumerico = numActual;
+      }
     }
 
     let nombre = String(cols[idxNombre] || '').trim();
@@ -403,7 +462,66 @@ export function parsearTSVoCSVContactos(
       intentos: necesitaPrimerContacto ? 0 : 1,
     });
 
-    resultado.push(filaCruda);
+    if (duplicateTargetIdx !== undefined) {
+      const prev = resultado[duplicateTargetIdx];
+      const merged: RawContactRow = sincronizarBarrioConDireccionComentario({
+        ...prev,
+        nombre:
+          !esCeldaSinNombre(filaCruda.nombre) && filaCruda.nombre
+            ? filaCruda.nombre
+            : prev.nombre,
+        barrio: filaCruda.barrio || prev.barrio,
+        email: filaCruda.email || prev.email,
+        rsp:
+          filaCruda.rsp === 'Sí' || prev.rsp === 'Sí'
+            ? 'Sí'
+            : filaCruda.rsp === 'No' || prev.rsp === 'No'
+            ? 'No'
+            : filaCruda.rsp,
+        adhirio:
+          filaCruda.adhirio === 'Sí' || prev.adhirio === 'Sí'
+            ? 'Sí'
+            : filaCruda.adhirio === 'No' || prev.adhirio === 'No'
+            ? 'No'
+            : 'Pendiente',
+        diasEncuentro: filaCruda.diasEncuentro || prev.diasEncuentro,
+        horaInicio: filaCruda.horaInicio || prev.horaInicio,
+        horaFin: filaCruda.horaFin || prev.horaFin,
+        horarioEncuentro: filaCruda.horarioEncuentro || prev.horarioEncuentro,
+        calleOCruce: filaCruda.calleOCruce || prev.calleOCruce,
+        comentario:
+          filaCruda.comentario && prev.comentario && filaCruda.comentario !== prev.comentario
+            ? prev.comentario.includes(filaCruda.comentario)
+              ? prev.comentario
+              : `${prev.comentario} · ${filaCruda.comentario}`
+            : filaCruda.comentario || prev.comentario,
+        estadoFlujo:
+          filaCruda.adhirio === 'Sí'
+            ? filaCruda.estadoFlujo
+            : prev.adhirio === 'Sí'
+            ? prev.estadoFlujo
+            : filaCruda.diasEncuentro || filaCruda.calleOCruce
+            ? filaCruda.estadoFlujo
+            : prev.estadoFlujo || filaCruda.estadoFlujo,
+        estadoFlujoEtiqueta:
+          filaCruda.adhirio === 'Sí'
+            ? filaCruda.estadoFlujoEtiqueta
+            : prev.adhirio === 'Sí'
+            ? prev.estadoFlujoEtiqueta
+            : filaCruda.diasEncuentro || filaCruda.calleOCruce
+            ? filaCruda.estadoFlujoEtiqueta
+            : prev.estadoFlujoEtiqueta || filaCruda.estadoFlujoEtiqueta,
+        primerContactoEnviado: Boolean(prev.primerContactoEnviado || filaCruda.primerContactoEnviado),
+      });
+      resultado[duplicateTargetIdx] = merged;
+    } else {
+      const idxAdded = resultado.length;
+      resultado.push(filaCruda);
+      idxPorId.set(id, idxAdded);
+      if (telNormPeek) {
+        idxPorTelNorm.set(telNormPeek, idxAdded);
+      }
+    }
   }
 
   return asegurarIdsUnicosContactos(resultado);

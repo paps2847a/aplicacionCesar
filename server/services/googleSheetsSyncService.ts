@@ -184,8 +184,56 @@ function execGsheetsCli(
   });
 }
 
+function sanitizeSheetCell(val: unknown): string {
+  return String(val ?? '')
+    .replace(/[\r\n\t]+/g, ' / ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * Reconstruye las filas lógicas de un TSV exportado por Google Sheets cuando alguna celda
+ * (p. ej. Comentario o Dirección) contiene un salto de línea interno `\n`.
+ * Garantiza que el índice de cada elemento coincida 1:1 con el número real de fila en Google Sheets.
+ */
+export function reconstruirFilasLogicasTSV(tsvText: string): string[] {
+  const rawLines = tsvText.replace(/\r?\n$/, '').split(/\r?\n/);
+  const logicalLines: string[] = [];
+  const headerTabs = rawLines.length > 0 ? (rawLines[0].match(/\t/g) || []).length : 10;
+  const minCompleteTabs = Math.max(6, headerTabs - 1);
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const rawLine = rawLines[i];
+    if (i === 0) {
+      logicalLines.push(rawLine);
+      continue;
+    }
+
+    const currTabs = (rawLine.match(/\t/g) || []).length;
+    const startsWithRowId = /^\s*#?\d+\t/.test(rawLine);
+    const prevLine = logicalLines[logicalLines.length - 1] || '';
+    const prevTabs = (prevLine.match(/\t/g) || []).length;
+
+    // Una línea física es continuación de una celda multilínea de la fila anterior si:
+    // - No comienza con un ID numérico de fila (`^\s*#?\d+\t`), Y
+    // - Tiene <= 2 tabuladores (resto de Comentario + Estado) o la fila previa quedó incompleta
+    const isContinuation =
+      logicalLines.length > 1 &&
+      !startsWithRowId &&
+      (currTabs <= 2 || prevTabs < minCompleteTabs);
+
+    if (isContinuation) {
+      logicalLines[logicalLines.length - 1] = `${prevLine} / ${rawLine.trim()}`;
+    } else {
+      logicalLines.push(rawLine);
+    }
+  }
+
+  return logicalLines;
+}
+
 function updateRowCacheFromTSV(spreadsheetId: string, tsvText: string): SpreadsheetRowCache {
-  const lines = tsvText.split(/\r?\n/);
+  const lines = reconstruirFilasLogicasTSV(tsvText);
   const byId = new Map<string, SheetRowEntry>();
   const byTelLast8 = new Map<string, SheetRowEntry>();
   let maxRowNum = 1;
@@ -200,7 +248,7 @@ function updateRowCacheFromTSV(spreadsheetId: string, tsvText: string): Spreadsh
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     if (!line || !line.trim()) continue;
-    const rawCols = line.split('\t').map((c) => c.trim());
+    const rawCols = line.split('\t').map((c) => sanitizeSheetCell(c));
     let cols: string[];
     if (isStructured11Col || rawCols.length >= 10) {
       cols = [...rawCols];
@@ -225,9 +273,10 @@ function updateRowCacheFromTSV(spreadsheetId: string, tsvText: string): Spreadsh
     const rowNum = i + 1;
     if (rowNum > maxRowNum) maxRowNum = rowNum;
 
-    const idClean = String(cols[0] || '')
-      .replace(/^#/, '')
+    const idRawClean = String(cols[0] || '')
+      .replace(/^#+/, '')
       .trim();
+    const idClean = /^\d+$/.test(idRawClean) ? String(Number(idRawClean)) : idRawClean;
     const telDigits = String(cols[3] || '').replace(/\D+/g, '');
     const telLast8 = telDigits.length >= 8 ? telDigits.slice(-8) : '';
 
@@ -236,10 +285,13 @@ function updateRowCacheFromTSV(spreadsheetId: string, tsvText: string): Spreadsh
       cols,
     };
 
-    if (idClean) {
+    if (idClean && !byId.has(idClean)) {
       byId.set(idClean, entry);
     }
-    if (telLast8) {
+    if (idRawClean && idRawClean !== idClean && !byId.has(idRawClean)) {
+      byId.set(idRawClean, entry);
+    }
+    if (telLast8 && !byTelLast8.has(telLast8)) {
       byTelLast8.set(telLast8, entry);
     }
   }
@@ -283,11 +335,13 @@ export async function readControlSheetTSV(sheetUrlOrId?: string): Promise<{
   );
 
   if (res.ok && res.stdout.trim().length > 0) {
-    const cache = updateRowCacheFromTSV(spreadsheetId, res.stdout);
+    const normalizedLines = reconstruirFilasLogicasTSV(res.stdout);
+    const normalizedTsv = normalizedLines.join('\n');
+    const cache = updateRowCacheFromTSV(spreadsheetId, normalizedTsv);
     return {
       ok: true,
       spreadsheetId,
-      tsvText: res.stdout,
+      tsvText: normalizedTsv,
       rowCount: cache.byId.size,
     };
   }
@@ -365,9 +419,10 @@ export async function pushContactUpdatesToSheet(params: {
       // Caso 2: Actualización de filas individuales o por lote desde la App
       const updatesList = Array.isArray(params.updates) ? params.updates : [];
       if (updatesList.length > 0) {
-        // Si algún ID buscado no está aún en caché, refrescar 1 vez la caché desde Google Sheets
+        // Refrescar caché si tiene más de 2.5s o falta algún ID/teléfono, para reflejar filas eliminadas o insertadas en Sheets
         const needsCacheRefresh =
           !cache ||
+          Date.now() - cache.updatedAtMs > 2500 ||
           updatesList.some((u) => {
             const idTarget = String(u?.id ?? u?.contactId ?? '')
               .replace(/^#/, '')
@@ -394,56 +449,77 @@ export async function pushContactUpdatesToSheet(params: {
             const telDigits = String(p.telRaw || p.tel || p.telefonoNorm || '').replace(/\D+/g, '');
             const telLast8 = telDigits.length >= 8 ? telDigits.slice(-8) : '';
 
+            const entryById = idTarget ? cache.byId.get(idTarget) : undefined;
+            const entryByTel = telLast8 ? cache.byTelLast8.get(telLast8) : undefined;
+            const entryIdTelLast8 = entryById
+              ? String(entryById.cols[3] || '').replace(/\D+/g, '').slice(-8)
+              : '';
+
+            // Si entryById tiene un teléfono distinto al del contacto editado y entryByTel coincide con el teléfono real,
+            // priorizar entryByTel para jamás sobrescribir la fila de otro vecino tras eliminaciones/inserciones en Sheets.
             const entry =
-              (idTarget ? cache.byId.get(idTarget) : undefined) ||
-              (telLast8 ? cache.byTelLast8.get(telLast8) : undefined);
+              entryById && (!telLast8 || !entryIdTelLast8 || entryIdTelLast8 === telLast8)
+                ? entryById
+                : entryByTel || entryById;
 
             const validChip = normalizeOfficialSheetChipLabel(p.estado || p.estadoFlujo);
 
             if (entry) {
-              const idNum = Number(idTarget || entry.cols[0]);
+              const effectiveIdStr =
+                entry === entryByTel && entry !== entryById && entry.cols[0]
+                  ? entry.cols[0]
+                  : idTarget || entry.cols[0];
+              const idNum = Number(effectiveIdStr);
               const colA: string | number = Number.isFinite(idNum) && idNum > 0
                 ? idNum
-                : idTarget || entry.cols[0];
+                : effectiveIdStr;
 
-              const colB =
+              const colB = sanitizeSheetCell(
                 !p.preserveIdentityColumns && p.nombre !== undefined && p.nombre.trim() !== ''
                   ? p.nombre.trim()
-                  : entry.cols[1] || p.nombre || '';
-              const colC =
+                  : entry.cols[1] || p.nombre || ''
+              );
+              const colC = sanitizeSheetCell(
                 !p.preserveIdentityColumns && p.barrio !== undefined && p.barrio.trim() !== ''
                   ? p.barrio.trim()
-                  : entry.cols[2] || p.barrio || '';
-              const colD =
+                  : entry.cols[2] || p.barrio || ''
+              );
+              const colD = sanitizeSheetCell(
                 !p.preserveIdentityColumns && (p.telRaw || p.tel)
                   ? String(p.telRaw || p.tel).trim()
-                  : entry.cols[3] || String(p.telRaw || p.tel || '');
+                  : entry.cols[3] || String(p.telRaw || p.tel || '')
+              );
 
-              const colE =
+              const colE = sanitizeSheetCell(
                 p.rsp !== undefined && String(p.rsp).trim() !== ''
                   ? String(p.rsp).trim()
-                  : entry.cols[4] || 'No';
-              const colF =
+                  : entry.cols[4] || 'No'
+              );
+              const colF = sanitizeSheetCell(
                 p.adhirio !== undefined && String(p.adhirio).trim() !== ''
                   ? String(p.adhirio).trim()
-                  : entry.cols[5] || 'Pendiente';
+                  : entry.cols[5] || 'Pendiente'
+              );
 
-              const colG =
+              const colG = sanitizeSheetCell(
                 p.diasEncuentro !== undefined
                   ? String(p.diasEncuentro).trim()
-                  : entry.cols[6] || '';
-              const colH =
+                  : entry.cols[6] || ''
+              );
+              const colH = sanitizeSheetCell(
                 p.horarioEncuentro !== undefined
                   ? String(p.horarioEncuentro).trim()
-                  : entry.cols[7] || '';
-              const colI =
+                  : entry.cols[7] || ''
+              );
+              const colI = sanitizeSheetCell(
                 p.calleOCruce !== undefined
                   ? String(p.calleOCruce).trim()
-                  : entry.cols[8] || '';
+                  : entry.cols[8] || ''
+              );
 
               let colJ = entry.cols[9] || '';
               if (p.comentario !== undefined) {
-                colJ = String(p.comentario).trim();
+                colJ = sanitizeSheetCell(p.comentario);
               } else if (
                 p.comentarioNota &&
                 !/1er msj auto enviado|1er mensaje enviado/i.test(p.comentarioNota)
@@ -452,17 +528,20 @@ export async function pushContactUpdatesToSheet(params: {
                   .replace(/\[Intento auto fallido[^\]]*\]/gi, '')
                   .replace(/\[1er msj auto enviado[^\]]*\]/gi, '')
                   .trim();
-                colJ = prevCom.includes(p.comentarioNota)
-                  ? prevCom
-                  : prevCom
-                  ? `${prevCom} · ${p.comentarioNota}`
-                  : p.comentarioNota;
+                colJ = sanitizeSheetCell(
+                  prevCom.includes(p.comentarioNota)
+                    ? prevCom
+                    : prevCom
+                    ? `${prevCom} · ${p.comentarioNota}`
+                    : p.comentarioNota
+                );
               }
 
-              const colK =
+              const colK = sanitizeSheetCell(
                 p.estado || p.estadoFlujo
                   ? validChip
-                  : entry.cols[10] || obtenerEtiquetaEstadoFlujo('1ER_MSJ_ENVIADO_SIN_RSP');
+                  : entry.cols[10] || obtenerEtiquetaEstadoFlujo('1ER_MSJ_ENVIADO_SIN_RSP')
+              );
 
               entry.cols = [
                 String(colA),
@@ -490,19 +569,18 @@ export async function pushContactUpdatesToSheet(params: {
               const idNum = Number(idTarget);
               const colA: string | number =
                 Number.isFinite(idNum) && idNum > 0 ? idNum : idTarget;
-              const colB = String(p.nombre || '').trim();
-              const colC = String(p.barrio || 'Palermo').trim();
-              const colD = String(p.telRaw || p.tel || p.telefonoNorm || '').trim();
-              const colE = String(p.rsp || 'Nuevo').trim();
-              const colF = String(p.adhirio || 'Pendiente').trim();
-              const colG = String(p.diasEncuentro || '').trim();
-              const colH = String(p.horarioEncuentro || '').trim();
-              const colI = String(p.calleOCruce || '').trim();
-              const colJ =
-                p.comentario !== undefined
-                  ? String(p.comentario).trim()
-                  : String(p.comentarioNota || '').trim();
-              const colK = validChip;
+              const colB = sanitizeSheetCell(p.nombre || '');
+              const colC = sanitizeSheetCell(p.barrio || 'Palermo');
+              const colD = sanitizeSheetCell(p.telRaw || p.tel || p.telefonoNorm || '');
+              const colE = sanitizeSheetCell(p.rsp || 'Nuevo');
+              const colF = sanitizeSheetCell(p.adhirio || 'Pendiente');
+              const colG = sanitizeSheetCell(p.diasEncuentro || '');
+              const colH = sanitizeSheetCell(p.horarioEncuentro || '');
+              const colI = sanitizeSheetCell(p.calleOCruce || '');
+              const colJ = sanitizeSheetCell(
+                p.comentario !== undefined ? p.comentario : p.comentarioNota || ''
+              );
+              const colK = sanitizeSheetCell(validChip);
 
               const newEntry: SheetRowEntry = {
                 rowNum: newRowNum,

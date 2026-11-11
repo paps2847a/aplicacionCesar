@@ -45,6 +45,7 @@ import {
   LISTA_ESTADOS_FLUJO_UNIFICADOS,
   LISTA_PLANTILLAS_WA_COMPLETA,
 } from './CandidateCard';
+import { PopurriDropdown } from '../common/PopurriDropdown';
 
 interface CandidateDrawerProps {
   contact: Contact | null;
@@ -487,17 +488,15 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                   </h4>
                 </div>
 
-                <select
+                <PopurriDropdown
                   value={selectedTemplate}
-                  onChange={(e) => setSelectedTemplate(e.target.value as TipoPlantillaWA)}
-                  className="w-full rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-3 py-2 text-xs font-bold text-[#323232]"
-                >
-                  {LISTA_PLANTILLAS_WA_COMPLETA.map((tpl) => (
-                    <option key={tpl.value} value={tpl.value}>
-                      {tpl.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setSelectedTemplate(val as TipoPlantillaWA)}
+                  options={LISTA_PLANTILLAS_WA_COMPLETA}
+                  headerLabel="Elegir plantilla de mensaje WhatsApp:"
+                  menuWidth={360}
+                  maxHeight={320}
+                  triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-3 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                />
               </div>
 
               {/* Adaptador en vivo según lo que respondió */}
@@ -665,17 +664,16 @@ export const CandidateDrawer: React.FC<CandidateDrawerProps> = ({
                   <label className="block text-[11px] font-bold text-[#323232] mb-1">
                     Estado Operativo
                   </label>
-                  <select
+                  <PopurriDropdown
                     value={editEstadoFlujo}
-                    onChange={(e) => setEditEstadoFlujo(e.target.value as EstadoFlujo)}
-                    className="w-full rounded-xl border-2 border-[#323232] bg-white px-2.5 py-2 text-xs font-bold text-[#323232]"
-                  >
-                    {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((st) => (
-                      <option key={st.value} value={st.value}>
-                        {st.label}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setEditEstadoFlujo(val as EstadoFlujo)}
+                    options={LISTA_ESTADOS_FLUJO_UNIFICADOS}
+                    headerLabel={`Estado Operativo de #${contact.id}:`}
+                    align="right"
+                    menuWidth={310}
+                    maxHeight={320}
+                    triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                  />
                 </div>
 
                 <div>

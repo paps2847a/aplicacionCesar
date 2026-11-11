@@ -53,7 +53,7 @@ export function extraerFechasMencionadas(comentario: string): string[] {
 
   // 1. Expresiones compuestas con conjunción ("20 o 21/10", "21 o 22/10", "21 o 23/10", "20, 21 o 22/10", "21 y 22/10")
   const regexCompuesta =
-    /\b(\d{1,2})\s*(?:,\s*(\d{1,2})\s*)?(?:o|u|y|e)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
+    /(?<!\/)\b(\d{1,2})\s*(?:,\s*(\d{1,2})\s*)?(?:o|u|y|e)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
   for (const m of text.matchAll(regexCompuesta)) {
     const mes = m[4];
     agregarFecha(m[1], mes);
@@ -63,7 +63,7 @@ export function extraerFechasMencionadas(comentario: string): string[] {
 
   // 2. Rangos de días que comparten mes ("del 20 al 22/10", "entre el 20 y 24/10", "20 al 24/10")
   const regexRangoDias =
-    /\b(?:(?:del|entre(?:\s+el)?)\s+)?(\d{1,2})\s+(?:al|a|y(?:\s+el)?|-)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
+    /(?<!\/)\b(?:(?:del|entre(?:\s+el)?)\s+)?(?<!\/)(\d{1,2})\s+(?:al|a|y(?:\s+el)?|-)\s*(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/gi;
   for (const m of text.matchAll(regexRangoDias)) {
     const d1 = Number(m[1]);
     const d2 = Number(m[2]);
@@ -543,14 +543,10 @@ export function detectarAlertaPendienteVencido(
   if (!fechaVencidaDetectada) {
     return undefined;
   }
-  const yaConfirmadoOReprogramadoEnApp =
-    /\[Confirmado 1-a-1\]|\[Modalidad:|visita\s+reprogramada|\[reprogramad/i.test(
-      params.comentario || ''
-    );
-  if (
-    tieneFechaHoraHoyOFuturaVigente &&
-    (!tieneAlgunaFechaAnteriorAHoy || yaConfirmadoOReprogramadoEnApp)
-  ) {
+  // Si el contacto tiene un rango de fechas o múltiples opciones de día (ej: "04/11 al 06/11" o "04/11, 06/11")
+  // y al menos una de esas fechas sigue vigente (es hoy dentro de horario o es un día futuro),
+  // el encuentro NO está vencido. Sólo vence cuando TODAS las fechas candidatas ya pasaron.
+  if (tieneFechaHoraHoyOFuturaVigente) {
     return undefined;
   }
 
@@ -822,6 +818,37 @@ export function extraerHoraPactadaExplicita(comentario: string): string | undefi
   const disp = analizarDisponibilidadColumnaG(comentario);
   if (disp.esVentanaAmplia) return undefined;
   return disp.horaPuntualPactada;
+}
+
+/**
+ * Cuando un contacto tiene múltiples opciones de días y horarios separadas por " | "
+ * (ej. diasEncuentro: "11/11 | 12/11 al 13/11", horarioEncuentro: "14:00 a 16:00 | 10:00 a 13:00"),
+ * resuelve el texto de horario específico para la fecha consultada (`fechaClave`).
+ */
+export function resolverTextoHorarioParaFecha(
+  contact: {
+    diasEncuentro?: string;
+    horarioEncuentro?: string;
+    comentario?: string;
+  },
+  fechaClave?: string
+): string {
+  const diasRaw = String(contact.diasEncuentro || '').trim();
+  const horariosRaw = String(contact.horarioEncuentro || '').trim();
+  if (diasRaw.includes('|') && horariosRaw.includes('|') && fechaClave) {
+    const partesDias = diasRaw.split('|').map((s) => s.trim());
+    const partesHorarios = horariosRaw.split('|').map((s) => s.trim());
+    for (let i = 0; i < partesDias.length; i++) {
+      const fechasTramo = extraerFechasMencionadas(partesDias[i]);
+      if (fechasTramo.includes(fechaClave) && partesHorarios[i]) {
+        return `${partesDias[i]} ${partesHorarios[i]}`.trim();
+      }
+    }
+  }
+  const tieneEstructurados = Boolean(diasRaw || horariosRaw);
+  return tieneEstructurados
+    ? [diasRaw, horariosRaw].filter(Boolean).join(' ')
+    : [diasRaw, horariosRaw, contact.comentario].filter(Boolean).join(' ');
 }
 
 /**

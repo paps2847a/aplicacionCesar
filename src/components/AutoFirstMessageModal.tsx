@@ -24,6 +24,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { WhatsAppWebAutomationPanel } from './WhatsAppWebAutomationPanel';
+import { PopurriDropdown } from './common/PopurriDropdown';
 import {
   AutoFirstMessageCampaign,
   AutoFirstMessageConfig,
@@ -802,31 +803,36 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
       const com = c.comentario || '';
       if (com.includes(`[1er msj auto enviado el ${hoyDDMM}`)) {
         idsHoy.add(String(c.id));
-      } else if (c.ultimoMensajeCorteEnviadoAt) {
-        const dIso = new Date(c.ultimoMensajeCorteEnviadoAt).toLocaleDateString('sv-SE', {
-          timeZone: 'America/Argentina/Buenos_Aires',
-        });
-        if (dIso === hoyISO) {
-          idsHoy.add(String(c.id));
-        }
+      } else if (c.fechaPrimerContacto === hoyISO) {
+        idsHoy.add(String(c.id));
       }
     }
-    for (const it of campaign.items) {
-      if (it.resultado === 'ENVIADO_OK') {
-        idsHoy.add(String(it.contactId));
+    if (
+      (!config.modoCola || config.modoCola === 'PRIMER_CONTACTO') &&
+      (!config.estadoFiltro || config.estadoFiltro === 'TODOS' || config.estadoFiltro === 'SIN_CONTACTAR_1ER_MSJ')
+    ) {
+      for (const it of campaign.items) {
+        if (it.resultado === 'ENVIADO_OK') {
+          idsHoy.add(String(it.contactId));
+        }
       }
     }
     return Math.max(
       idsHoy.size,
-      stats.enviadosOk,
-      waServerLock.sentCount,
+      (!config.modoCola || config.modoCola === 'PRIMER_CONTACTO') ? stats.enviadosOk : 0,
+      (!config.modoCola || config.modoCola === 'PRIMER_CONTACTO') ? waServerLock.sentCount : 0,
       dailyQuotaAudit?.sentTodayAutoCount || 0
     );
-  }, [contacts, campaign.items, stats.enviadosOk, waServerLock.sentCount, dailyQuotaAudit]);
+  }, [contacts, campaign.items, config.modoCola, config.estadoFiltro, stats.enviadosOk, waServerLock.sentCount, dailyQuotaAudit]);
+
+  const esColaNuevosContactos =
+    (!config.modoCola || config.modoCola === 'PRIMER_CONTACTO') &&
+    (!config.estadoFiltro || config.estadoFiltro === 'TODOS' || config.estadoFiltro === 'SIN_CONTACTAR_1ER_MSJ');
 
   const cupoDiarioEfectivo = dailyQuotaAudit?.dailyQuotaLimit || config.cupoSorteado;
-  const cupoDiarioAlcanzadoHoy =
+  const cupoNuevosAlcanzadoHoy =
     Boolean(dailyQuotaAudit?.isDailyQuotaLocked) || enviadosHoyCount >= cupoDiarioEfectivo;
+  const cupoDiarioAlcanzadoHoy = esColaNuevosContactos && cupoNuevosAlcanzadoHoy;
   const isLoopLocked = Boolean(
     waServerLock.autoLoop24h && (waServerLock.running || waServerLock.waitingNextDay)
   );
@@ -842,7 +848,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
     <div
       className={
         inlineMode
-          ? 'mx-auto w-full max-w-6xl min-w-0 overflow-x-hidden px-3 sm:px-6 py-4 sm:py-6'
+          ? 'mx-auto w-full max-w-6xl min-w-0 overflow-x-clip px-3 sm:px-6 py-4 sm:py-6'
           : 'fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-2 sm:p-4 backdrop-blur-sm overflow-y-auto'
       }
     >
@@ -964,13 +970,17 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                   Memoria Persistente Anti-Bloqueo (SQLite — Se conserva al apagar servidor o reiniciar app)
                 </h3>
               </div>
-              {dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy ? (
+              {cupoDiarioAlcanzadoHoy ? (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border-2 border-[#323232] bg-[#FF2C00] px-2.5 py-1 text-[11px] font-black text-white shadow-[1px_1px_0px_#323232]">
-                  🛑 BLOQUEO ANTI-BAN ACTIVO HOY ({enviadosHoyCount}/{cupoDiarioEfectivo} enviados)
+                  🛑 BLOQUEO ANTI-BAN NUEVOS HOY ({enviadosHoyCount}/{cupoDiarioEfectivo} nuevos enviados)
+                </span>
+              ) : !esColaNuevosContactos && cupoNuevosAlcanzadoHoy ? (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-sky-700 bg-sky-100 px-2.5 py-1 text-[11px] font-black text-sky-950">
+                  ✅ Cola 2 (Seguimientos) Habilitada · Cupo Nuevos ({enviadosHoyCount}/{cupoDiarioEfectivo}) completo
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-700 bg-emerald-100 px-2.5 py-1 text-[11px] font-black text-emerald-950">
-                  ✅ Cuota Disponible Hoy: quedan {Math.max(0, cupoDiarioEfectivo - enviadosHoyCount)} msjs
+                  ✅ Cuota Nuevos Disponible Hoy: quedan {Math.max(0, cupoDiarioEfectivo - enviadosHoyCount)} msjs
                 </span>
               )}
             </div>
@@ -979,7 +989,7 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
               {/* 1. Mensajes enviados hoy */}
               <div className="rounded-xl border border-slate-200 bg-[#F5F4F0] p-3">
                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
-                  1. Enviados Hoy ({dailyQuotaAudit?.todayDateBA?.split('-').reverse().slice(0, 2).join('/') || 'Hoy'})
+                  1. Nuevos Contactados Hoy ({dailyQuotaAudit?.todayDateBA?.split('-').reverse().slice(0, 2).join('/') || 'Hoy'})
                 </span>
                 <div className="mt-1 flex items-baseline justify-between">
                   <span className="text-xl font-black text-[#323232]">
@@ -990,9 +1000,9 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                   </span>
                 </div>
                 <p className="mt-1 text-[10px] font-semibold text-slate-600">
-                  {dailyQuotaAudit?.isDailyQuotaLocked || cupoDiarioAlcanzadoHoy
-                    ? 'Cupo diario alcanzado: envíos de 1er contacto bloqueados hasta mañana.'
-                    : `Total hoy (incl. directos): ${dailyQuotaAudit?.sentTodayTotalCount ?? enviadosHoyCount} msjs`}
+                  {cupoNuevosAlcanzadoHoy
+                    ? 'Cupo diario de nuevos contactos alcanzado (los seguimientos y chats activos siguen libres).'
+                    : `Solo aplica a 1er contacto de nuevos · Total hoy (incl. directos): ${dailyQuotaAudit?.sentTodayTotalCount ?? enviadosHoyCount} msjs`}
                 </p>
               </div>
 
@@ -1339,32 +1349,75 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                     </p>
                   </div>
                   <div className="min-w-[250px]">
-                    <select
+                    <PopurriDropdown
                       value={config.estadoFiltro || 'TODOS'}
-                      onChange={(e) =>
+                      onChange={(val) =>
                         handleRegenerarCola({
-                          estadoFiltro: e.target.value as EstadoFlujo | 'TODOS',
+                          estadoFiltro: val as EstadoFlujo | 'TODOS',
                         })
                       }
-                      className="w-full rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold text-[#323232]"
-                    >
-                      <option value="TODOS">Según Etapa seleccionada arriba (Automático)</option>
-                      <option value="SIN_CONTACTAR_1ER_MSJ">1. Nuevo · Sin 1er mensaje</option>
-                      <option value="FALTA_NOMBRE_Y_APELLIDO">1b. Nuevo · Falta Nombre</option>
-                      <option value="1ER_MSJ_ENVIADO_SIN_RSP">2. 1er Msj Enviado · Esperando respuesta</option>
-                      <option value="RESPONDIO_FALTA_DNI_O_ZONA">3. Respondió · Falta calle/esquina o día</option>
-                      <option value="PIDIO_MAS_INFO_ENVIADA">3b. Pidió más info (5 ejes enviados)</option>
-                      <option value="PREFIERE_CAFE_HUB_O_SEDE">3c. Prefiere Punto / Café / Sede</option>
-                      <option value="PASO_DATOS_FALTA_CONFIRMAR">4. Pasó dirección/horario · Falta confirmar</option>
-                      <option value="ENCUENTRO_CONFIRMADO">5. Encuentro Confirmado (En Ruta)</option>
-                      <option value="RECORDATORIO_DIA_ENVIADO">6. Recordatorio / En Camino Enviado</option>
-                      <option value="PENDIENTE_RETIRO_FICHAS">7. Llevó Fichas Extra · Pendiente Retiro</option>
-                      <option value="POSTERGO_SALUD_O_VIAJE">8. En Pausa (Viaje / Salud / Más adelante)</option>
-                      <option value="YA_ADHIRIO_FIRMA_OK">9. ✅ Ya Firmó · Adhesión Completada</option>
-                      <option value="SIN_DNI_CABA_PEDIR_REFERIDOS">10. Sin DNI en CABA · Pedir Referidos</option>
-                      <option value="DESCARTADO_O_BAJA">11. Baja / Número Inválido / Descartado</option>
-                      <option value="CITA_VENCIDA_REPROGRAMAR">⚠️ Cita Vencida / Reprogramar</option>
-                    </select>
+                      headerLabel="Filtrar cola por estado operativo:"
+                      align="right"
+                      menuWidth={320}
+                      options={[
+                        { value: 'TODOS', label: 'Según Etapa seleccionada arriba (Automático)' },
+                        { value: 'SIN_CONTACTAR_1ER_MSJ', label: '1. Nuevo · Sin contactar' },
+                        { value: 'FALTA_NOMBRE_Y_APELLIDO', label: '1b. Nuevo · Falta nombre' },
+                        {
+                          value: '1ER_MSJ_ENVIADO_SIN_RSP',
+                          label: '2. Contactado · Sin respuesta',
+                        },
+                        {
+                          value: 'RESPONDIO_FALTA_DNI_O_ZONA',
+                          label: '3. Respondió · Faltan datos',
+                        },
+                        {
+                          value: 'PIDIO_MAS_INFO_ENVIADA',
+                          label: '3b. Pidió más info',
+                        },
+                        {
+                          value: 'PREFIERE_CAFE_HUB_O_SEDE',
+                          label: '3c. Prefiere Punto / Sede',
+                        },
+                        {
+                          value: 'PASO_DATOS_FALTA_CONFIRMAR',
+                          label: '4. Pasó datos · Por confirmar',
+                        },
+                        {
+                          value: 'ENCUENTRO_CONFIRMADO',
+                          label: '5. Confirmado · En ruta',
+                        },
+                        {
+                          value: 'RECORDATORIO_DIA_ENVIADO',
+                          label: '6. En camino / Recordatorio',
+                        },
+                        {
+                          value: 'PENDIENTE_RETIRO_FICHAS',
+                          label: '7. Fichas extra · Por retirar',
+                        },
+                        {
+                          value: 'POSTERGO_SALUD_O_VIAJE',
+                          label: '8. En pausa · Viaje o salud',
+                        },
+                        {
+                          value: 'YA_ADHIRIO_FIRMA_OK',
+                          label: '9. ✅ Ya firmó',
+                        },
+                        {
+                          value: 'SIN_DNI_CABA_PEDIR_REFERIDOS',
+                          label: '10. Sin DNI CABA · Referidos',
+                        },
+                        {
+                          value: 'DESCARTADO_O_BAJA',
+                          label: '11. Baja / Descartado',
+                        },
+                        {
+                          value: 'CITA_VENCIDA_REPROGRAMAR',
+                          label: '⚠️ Cita vencida · Reprogramar',
+                        },
+                      ]}
+                      triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-white px-3 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                    />
                   </div>
                 </div>
 
@@ -1476,17 +1529,23 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                     <label className="block text-[11px] font-bold text-slate-600 mb-1">
                       Nivel de calentamiento (Warm-up):
                     </label>
-                    <select
+                    <PopurriDropdown
                       value={config.nivelWarmup}
-                      onChange={(e) => handleSelectWarmup(e.target.value as NivelWarmupWA)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 text-xs font-bold text-slate-800 focus:bg-white focus:outline-hidden"
-                    >
-                      <option value="DIA_1_MAX_10">Día 1 (Inicial) — 7 a 10 msjs</option>
-                      <option value="DIA_2_MAX_15">Día 2 — Máx 15 msjs (11 a 15)</option>
-                      <option value="DIA_3_MAX_25">Día 3 — Máx 25 msjs (18 a 25)</option>
-                      <option value="DIA_4_MAX_35">Día 4 — Máx 35 msjs (26 a 35)</option>
-                      <option value="DIA_5_MADURO_MENOS_45">Día 5+ (Maduro) — Aleatorio &lt; 45 (28 a 44)</option>
-                    </select>
+                      onChange={(val) => handleSelectWarmup(val as NivelWarmupWA)}
+                      headerLabel="Nivel de calentamiento (Warm-up):"
+                      menuWidth={300}
+                      options={[
+                        { value: 'DIA_1_MAX_10', label: 'Día 1 (Inicial) — 7 a 10 msjs' },
+                        { value: 'DIA_2_MAX_15', label: 'Día 2 — Máx 15 msjs (11 a 15)' },
+                        { value: 'DIA_3_MAX_25', label: 'Día 3 — Máx 25 msjs (18 a 25)' },
+                        { value: 'DIA_4_MAX_35', label: 'Día 4 — Máx 35 msjs (26 a 35)' },
+                        {
+                          value: 'DIA_5_MADURO_MENOS_45',
+                          label: 'Día 5+ (Maduro) — Aleatorio < 45 (28 a 44)',
+                        },
+                      ]}
+                      triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                    />
                   </div>
                   <div>
                     <button
@@ -1502,16 +1561,19 @@ export const AutoFirstMessageModal: React.FC<AutoFirstMessageModalProps> = ({
                     <label className="block text-[10px] font-bold text-slate-500 mb-1">
                       Filtrar tanda por barrio:
                     </label>
-                    <select
+                    <PopurriDropdown
                       value={config.barrioFiltro}
-                      onChange={(e) => handleRegenerarCola({ barrioFiltro: e.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-2.5 py-1.5 text-xs font-bold text-slate-700"
-                    >
-                      <option value="Todos">Todos los barrios CABA</option>
-                      {barriosDisponibles.map((b) => (
-                        <option key={b} value={b}>{b}</option>
-                      ))}
-                    </select>
+                      onChange={(val) => handleRegenerarCola({ barrioFiltro: val })}
+                      headerLabel="Filtrar tanda por barrio:"
+                      searchable={true}
+                      searchPlaceholder="Buscar barrio..."
+                      menuWidth={260}
+                      options={[
+                        { value: 'Todos', label: 'Todos los barrios CABA' },
+                        ...barriosDisponibles.map((b) => ({ value: b, label: b })),
+                      ]}
+                      triggerClassName="w-full flex items-center justify-between gap-2 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+                    />
                   </div>
                 </div>
 

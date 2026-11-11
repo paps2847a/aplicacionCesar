@@ -34,6 +34,7 @@ import {
   LISTA_ESTADOS_FLUJO_UNIFICADOS,
 } from './CandidateCard';
 import { CandidateDrawer } from './CandidateDrawer';
+import { PopurriDropdown } from '../common/PopurriDropdown';
 
 export type QuickOperationalFilter =
   | 'TODOS'
@@ -238,7 +239,14 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         case 'SIN_RSP_48H':
           return (
             (Boolean(c.esSinRsp48h) || Boolean(c.diagnostico48h?.aplica)) &&
-            c.adhirio !== 'Sí'
+            c.adhirio !== 'Sí' &&
+            c.estadoFlujo !== 'PASO_DATOS_FALTA_CONFIRMAR' &&
+            c.estadoFlujo !== 'ENCUENTRO_CONFIRMADO' &&
+            c.estadoFlujo !== 'RECORDATORIO_DIA_ENVIADO' &&
+            c.estadoFlujo !== 'PENDIENTE_RETIRO_FICHAS' &&
+            c.estadoFlujo !== 'POSTERGO_SALUD_O_VIAJE' &&
+            c.estadoFlujo !== 'SIN_DNI_CABA_PEDIR_REFERIDOS' &&
+            c.estadoFlujo !== 'DESCARTADO_O_BAJA'
           );
         case 'FALTAN_DATOS':
           return (
@@ -574,7 +582,7 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
   ];
 
   return (
-    <div className="mx-auto w-full max-w-7xl min-w-0 overflow-x-hidden px-3 sm:px-6 py-4 sm:py-5 space-y-4 sm:space-y-5">
+    <div className="mx-auto w-full max-w-7xl min-w-0 overflow-x-clip px-3 sm:px-6 py-4 sm:py-5 space-y-4 sm:space-y-5">
       {/* 1. Tarjetas Superiores de las 6 Macro-Etapas */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 w-full min-w-0">
         {MACRO_STAGES_ORDER.map((stageKey) => {
@@ -626,82 +634,60 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
         })}
       </div>
 
-      {/* 2. Píldoras de Prioridad Operativa (con Citas Vencidas / Reprogramar siempre primero + Flechas de Desplazamiento) */}
-      <div className="relative flex items-center gap-1.5 w-full max-w-full min-w-0">
+      {/* 2. Píldoras de Prioridad Operativa (con adaptación fluida sin desbordes ni cortes) */}
+      <div
+        ref={quickFiltersScrollRef}
+        className="flex flex-wrap items-center gap-1.5 sm:gap-2 w-full max-w-full min-w-0"
+      >
         <button
           type="button"
-          onClick={() => scrollQuickFilters('left')}
-          title="Desplazar filtros hacia la izquierda"
-          aria-label="Desplazar filtros hacia la izquierda"
-          className="shrink-0 flex items-center justify-center h-8 w-8 rounded-xl border-2 border-[#323232] bg-white text-[#323232] shadow-[2px_2px_0px_#323232] hover:bg-[#FFF06B] active:translate-y-0.5 transition cursor-pointer"
+          onClick={() => {
+            setQuickFilter('TODOS');
+            setGranularEstadoFilter('TODOS');
+          }}
+          className={`shrink-0 rounded-xl border-2 border-[#323232] px-2.5 py-1 text-[11px] font-bold font-display transition cursor-pointer ${
+            quickFilter === 'TODOS' && granularEstadoFilter === 'TODOS'
+              ? 'bg-[#323232] text-[#FFF06B] shadow-[2px_2px_0px_#323232]'
+              : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
+          }`}
         >
-          <ChevronLeft className="h-4 w-4 stroke-[2.5]" />
+          Todos ({contacts.length})
         </button>
 
-        <div
-          ref={quickFiltersScrollRef}
-          className="flex-1 flex items-center gap-2 overflow-x-auto py-1 no-scrollbar w-full max-w-full min-w-0 scroll-smooth"
-        >
-          <button
-            type="button"
-            onClick={() => {
-              setQuickFilter('TODOS');
-              setGranularEstadoFilter('TODOS');
-            }}
-            className={`shrink-0 rounded-xl border-2 border-[#323232] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold font-display transition ${
-              quickFilter === 'TODOS' && granularEstadoFilter === 'TODOS'
-                ? 'bg-[#323232] text-[#FFF06B] shadow-[2px_2px_0px_#323232]'
-                : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
-            }`}
-          >
-            Todos ({contacts.length})
-          </button>
-
-          {quickPills.map((pill) => {
-            const active = quickFilter === pill.key;
-            return (
-              <button
-                key={pill.key}
-                type="button"
-                onClick={() => {
-                  const next = active ? 'TODOS' : pill.key;
-                  setQuickFilter(next);
-                  setGranularEstadoFilter('TODOS');
-                }}
-                className={`shrink-0 inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-bold font-display transition ${
-                  active
-                    ? pill.urgent
-                      ? 'bg-[#FF2C00] text-white shadow-[3px_3px_0px_#323232]'
-                      : 'bg-[#FFF06B] text-[#323232] shadow-[3px_3px_0px_#323232]'
-                    : pill.urgent && pill.count > 0
-                    ? 'bg-[#F5817F]/35 text-[#323232] hover:bg-[#F5817F]/60 shadow-[2px_2px_0px_#323232]'
-                    : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
+        {quickPills.map((pill) => {
+          const active = quickFilter === pill.key;
+          return (
+            <button
+              key={pill.key}
+              type="button"
+              onClick={() => {
+                const next = active ? 'TODOS' : pill.key;
+                setQuickFilter(next);
+                setGranularEstadoFilter('TODOS');
+              }}
+              className={`shrink-0 inline-flex items-center gap-1.5 rounded-xl border-2 border-[#323232] px-2.5 py-1 text-[11px] font-bold font-display transition cursor-pointer ${
+                active
+                  ? pill.urgent
+                    ? 'bg-[#FF2C00] text-white shadow-[3px_3px_0px_#323232]'
+                    : 'bg-[#FFF06B] text-[#323232] shadow-[3px_3px_0px_#323232]'
+                  : pill.urgent && pill.count > 0
+                  ? 'bg-[#F5817F]/35 text-[#323232] hover:bg-[#F5817F]/60 shadow-[2px_2px_0px_#323232]'
+                  : 'bg-white text-[#323232] hover:bg-[#ECEAE2]'
+              }`}
+            >
+              <span>{pill.label}</span>
+              <span
+                className={`rounded-md px-1.5 py-0.2 text-[10px] font-bold border border-[#323232]/40 ${
+                  active && pill.urgent
+                    ? 'bg-white text-[#FF2C00]'
+                    : 'bg-[#ECEAE2] text-[#323232]'
                 }`}
               >
-                <span>{pill.label}</span>
-                <span
-                  className={`rounded-md px-1.5 py-0.2 text-[10px] font-bold border border-[#323232]/40 ${
-                    active && pill.urgent
-                      ? 'bg-white text-[#FF2C00]'
-                      : 'bg-[#ECEAE2] text-[#323232]'
-                  }`}
-                >
-                  {pill.count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        <button
-          type="button"
-          onClick={() => scrollQuickFilters('right')}
-          title="Desplazar filtros hacia la derecha"
-          aria-label="Desplazar filtros hacia la derecha"
-          className="shrink-0 flex items-center justify-center h-8 w-8 rounded-xl border-2 border-[#323232] bg-white text-[#323232] shadow-[2px_2px_0px_#323232] hover:bg-[#FFF06B] active:translate-y-0.5 transition cursor-pointer"
-        >
-          <ChevronRight className="h-4 w-4 stroke-[2.5]" />
-        </button>
+                {pill.count}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       {/* 3. Barra de Búsqueda Universal (sin tildes), Filtro por Estado Exacto, Barrio y Vistas */}
@@ -728,36 +714,45 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto min-w-0">
           {/* Selector de Estado Exacto (los mismos estados que tiene cada contacto) */}
-          <select
-            value={granularEstadoFilter}
-            onChange={(e) => {
-              setGranularEstadoFilter(e.target.value as EstadoFlujo | 'TODOS');
-              setQuickFilter('TODOS');
-            }}
-            className="w-full sm:w-auto flex-1 sm:flex-initial min-w-0 max-w-full sm:max-w-[230px] truncate rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-2 text-xs font-bold text-[#323232] focus:bg-white focus:outline-hidden"
-            title="Filtrar por el mismo estado operativo del contacto"
-          >
-            <option value="TODOS">Todos los estados ({contacts.length})</option>
-            {LISTA_ESTADOS_FLUJO_UNIFICADOS.map((st) => (
-              <option key={st.value} value={st.value}>
-                {st.label}
-              </option>
-            ))}
-          </select>
+          <div className="w-full sm:w-[220px] min-w-0">
+            <PopurriDropdown
+              value={granularEstadoFilter}
+              onChange={(val) => {
+                setGranularEstadoFilter(val as EstadoFlujo | 'TODOS');
+                setQuickFilter('TODOS');
+              }}
+              headerLabel="Filtrar por estado operativo:"
+              menuWidth={310}
+              maxHeight={320}
+              options={[
+                { value: 'TODOS', label: `Todos los estados (${contacts.length})` },
+                ...LISTA_ESTADOS_FLUJO_UNIFICADOS,
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+              title="Filtrar por el mismo estado operativo del contacto"
+            />
+          </div>
 
           {/* Selector de Barrio */}
-          <select
-            value={selectedBarrio}
-            onChange={(e) => setSelectedBarrio(e.target.value)}
-            className="w-full sm:w-auto flex-1 sm:flex-initial min-w-0 max-w-full truncate rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-2 text-xs font-bold text-[#323232] focus:bg-white focus:outline-hidden"
-          >
-            <option value="Todos">Todos los barrios ({contacts.length})</option>
-            {availableBarrios.map(([b, cnt]) => (
-              <option key={b} value={b}>
-                {b} ({cnt})
-              </option>
-            ))}
-          </select>
+          <div className="w-full sm:w-[195px] min-w-0">
+            <PopurriDropdown
+              value={selectedBarrio}
+              onChange={(val) => setSelectedBarrio(val)}
+              headerLabel="Filtrar por barrio de CABA:"
+              searchable={true}
+              searchPlaceholder="Buscar barrio..."
+              menuWidth={240}
+              maxHeight={300}
+              options={[
+                { value: 'Todos', label: `Todos los barrios (${contacts.length})` },
+                ...availableBarrios.map(([b, cnt]) => ({
+                  value: b,
+                  label: `${b} (${cnt})`,
+                })),
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-xl border-2 border-[#323232] bg-[#F5F4F0] px-2.5 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
+            />
+          </div>
 
           {(activeStageFilter !== 'TODOS' ||
             selectedBarrio !== 'Todos' ||
@@ -880,15 +875,17 @@ export const CandidatePipelineView: React.FC<CandidatePipelineViewProps> = ({
               placeholder="Calle y altura / esquina"
               className="rounded-xl border-2 border-[#323232] bg-white px-3 py-2 text-xs font-semibold"
             />
-            <select
+            <PopurriDropdown
               value={newEstadoInicial}
-              onChange={(e) => setNewEstadoInicial(e.target.value as 'NUEVO' | 'YA_FIRMO')}
-              className="rounded-xl border-2 border-[#323232] bg-white px-2.5 py-2 text-xs font-bold text-[#323232]"
+              onChange={(val) => setNewEstadoInicial(val as 'NUEVO' | 'YA_FIRMO')}
+              headerLabel="Estado inicial del contacto:"
+              options={[
+                { value: 'NUEVO', label: '1. Nuevo por contactar' },
+                { value: 'YA_FIRMO', label: '✅ 5. Ya firmó ficha hoy' },
+              ]}
+              triggerClassName="w-full flex items-center justify-between gap-1.5 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-2 text-xs font-bold text-[#323232] hover:bg-[#FFF06B]/40 transition cursor-pointer"
               title="Elegí si es nuevo para contactar o si ya firmó ficha física hoy"
-            >
-              <option value="NUEVO">1. Nuevo por contactar</option>
-              <option value="YA_FIRMO">✅ 5. Ya firmó ficha hoy</option>
-            </select>
+            />
             <div className="flex items-center gap-2">
               <input
                 type="text"
