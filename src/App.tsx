@@ -1981,6 +1981,15 @@ export default function App() {
             whatsAppReady={whatsAppStatus === 'READY'}
             onRefreshCorte={() => setAhoraCorteMs(Date.now())}
             onUpdateContact={handleUpdateContact}
+            onUpdateProfile={(up) => {
+              const next = { ...profile, ...up };
+              setProfile(next);
+              void fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'profile', value: next }),
+              });
+            }}
             onSendDirectWA={handleSendDirectWA}
             onJumpToCandidate={handleJumpToCandidate}
             onOpenScannerModal={() => setShowScannerModal(true)}

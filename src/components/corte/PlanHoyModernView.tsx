@@ -51,6 +51,7 @@ interface PlanHoyModernViewProps {
   whatsAppReady: boolean;
   onRefreshCorte: () => void;
   onUpdateContact: (contactId: string, updates: Partial<Contact>) => Promise<void> | void;
+  onUpdateProfile?: (patch: Partial<VoiceProfile>) => void;
   onSendDirectWA?: (
     phone: string,
     text: string,
@@ -79,6 +80,7 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   whatsAppReady,
   onRefreshCorte,
   onUpdateContact,
+  onUpdateProfile,
   onSendDirectWA,
   onJumpToCandidate,
   onOpenScannerModal,
@@ -253,6 +255,11 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
   const [paradaModoMsj, setParadaModoMsj] = useState<Record<string, ModoMensajeTerrenoRuta>>({});
   const [paradaTextoEditado, setParadaTextoEditado] = useState<Record<string, string>>({});
   const [paradaUnlockEnCamino, setParadaUnlockEnCamino] = useState<Record<string, boolean>>({});
+  // Punto 9 y Punto 15 Calibración: Corrimiento de horario en cascada (+10/+15 min por demora o -9 min si alguien no estaba)
+  const [paradaTimeAdjustMin, setParadaTimeAdjustMin] = useState<Record<string, number>>({});
+  // Punto 10 y Punto 12 Calibración: Pestañas desplegables "Aprovechar viaje" por bloque
+  const [openAprovecharSinDir, setOpenAprovecharSinDir] = useState<Record<string, boolean>>({});
+  const [openAprovecharFichas, setOpenAprovecharFichas] = useState<Record<string, boolean>>({});
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [countdownSending, setCountdownSending] = useState<{
     contactId: string;
@@ -522,6 +529,30 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     return 'EN_CAMINO_HORA_CALC';
   };
 
+  const sumarMinutosHoraUI = (hhmm: string, deltaMin: number): string => {
+    if (!hhmm || !deltaMin) return hhmm;
+    const [hStr, mStr] = hhmm.split(':');
+    const total = Math.max(
+      0,
+      Math.min(23 * 60 + 59, (Number(hStr) || 0) * 60 + (Number(mStr) || 0) + deltaMin)
+    );
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(
+      2,
+      '0'
+    )}`;
+  };
+
+  const obtenerParadaConAjusteEnVivo = (p: ParadaRuta): ParadaRuta => {
+    const delta = paradaTimeAdjustMin[p.contact.id] || 0;
+    if (!delta) return p;
+    return {
+      ...p,
+      horaSalida: sumarMinutosHoraUI(p.horaSalida, delta),
+      horaLlegada: sumarMinutosHoraUI(p.horaLlegada, delta),
+      horaFinVisita: sumarMinutosHoraUI(p.horaFinVisita, delta),
+    };
+  };
+
   const obtenerTextoEfectivoParada = (p: ParadaRuta, bloque: BloqueAgendaRecomendado): string => {
     const modo = obtenerModoEfectivoParada(p);
     const key = `${p.contact.id}_${modo}`;
@@ -531,7 +562,131 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
     const cafeTexto = cafePrincipal
       ? `${cafePrincipal.nombre} (${cafePrincipal.direccion.split(',')[0]})`
       : undefined;
-    return generarMensajeTerrenoParadaRuta(p, modo, voiceProfile, cafeTexto);
+    const paradaAjustada = obtenerParadaConAjusteEnVivo(p);
+    return generarMensajeTerrenoParadaRuta(paradaAjustada, modo, voiceProfile, cafeTexto);
+  };
+
+  // Punto 9 Calibración: Corrimiento en vivo en la calle (+10 min / +15 min en cascada)
+  const handleCascadeDelayParadas = (
+    paradasBloque: ParadaRuta[],
+    fromIdx: number,
+    deltaMin: 10 | 15
+  ) => {
+    const siguientes = paradasBloque.slice(fromIdx + 1);
+    const afectados = siguientes.length > 0 ? siguientes : [paradasBloque[fromIdx]].filter(Boolean);
+    if (afectados.length === 0) return;
+
+    setParadaTimeAdjustMin((prev) => {
+      const next = { ...prev };
+      for (const p of afectados) {
+        next[p.contact.id] = (next[p.contact.id] || 0) + deltaMin;
+      }
+      return next;
+    });
+    setParadaModoMsj((prev) => {
+      const next = { ...prev };
+      for (const p of afectados) {
+        next[p.contact.id] = 'DEMORADO_10_MIN';
+      }
+      return next;
+    });
+    setParadaTextoEditado((prev) => {
+      const next = { ...prev };
+      for (const p of afectados) {
+        delete next[`${p.contact.id}_DEMORADO_10_MIN`];
+      }
+      return next;
+    });
+    triggerToast(
+      `⏱️ Horario corrido +${deltaMin} min en cascada para ${afectados.length} vecino(s) y aviso de demora habilitado.`
+    );
+  };
+
+  // Punto 15 Calibración: Acción rápida "🚪 No estaba / Reprogramar" en 2. Ruta
+  const handleNoEstabaEnRuta = async (
+    parada: ParadaRuta,
+    paradasBloque: ParadaRuta[],
+    idxActual: number,
+    bloque: BloqueAgendaRecomendado
+  ) => {
+    const c = parada.contact;
+    const cafeOver = getCafeOver(bloque);
+    const cafePrincipal = cafeOver || bloque.cafesHubOpciones?.[0];
+    const cafeTexto = cafePrincipal
+      ? `${cafePrincipal.nombre} (${cafePrincipal.direccion.split(',')[0]})`
+      : undefined;
+    const msgNoEstaba = generarMensajeTerrenoParadaRuta(
+      obtenerParadaConAjusteEnVivo(parada),
+      'NO_ESTABA_REPROGRAMAR',
+      voiceProfile,
+      cafeTexto
+    );
+
+    const otrasFechasVecino = (c.fechasMencionadas || []).filter((f) => f !== bloque.fechaClave);
+    const manianaDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const manianaDDMM = `${String(manianaDate.getDate()).padStart(2, '0')}/${String(
+      manianaDate.getMonth() + 1
+    ).padStart(2, '0')}`;
+    const proximoDia = otrasFechasVecino[0] || manianaDDMM;
+
+    const comentarioBase = (c.comentario || '')
+      .replace(/Visita confirmada Puerta a Puerta[^\n·]*/gi, '')
+      .replace(/Encuentro confirmado en Caf[eé] Hub[^\n·]*/gi, '')
+      .replace(/\[Confirmado 1-a-1[^\]]*\]/gi, '')
+      .replace(/^\s*[·—-]\s*|\s*[·—-]\s*$/g, '')
+      .trim();
+
+    await onUpdateContact(c.id, {
+      estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
+      diasEncuentro: proximoDia,
+      comentario: [comentarioBase, `No estaba en puerta (${bloque.fechaClave}) · Reprogramar para ${proximoDia}`]
+        .filter(Boolean)
+        .join(' · '),
+    });
+
+    // Adelantar 9 min las paradas siguientes de ese bloque
+    const siguientes = paradasBloque.slice(idxActual + 1);
+    if (siguientes.length > 0) {
+      setParadaTimeAdjustMin((prev) => {
+        const next = { ...prev };
+        for (const p of siguientes) {
+          next[p.contact.id] = (next[p.contact.id] || 0) - 9;
+        }
+        return next;
+      });
+    }
+
+    const phone = c.tel || c.telRaw || c.telWA || '';
+    if (onSendDirectWA && phone && whatsAppReady) {
+      handleSendWA(c, msgNoEstaba);
+    } else if (phone) {
+      window.open(crearEnlaceWhatsApp(phone, msgNoEstaba), '_blank', 'noopener,noreferrer');
+    }
+
+    triggerToast(
+      `🚪 ${c.primerNombre || c.nombre} volvió a "4. Falta Confirmar" (${proximoDia})${
+        siguientes.length > 0 ? ` y se adelantaron 9 min las ${siguientes.length} paradas siguientes.` : '.'
+      }`
+    );
+  };
+
+  // Punto 16 Calibración: En Modo Lluvia, postergar en 1 clic recorridos a pie al próximo día
+  const handlePostergarRutaPorLluvia = async (bloque: BloqueAgendaRecomendado) => {
+    const manianaDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const manianaDDMM = `${String(manianaDate.getDate()).padStart(2, '0')}/${String(
+      manianaDate.getMonth() + 1
+    ).padStart(2, '0')}`;
+    for (const c of bloque.contactosIncluidos) {
+      const otrasFechas = (c.fechasMencionadas || []).filter((f) => f !== bloque.fechaClave);
+      const proxFecha = otrasFechas[0] || manianaDDMM;
+      await onUpdateContact(c.id, {
+        diasEncuentro: proxFecha,
+        estadoFlujo: 'PASO_DATOS_FALTA_CONFIRMAR',
+      });
+    }
+    triggerToast(
+      `🌧️ Recorrido a pie en ${bloque.barrio} (${bloque.contactosIncluidos.length} vecinos) postergado al próximo día por lluvia.`
+    );
   };
 
   const handleConsolidarRespuestaPlanificador = async (
@@ -917,6 +1072,26 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
             ))}
             <button
               type="button"
+              onClick={() => {
+                const nextRain = !voiceProfile.modoLluvia;
+                onUpdateProfile?.({ modoLluvia: nextRain });
+                triggerToast(
+                  nextRain
+                    ? '🌧️ Modo Lluvia activado: prioriza Café HUB bajo techo (desde 2 vecinos) y habilita postergar caminatas.'
+                    : '☀️ Modo Lluvia desactivado: vuelve a prioridad normal (Café HUB desde 3 vecinos).'
+                );
+              }}
+              className={`inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] px-2.5 py-1.5 text-xs font-bold font-display transition shadow-[2px_2px_0px_#323232] cursor-pointer ${
+                voiceProfile.modoLluvia
+                  ? 'bg-[#29B8FF] text-[#323232]'
+                  : 'bg-white text-[#5A5955] hover:bg-[#ECEAE2]'
+              }`}
+              title="Activar/Desactivar Modo Lluvia (prioriza Café HUB bajo techo desde 2 vecinos y permite postergar caminatas)"
+            >
+              <span>{voiceProfile.modoLluvia ? '🌧️ Modo Lluvia: ON' : '🌧️ Modo Lluvia'}</span>
+            </button>
+            <button
+              type="button"
               onClick={onRefreshCorte}
               className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-white px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#ECEAE2] transition shadow-[2px_2px_0px_#323232] cursor-pointer"
               title="Recalcular circuitos y horarios"
@@ -1297,14 +1472,27 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                             )}
                           </div>
 
-                          {/* Banner conciso en 1 línea */}
-                          <div className="rounded-lg border border-[#323232]/20 bg-[#FFF06B]/25 px-2.5 py-1.5 text-[11px] font-semibold text-[#323232] flex items-center gap-1.5">
-                            <span className="shrink-0 font-black">💡 Sugerido:</span>
-                            <span className="truncate">
-                              {bloque.modalidadRecomendada === 'CAFE_HUB'
-                                ? `Café del circuito (${bloque.contactosIncluidos.length} vecinos cercanos)`
-                                : 'Domicilio Puerta a Puerta (10 min buffer por parada)'}
-                            </span>
+                          {/* Banner conciso en 1 línea + Opción Modo Lluvia */}
+                          <div className="rounded-lg border border-[#323232]/20 bg-[#FFF06B]/25 px-2.5 py-1.5 text-[11px] font-semibold text-[#323232] flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="shrink-0 font-black">💡 Sugerido:</span>
+                              <span className="truncate">
+                                {bloque.modalidadRecomendada === 'CAFE_HUB'
+                                  ? `Café del circuito (${bloque.contactosIncluidos.length} vecinos cercanos)${
+                                      voiceProfile.modoLluvia ? ' · 🌧️ Priorizado bajo techo' : ''
+                                    }`
+                                  : 'Domicilio Puerta a Puerta (9-10 min buffer por parada)'}
+                              </span>
+                            </div>
+                            {voiceProfile.modoLluvia && modalidadActiva === 'PUERTA_A_PUERTA' && (
+                              <button
+                                type="button"
+                                onClick={() => handlePostergarRutaPorLluvia(bloque)}
+                                className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#29B8FF] px-2 py-0.5 text-[11px] font-bold font-display text-[#323232] hover:bg-[#1aa8f0] cursor-pointer"
+                              >
+                                <span>🌧️ Postergar caminata al próximo día</span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       )}
@@ -1428,6 +1616,81 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                     </p>
                                   ) : null;
                                 })()}
+
+                                {/* Punto 8 Calibración ("Reservas fantasma"): Sin confirmar a <= 60 min de salir */}
+                                {!yaConfirmado && paradaRef?.reservaFantasmaSinConfirmarHoy && (
+                                  <div className="rounded-xl border-2 border-amber-600 bg-amber-50 p-2.5 flex flex-wrap items-center justify-between gap-2">
+                                    <div className="text-xs font-bold text-amber-950">
+                                      ⏳ Sin confirmar a tiempo ({paradaRef.minutosParaSalidaHoy ?? 45} min para salir) — Separado de la ruta firme
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      {paradaRef.mensajeReconfirmacionRapidaHoy && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const msg = paradaRef.mensajeReconfirmacionRapidaHoy!;
+                                              setPropuestaTexts((prev) => ({
+                                                ...prev,
+                                                [key]: msg,
+                                              }));
+                                              if (onSendDirectWA && phone && whatsAppReady) {
+                                                handleSendWA(contact, msg);
+                                              }
+                                            }}
+                                            className="inline-flex items-center gap-1 rounded-lg border-2 border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#ffe838] cursor-pointer"
+                                          >
+                                            <Send className="h-3 w-3" />
+                                            <span>¿Llegás a estar hoy o lo pasamos para mañana?</span>
+                                          </button>
+                                          <a
+                                            href={crearEnlaceWhatsApp(
+                                              phone,
+                                              paradaRef.mensajeReconfirmacionRapidaHoy
+                                            )}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                                          >
+                                            <ExternalLink className="h-3 w-3" />
+                                            <span>wa.me</span>
+                                          </a>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Punto 14 Calibración: Sugerencia de mover horario puntual <= 30 min para optimizar ruta */}
+                                {paradaRef?.sugerenciaMover30Min && (
+                                  <div className="rounded-xl border border-[#323232] bg-[#DFF4FF]/60 p-2.5 flex flex-wrap items-center justify-between gap-2">
+                                    <div className="text-[11px] font-bold text-[#323232]">
+                                      💡 Sugerencia ruta (≤30 min): {paradaRef.sugerenciaMover30Min.motivo}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const msg = paradaRef.sugerenciaMover30Min!.mensajePropuestaCambio;
+                                        setPropuestaTexts((prev) => ({
+                                          ...prev,
+                                          [key]: msg,
+                                        }));
+                                        setReprogHora((prev) => ({
+                                          ...prev,
+                                          [contact.id]: paradaRef.sugerenciaMover30Min!.horaSugerida,
+                                        }));
+                                        triggerToast(
+                                          `💬 Propuesta cargada para mover de ${paradaRef.sugerenciaMover30Min!.horaOriginal} a ${paradaRef.sugerenciaMover30Min!.horaSugerida} hs.`
+                                        );
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#FFF06B] px-2.5 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#ffe838] cursor-pointer"
+                                    >
+                                      <span>
+                                        Proponer {paradaRef.sugerenciaMover30Min.horaSugerida} hs
+                                      </span>
+                                    </button>
+                                  </div>
+                                )}
 
                                 {yaConfirmado && !isEditingConfirmed ? (
                                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-emerald-700 bg-emerald-100/80 px-3 py-2">
@@ -1801,6 +2064,210 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                               </div>
                             );
                           })}
+
+                          {/* Punto 10 Calibración: Pestaña "Aprovechar viaje: vecinos del mismo barrio sin dirección" (3. Falta Dir/Día) */}
+                          {bloque.vecinosMismoBarrioSinDireccion &&
+                            bloque.vecinosMismoBarrioSinDireccion.length > 0 && (
+                              <div className="rounded-2xl border-2 border-[#323232] bg-[#DFF4FF]/45 p-3 shadow-[2px_2px_0px_#323232] space-y-2.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setOpenAprovecharSinDir((prev) => ({
+                                      ...prev,
+                                      [bloque.id]: !prev[bloque.id],
+                                    }))
+                                  }
+                                  className="w-full flex items-center justify-between gap-2 text-left cursor-pointer"
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="rounded-lg border border-[#323232] bg-[#FFF06B] px-2 py-0.5 text-[11px] font-black text-[#323232] shrink-0">
+                                      ✨ Aprovechar viaje
+                                    </span>
+                                    <span className="text-xs font-bold font-display text-[#323232] truncate">
+                                      {bloque.vecinosMismoBarrioSinDireccion.length} vecino(s) de {bloque.barrio} sin dirección (3. Falta Dir/Día)
+                                    </span>
+                                  </div>
+                                  <span className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[11px] font-bold text-[#323232] shrink-0">
+                                    {openAprovecharSinDir[bloque.id] ? 'Ocultar' : 'Ver y escribir en 1 clic'}
+                                    {openAprovecharSinDir[bloque.id] ? (
+                                      <ChevronUp className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <ChevronDown className="h-3.5 w-3.5" />
+                                    )}
+                                  </span>
+                                </button>
+
+                                {openAprovecharSinDir[bloque.id] && (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+                                    {bloque.vecinosMismoBarrioSinDireccion.map((item) => {
+                                      const v = item.contact;
+                                      const phoneV = v.tel || v.telRaw || v.telWA || '';
+                                      const waLinkV = crearEnlaceWhatsApp(
+                                        phoneV,
+                                        item.mensajeWhatsAppSugerido
+                                      );
+                                      return (
+                                        <div
+                                          key={v.id}
+                                          className="rounded-xl border border-[#323232] bg-white p-2.5 flex flex-col justify-between gap-2"
+                                        >
+                                          <div className="flex items-center justify-between gap-1.5">
+                                            <span className="text-xs font-bold font-display text-[#323232] truncate">
+                                              #{v.id} {v.nombreCompletoCorregido || v.nombre}
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={() => setModalContactId(v.id)}
+                                              className="rounded border border-[#323232] bg-[#F5F4F0] px-1.5 py-0.5 text-[10px] font-bold text-[#323232] hover:bg-[#FFF06B] cursor-pointer"
+                                            >
+                                              Ficha
+                                            </button>
+                                          </div>
+                                          <p className="text-[11px] text-[#5A5955] line-clamp-2">
+                                            &ldquo;{item.mensajeWhatsAppSugerido}&rdquo;
+                                          </p>
+                                          <div className="flex flex-wrap items-center gap-1.5">
+                                            {onSendDirectWA && phoneV && (
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleSendWA(v, item.mensajeWhatsAppSugerido)
+                                                }
+                                                disabled={sendingId === v.id}
+                                                className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#FFF06B] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#ffe838] cursor-pointer"
+                                              >
+                                                <Send className="h-3 w-3" />
+                                                <span>Consultar calle/esquina</span>
+                                              </button>
+                                            )}
+                                            <a
+                                              href={waLinkV}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                                            >
+                                              <ExternalLink className="h-3 w-3" />
+                                              <span>wa.me</span>
+                                            </a>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                          {/* Punto 12 Calibración: Pestaña "Aprovechar viaje: retiros de fichas extra en el barrio" (7. Retiro Fichas sin confirmar) */}
+                          {bloque.retirosFichasMismoBarrioSugeridos &&
+                            bloque.retirosFichasMismoBarrioSugeridos.length > 0 && (
+                              <div className="rounded-2xl border-2 border-[#323232] bg-[#FFF06B]/30 p-3 shadow-[2px_2px_0px_#323232] space-y-2.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setOpenAprovecharFichas((prev) => ({
+                                      ...prev,
+                                      [bloque.id]: !prev[bloque.id],
+                                    }))
+                                  }
+                                  className="w-full flex items-center justify-between gap-2 text-left cursor-pointer"
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="rounded-lg border border-[#323232] bg-[#323232] px-2 py-0.5 text-[11px] font-black text-[#FFF06B] shrink-0">
+                                      📦 Retiro Fichas de paso
+                                    </span>
+                                    <span className="text-xs font-bold font-display text-[#323232] truncate">
+                                      {bloque.retirosFichasMismoBarrioSugeridos.length} vecino(s) con fichas extra en {bloque.barrio} (sin confirmar si están listas)
+                                    </span>
+                                  </div>
+                                  <span className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[11px] font-bold text-[#323232] shrink-0">
+                                    {openAprovecharFichas[bloque.id] ? 'Ocultar' : 'Ver y consultar'}
+                                    {openAprovecharFichas[bloque.id] ? (
+                                      <ChevronUp className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <ChevronDown className="h-3.5 w-3.5" />
+                                    )}
+                                  </span>
+                                </button>
+
+                                {openAprovecharFichas[bloque.id] && (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+                                    {bloque.retirosFichasMismoBarrioSugeridos.map((item) => {
+                                      const v = item.contact;
+                                      const phoneV = v.tel || v.telRaw || v.telWA || '';
+                                      const waLinkV = crearEnlaceWhatsApp(
+                                        phoneV,
+                                        item.mensajeWhatsAppSugerido
+                                      );
+                                      return (
+                                        <div
+                                          key={v.id}
+                                          className="rounded-xl border border-[#323232] bg-white p-2.5 flex flex-col justify-between gap-2"
+                                        >
+                                          <div className="flex items-center justify-between gap-1.5">
+                                            <span className="text-xs font-bold font-display text-[#323232] truncate">
+                                              #{v.id} {v.nombreCompletoCorregido || v.nombre} ({v.calleOCruce || v.barrio})
+                                            </span>
+                                            <span className="rounded bg-[#FFF06B] px-1.5 py-0.5 text-[10px] font-black text-[#323232] border border-[#323232]">
+                                              {v.fichasExtrasCantidad || 'X2'}
+                                            </span>
+                                          </div>
+                                          <p className="text-[11px] text-[#5A5955] line-clamp-2">
+                                            &ldquo;{item.mensajeWhatsAppSugerido}&rdquo;
+                                          </p>
+                                          <div className="flex flex-wrap items-center gap-1.5">
+                                            {onSendDirectWA && phoneV && (
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleSendWA(v, item.mensajeWhatsAppSugerido)
+                                                }
+                                                disabled={sendingId === v.id}
+                                                className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#FFF06B] px-2 py-1 text-[11px] font-bold font-display text-[#323232] hover:bg-[#ffe838] cursor-pointer"
+                                              >
+                                                <Send className="h-3 w-3" />
+                                                <span>Preguntar si están listas</span>
+                                              </button>
+                                            )}
+                                            <a
+                                              href={waLinkV}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-[#F5F4F0] px-2 py-1 text-[11px] font-bold text-[#323232] hover:bg-[#ECEAE2]"
+                                            >
+                                              <ExternalLink className="h-3 w-3" />
+                                              <span>wa.me</span>
+                                            </a>
+                                            <button
+                                              type="button"
+                                              onClick={async () => {
+                                                await onUpdateContact(v.id, {
+                                                  retiroConfirmado: true,
+                                                  diasEncuentro: bloque.fechaClave,
+                                                  comentario: [
+                                                    (v.comentario || '').trim(),
+                                                    '[Retiro confirmado]',
+                                                  ]
+                                                    .filter(Boolean)
+                                                    .join(' · '),
+                                                });
+                                                triggerToast(
+                                                  `✅ ${v.primerNombre || v.nombre}: Fichas listas confirmadas y sumado a la ruta de ${bloque.barrio}.`
+                                                );
+                                              }}
+                                              className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-emerald-200 px-2 py-1 text-[11px] font-bold font-display text-emerald-950 hover:bg-emerald-300 cursor-pointer"
+                                            >
+                                              <CheckCircle2 className="h-3 w-3" />
+                                              <span>✅ Ya las tiene listas · Sumar a ruta</span>
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                         </div>
                       )}
 
@@ -1826,6 +2293,8 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                           ) : (
                             paradas.map((parada, idx) => {
                               const c = parada.contact;
+                              const paradaAjustada = obtenerParadaConAjusteEnVivo(parada);
+                              const ajusteMin = paradaTimeAdjustMin[c.id] || 0;
                               const phone = c.tel || c.telRaw || c.telWA || '';
                               const modoActual = obtenerModoEfectivoParada(parada);
                               const textoActual = obtenerTextoEfectivoParada(parada, bloque);
@@ -1857,9 +2326,22 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                             #{c.id} {c.nombreCompletoCorregido || c.nombre}
                                           </h5>
                                           <span className="rounded-lg bg-[#323232] px-2.5 py-0.5 font-mono text-xs font-bold text-[#FFF06B]">
-                                            Llegada {parada.horaLlegada} hs (Salida{' '}
-                                            {parada.horaSalida} · Fin {parada.horaFinVisita})
+                                            Llegada {paradaAjustada.horaLlegada} hs (Salida{' '}
+                                            {paradaAjustada.horaSalida} · Fin {paradaAjustada.horaFinVisita})
                                           </span>
+                                          {ajusteMin !== 0 && (
+                                            <span
+                                              className={`rounded-md px-2 py-0.5 text-[11px] font-bold border border-[#323232] ${
+                                                ajusteMin > 0
+                                                  ? 'bg-amber-200 text-[#323232]'
+                                                  : 'bg-emerald-200 text-emerald-950'
+                                              }`}
+                                            >
+                                              {ajusteMin > 0
+                                                ? `⏱️ +${ajusteMin} min en cascada`
+                                                : `⏩ ${ajusteMin} min adelantado`}
+                                            </span>
+                                          )}
                                           <span className="rounded-md bg-[#DFF4FF] px-2 py-0.5 text-[11px] font-bold text-[#323232] border border-[#323232]/40">
                                             +{parada.minutosEncuentro} min buffer espera
                                           </span>
@@ -1886,8 +2368,27 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                       </div>
                                     </div>
 
-                                    {/* Botones de Navegación Maps + Estado de Confirmación */}
+                                    {/* Botones de Navegación Maps + Demora en cascada + Estado de Confirmación */}
                                     <div className="flex flex-wrap items-center gap-2 self-end lg:self-auto shrink-0">
+                                      {/* Punto 9 Calibración: Corrimiento en vivo en la calle (+10 / +15 min en cascada) */}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCascadeDelayParadas(paradas, idx, 10)}
+                                        className="inline-flex items-center gap-1 rounded-xl border-2 border-[#323232] bg-amber-100 px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-amber-200 shadow-[2px_2px_0px_#323232] cursor-pointer"
+                                        title="Corre +10 min el horario de las paradas siguientes de este bloque y activa el mensaje de aviso de demora"
+                                      >
+                                        <Clock className="h-3.5 w-3.5" />
+                                        <span>⏱️ Me demoré +10 min</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCascadeDelayParadas(paradas, idx, 15)}
+                                        className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-amber-50 px-2 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-amber-200 cursor-pointer"
+                                        title="Corre +15 min el horario de las paradas siguientes de este bloque y activa el mensaje de aviso de demora"
+                                      >
+                                        <span>+15 min</span>
+                                      </button>
+
                                       <a
                                         href={parada.urlGoogleMapsTramo}
                                         target="_blank"
@@ -2275,6 +2776,17 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                             <span>+ Fichas</span>
                                           </button>
                                         )}
+
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleNoEstabaEnRuta(parada, paradas, idx, bloque)
+                                          }
+                                          className="inline-flex items-center gap-1 rounded-xl border border-[#323232] bg-[#F5817F]/40 px-2.5 py-1.5 text-xs font-bold font-display text-[#323232] hover:bg-[#F5817F] cursor-pointer"
+                                          title="Envía el mensaje de desencuentro, devuelve el contacto a '4. Falta Confirmar' para su próximo día disponible y adelanta 9 min las paradas restantes"
+                                        >
+                                          <span>🚪 No estaba / Reprogramar</span>
+                                        </button>
 
                                         <button
                                           type="button"

@@ -25,6 +25,18 @@ import {
   sonHorariosCompatiblesEnCircuito,
 } from '../contacts/contactStatus';
 
+export function esRetiroFichasConfirmadoParaRuta(c: Contact): boolean {
+  if (c.estadoFlujo !== 'PENDIENTE_RETIRO_FICHAS' && c.situacion !== 'RETIRO_FICHAS') {
+    return true;
+  }
+  return Boolean(
+    c.retiroConfirmado ||
+      /\[confirmado|\[retiro_fichas_listo\]|retiro\s+confirmado|fichas?\s+(?:firmadas?\s+|listas?\s*)+|ya\s+las\s+(?:tengo|tiene)\s+listas?/i.test(
+        c.comentario || ''
+      )
+  );
+}
+
 export function construirMicroClusters(
   contacts: Contact[],
   maxMinutosRadio: number = 15,
@@ -40,8 +52,17 @@ export function construirMicroClusters(
       if (c.situacion === 'DESCARTADO_NO_CABA' || c.situacion === 'YA_ADHIRIO') return false;
       if (c.estadoFlujo === 'DESCARTADO_O_BAJA' || c.estadoFlujo === 'YA_ADHIRIO_FIRMA_OK') return false;
       if (c.esCerradoOArchivadoSinDniCaba) return false;
-      // Regla estricta 1: sólo personas que aún NO han adherido
-      if (c.adhirio === 'Sí') return false;
+      // Regla estricta 1: sólo personas que aún NO han adherido, salvo Retiro de Fichas Extra confirmado
+      if (
+        c.adhirio === 'Sí' &&
+        c.estadoFlujo !== 'PENDIENTE_RETIRO_FICHAS' &&
+        c.situacion !== 'RETIRO_FICHAS'
+      ) {
+        return false;
+      }
+      // Punto 12 Calibración: Retiro de Fichas Extra (7. Retiro Fichas) sólo se agenda como parada activa
+      // cuando el vecino ya confirmó que las tiene listas; el resto se sugiere "de paso" en la tarjeta del barrio.
+      if (!esRetiroFichasConfirmadoParaRuta(c)) return false;
       // Regla estricta 2: sólo personas que tienen dirección o punto de encuentro cargado en la Columna "G" ("Comentario")
       if (!c.tieneDireccionRealEnComentario || !c.calleOCruce || !c.calleOCruce.trim()) return false;
       if (filtroFranja !== 'Todos' && c.franjaHoraria !== filtroFranja && c.franjaHoraria !== 'Flexible') {
@@ -89,10 +110,8 @@ export function construirMicroClusters(
     let menorMinutos = Infinity;
 
     for (const g of gruposRaw) {
-      // No superar 6 paradas por circuito para que todo recorrido Puerta a Puerta sea realizable en 45-105 min reales
-      if (g.miembros.length >= 6) {
-        continue;
-      }
+      // Punto 13 Calibración: Sin tope artificial de 6 paradas cuando los vecinos comparten barrio,
+      // día, franja compatible y radio caminable (sólo un evento de Google Calendar corta el bloque).
       // Nunca mezclar barrios distantes (ej: Palermo con Saavedra) en un mismo circuito
       if (normalizarBarrioCABA(g.barrioBase) !== barrioContacto) {
         continue;
@@ -260,11 +279,13 @@ export function construirMicroClusters(
       );
       // REGLA ESTRICTA CALIBRADA:
       // - Café HUB se recomienda automáticamente SÓLO cuando hay >= 3 vecinos (con geo exacta y <= 15 min a pie),
-      //   SALVO que alguno haya pedido explícitamente ir a un café/punto (en cuyo caso aplica desde 2 vecinos).
-      // - Con 2 vecinos sin pedido explícito de café, se prioriza PUERTA_A_PUERTA.
+      //   SALVO que alguno haya pedido explícitamente ir a un café/punto o esté activo el Modo Lluvia (en cuyo caso aplica desde 2 vecinos).
+      // - Con 2 vecinos sin pedido explícito de café (y sin Modo Lluvia), se prioriza PUERTA_A_PUERTA.
       const convieneCafeHub =
         ((g.miembros.length >= 3 && miembrosConGeoExacta.length >= 3) ||
-          (algunoPidioCafeExplicito && g.miembros.length >= 2 && miembrosConGeoExacta.length >= 2)) &&
+          ((algunoPidioCafeExplicito || Boolean(profile?.modoLluvia)) &&
+            g.miembros.length >= 2 &&
+            miembrosConGeoExacta.length >= 2)) &&
         maxMinutos <= 15;
 
       const modalidadRecomendadaAgenda: ModalidadEncuentroAgenda = convieneCafeHub

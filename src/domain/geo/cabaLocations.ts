@@ -1011,8 +1011,17 @@ export function calcularMinutosTrasladoCABA(
   lat1: number,
   lng1: number,
   lat2: number,
-  lng2: number
-): { modo: 'WALKING' | 'TRANSIT'; minutos: number; distanciaMetros: number; cuadras: number } {
+  lng2: number,
+  opciones?: { permitirCaminataHasta30Min?: boolean }
+): {
+  modo: 'WALKING' | 'TRANSIT';
+  minutos: number;
+  distanciaMetros: number;
+  cuadras: number;
+  minutosCaminando: number;
+  minutosTransportePublico: number;
+  puedeCaminarPromotor30Min: boolean;
+} {
   const est = estimarMinutosCaminandoCABA(lat1, lng1, lat2, lng2);
   if (est.distanciaMetros <= 30) {
     return {
@@ -1020,13 +1029,15 @@ export function calcularMinutosTrasladoCABA(
       minutos: 1,
       distanciaMetros: est.distanciaMetros,
       cuadras: 0,
+      minutosCaminando: 1,
+      minutosTransportePublico: 1,
+      puedeCaminarPromotor30Min: true,
     };
   }
-  // En CABA hasta ~1350m (~13-14 cuadras, ~18-20 min) es más rápido o equivalente ir a pie
-  // que esperar colectivo + caminar a las paradas; a partir de >1350m se usa Transporte Público
-  // contemplando caminata a parada (~5 min) + espera promedio en CABA (~6 min) + viaje urbano + caminata final (~3 min).
-  const modo: 'WALKING' | 'TRANSIT' = est.distanciaMetros <= 1350 ? 'WALKING' : 'TRANSIT';
   const minutosWalking = Math.ceil(est.minutosCaminando);
+  const puedeCaminarPromotor30Min = minutosWalking <= 30;
+  // Transporte público directo (1 línea de colectivo o Subte sin trasbordo múltiple):
+  // caminata a parada (~5 min) + espera promedio en CABA (~6 min) + viaje urbano + caminata final (~3 min).
   const minutosTransit = Math.min(
     65,
     13 +
@@ -1034,6 +1045,13 @@ export function calcularMinutosTrasladoCABA(
       (est.distanciaMetros > 3500 ? 4 : 0) +
       (est.distanciaMetros > 6000 ? 4 : 0)
   );
+  // Punto 7 Calibración: El promotor (César) se traslada a pie o en transporte público directo
+  // y puede caminar hasta 30 minutos si es más rápido o si hay tiempo disponible.
+  const convieneCaminarPromotor =
+    est.distanciaMetros <= 1350 ||
+    (puedeCaminarPromotor30Min &&
+      (minutosWalking <= minutosTransit || Boolean(opciones?.permitirCaminataHasta30Min)));
+  const modo: 'WALKING' | 'TRANSIT' = convieneCaminarPromotor ? 'WALKING' : 'TRANSIT';
   const minutos =
     modo === 'WALKING'
       ? minutosWalking
@@ -1043,6 +1061,9 @@ export function calcularMinutosTrasladoCABA(
     minutos,
     distanciaMetros: est.distanciaMetros,
     cuadras: est.cuadrasAprox,
+    minutosCaminando: minutosWalking,
+    minutosTransportePublico: minutosTransit,
+    puedeCaminarPromotor30Min,
   };
 }
 

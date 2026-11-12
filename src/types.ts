@@ -297,6 +297,7 @@ export interface VoiceProfile {
   horasParaSeguimientoSinRespuesta: number;
   horasParaSeguimientoCambioChip: number;
   cafesPorBarrio: Record<string, CafeHubInfo>;
+  modoLluvia?: boolean;
 }
 
 export interface MicroClusterMember {
@@ -410,6 +411,22 @@ export interface ParadaRuta {
   urlGoogleMapsTramo: string;
   mensajeTerrenoSugerido?: string;
   mensajeWhatsappSugerido?: string;
+  reservaFantasmaSinConfirmarHoy?: boolean;
+  minutosParaSalidaHoy?: number;
+  mensajeReconfirmacionRapidaHoy?: string;
+  sugerenciaMover30Min?: {
+    horaOriginal: string;
+    horaSugerida: string;
+    diferenciaMinutos: number;
+    motivo: string;
+    mensajePropuestaCambio: string;
+  };
+}
+
+export interface SugerenciaAprovecharViajeItem {
+  contact: Contact;
+  tipo: 'SIN_DIRECCION_BARRIO' | 'RETIRO_FICHAS_BARRIO';
+  mensajeWhatsAppSugerido: string;
 }
 
 export interface ItemColaCorte {
@@ -462,6 +479,10 @@ export interface BloqueAgendaRecomendado {
   }[];
   paradasRutaSugerida?: ParadaRuta[];
   contactosIncluidos: Contact[];
+  vecinosMismoBarrioSinDireccion?: SugerenciaAprovecharViajeItem[];
+  retirosFichasMismoBarrioSugeridos?: SugerenciaAprovecharViajeItem[];
+  contactosSinConfirmarATiempoHoy?: Contact[];
+  modoLluviaActivo?: boolean;
 }
 
 export interface CorteResultado {

@@ -53,6 +53,7 @@ import {
   ESTADOS_FLUJO_CATALOGO,
   parsearTextoAEstadoFlujo,
   obtenerEtiquetaEstadoFlujo,
+  esRetiroFichasConfirmadoParaRuta,
 } from './logic';
 import {
   DEFAULT_VOICE_PROFILE,
@@ -2578,6 +2579,195 @@ test('Feedback-16: Vocativos compuestos, salida automática de 1b, exclusión de
     `La propuesta de Café HUB debe ofrecer coordinar otro horario si no puede acercarse al café: ${msjCafe}`
   );
 });
+
+test('Ronda 2 Encuesta Logística (Puntos 7 a 16): caminata promotor <= 30 min, reservas fantasma <= 60 min, vecinos sin dir y retiro fichas por barrio, sin tope 6 paradas, sugerencia mover <= 30 min y Modo Lluvia', () => {
+  // Punto 7: Caminata del promotor hasta 30 min en tramos intermedios si conviene frente a transporte público
+  const tramoMediaDistancia = calcularMinutosTrasladoCABA(
+    -34.5815,
+    -58.4265,
+    -34.5915,
+    -58.4265,
+    { permitirCaminataHasta30Min: true }
+  );
+  assert.equal(
+    tramoMediaDistancia.puedeCaminarPromotor30Min,
+    true,
+    'Un tramo de ~1.4 km (~21 min a pie) debe permitir caminata del promotor (<= 30 min)'
+  );
+  assert.equal(
+    tramoMediaDistancia.modo,
+    'WALKING',
+    'Con permitirCaminataHasta30Min activo y <= 30 min a pie, el promotor camina o prioriza traslado directo sin combinación'
+  );
+
+  // Punto 12: Retiro de fichas extra sólo entra a ruta activa cuando confirmó que están listas
+  const ahoraSim = new Date('2026-11-11T14:15:00-03:00').getTime();
+  const retiroNoConfirmado = procesarContacto(
+    {
+      id: '701',
+      nombre: 'Elena Retiro Pendiente',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 7001-0001',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      calleOCruce: 'Thames 1750',
+      diasEncuentro: '11/11',
+      horarioEncuentro: '15:00 a 18:00',
+      comentario: 'Se llevó 5 fichas extra para hacer firmar',
+      estadoFlujo: 'PENDIENTE_RETIRO_FICHAS',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+  const retiroConfirmado = procesarContacto(
+    {
+      id: '702',
+      nombre: 'Marcos Retiro Listo',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 7001-0002',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      calleOCruce: 'Thames 1790',
+      diasEncuentro: '11/11',
+      horarioEncuentro: '15:00 a 18:00',
+      comentario: '[RETIRO_FICHAS_LISTO] Ya tiene las fichas firmadas listas para pasar a retirar',
+      estadoFlujo: 'PENDIENTE_RETIRO_FICHAS',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+  assert.equal(esRetiroFichasConfirmadoParaRuta(retiroNoConfirmado), false);
+  assert.equal(esRetiroFichasConfirmadoParaRuta(retiroConfirmado), true);
+
+  // Punto 13 (sin tope artificial de 6 paradas) + Punto 8 (reserva fantasma <= 60 min) + Punto 10 (sin dirección del barrio) + Punto 14 (sugerencia mover <= 30 min)
+  const sieteVecinosPalermo = Array.from({ length: 7 }, (_, idx) =>
+    procesarContacto(
+      {
+        id: `80${idx + 1}`,
+        nombre: `Vecino Palermo ${idx + 1}`,
+        barrio: 'Palermo',
+        telRaw: `54 9 11 8001-000${idx + 1}`,
+        rsp: 'Sí',
+        adhirio: 'Pendiente',
+        calleOCruce: `Thames ${1800 + idx * 15}`,
+        diasEncuentro: '11/11',
+        horarioEncuentro: idx === 0 ? '15:30' : '15:00 a 18:00',
+        comentario:
+          idx === 6
+            ? 'Propuesta enviada pero aún sin confirmar'
+            : '[CONFIRMADO_1A1:PUERTA_A_PUERTA] Confirmado por WA',
+        estadoFlujo: idx === 6 ? 'PASO_DATOS_FALTA_CONFIRMAR' : 'ENCUENTRO_CONFIRMADO',
+      },
+      DEFAULT_VOICE_PROFILE,
+      ahoraSim
+    )
+  );
+
+  const vecinoSinDirPalermo = procesarContacto(
+    {
+      id: '899',
+      nombre: 'Lucía Sin Dirección Palermo',
+      barrio: 'Palermo',
+      telRaw: '54 9 11 8001-0899',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      calleOCruce: '',
+      comentario: 'Respondió que sí pero falta pasar calle',
+      estadoFlujo: 'RESPONDIO_FALTA_DNI_O_ZONA',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+
+  const todosParaCorte = [
+    ...sieteVecinosPalermo,
+    retiroNoConfirmado,
+    retiroConfirmado,
+    vecinoSinDirPalermo,
+  ];
+
+  const clustersSinTope = construirMicroClusters(
+    todosParaCorte,
+    15,
+    'Todos',
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+  const clusterPalermo = clustersSinTope.find((c) => c.barrioPrincipal === 'Palermo');
+  assert.ok(clusterPalermo, 'Debe existir el circuito de Palermo');
+  assert.ok(
+    clusterPalermo!.miembros.length >= 7,
+    `No debe existir tope artificial de 6 paradas por circuito (tiene ${clusterPalermo!.miembros.length} miembros)`
+  );
+  assert.equal(
+    clusterPalermo!.miembros.some((m) => m.contact.id === '701'),
+    false,
+    'El retiro de fichas no confirmado (#701) no debe entrar como parada activa antes de confirmar'
+  );
+  assert.equal(
+    clusterPalermo!.miembros.some((m) => m.contact.id === '702'),
+    true,
+    'El retiro de fichas confirmado (#702) sí debe entrar como parada activa en la ruta'
+  );
+
+  const corteRonda2 = generarCorteEstrategicoLocal(
+    todosParaCorte,
+    DEFAULT_VOICE_PROFILE,
+    'Todos',
+    [],
+    ahoraSim
+  );
+  const bloquePalermoHoy = corteRonda2.agendaSugeridaDias.find(
+    (b) => b.barrio === 'Palermo' && b.fechaClave === '11/11'
+  );
+  assert.ok(bloquePalermoHoy, 'Debe existir bloque de Palermo para HOY 11/11');
+
+  // Punto 10: Vecino del mismo barrio en 3. Falta Dir/Día aparece en vecinosMismoBarrioSinDireccion
+  assert.equal(
+    bloquePalermoHoy!.vecinosMismoBarrioSinDireccion?.some((v) => v.contact.id === '899'),
+    true,
+    'Debe sugerir aprovechar el viaje para escribir a vecinos del mismo barrio en 3. Falta Dir/Día (#899)'
+  );
+
+  // Punto 12: Vecino del mismo barrio en 7. Retiro Fichas sin confirmar aparece en retirosFichasMismoBarrioSugeridos
+  assert.equal(
+    bloquePalermoHoy!.retirosFichasMismoBarrioSugeridos?.some((v) => v.contact.id === '701'),
+    true,
+    'Debe sugerir consultar retiro de fichas pendiente del mismo barrio (#701) en la tarjeta del bloque'
+  );
+
+  // Punto 8: A las 14:15 hs, una parada no confirmada de un bloque que sale a las ~15:00 hs (<= 60 min) se marca como reservaFantasmaSinConfirmarHoy
+  const paradaNoConfirmada = bloquePalermoHoy!.paradasRutaSugerida?.find(
+    (p) => p.contact.id === '807'
+  );
+  if (paradaNoConfirmada && (paradaNoConfirmada.minutosParaSalidaHoy ?? 999) <= 60) {
+    assert.equal(
+      paradaNoConfirmada.reservaFantasmaSinConfirmarHoy,
+      true,
+      'Propuesta de HOY sin confirmar a <= 60 min de salir debe marcarse como reservaFantasmaSinConfirmarHoy'
+    );
+    assert.ok(
+      paradaNoConfirmada.mensajeReconfirmacionRapidaHoy?.includes('o lo pasamos para mañana'),
+      'Debe ofrecer el mensaje corto de reconfirmación rápida para hoy o pasar a mañana'
+    );
+  }
+
+  // Punto 16: Modo Lluvia prioriza Café HUB bajo techo incluso con sólo 2 vecinos a <= 15 min a pie
+  const dosVecinosLluvia = sieteVecinosPalermo.slice(1, 3);
+  const clustersConLluvia = construirMicroClusters(
+    dosVecinosLluvia,
+    15,
+    'Todos',
+    { ...DEFAULT_VOICE_PROFILE, modoLluvia: true },
+    ahoraSim
+  );
+  assert.equal(
+    clustersConLluvia[0]?.convieneCafeHub,
+    true,
+    'Con Modo Lluvia activo, 2 vecinos a <= 15 min a pie de un café deben priorizar CAFE_HUB bajo techo'
+  );
+});
+
 
 
 

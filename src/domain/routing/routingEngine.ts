@@ -25,6 +25,7 @@ import {
   calcularMinutosTrasladoCABA,
   distanciaHaversineMetros,
   estimarMinutosCaminandoCABA,
+  normalizarBarrioCABA,
   resolverCoordenadasPartidaPerfil,
 } from '../geo/cabaLocations';
 import {
@@ -48,7 +49,7 @@ import {
   filtrarEventosCalendarParaDia,
   geocodificarEventoCalendar,
 } from '../calendar/calendarEvents';
-import { construirMicroClusters } from './clustering';
+import { construirMicroClusters, esRetiroFichasConfirmadoParaRuta } from './clustering';
 import {
   aplicarReglaSaludoMismoDia,
   corregirPelonesDiaSemanaEnTexto,
@@ -435,6 +436,16 @@ export function calcularHojaDeRuta(
         ((pactadaExactaMin !== null && minutosActualesBA >= pactadaExactaMin + 5) ||
           ventanaColGYaVencidaHoy);
 
+      // Punto 8 Calibración ("Reservas fantasma"):
+      // Guardar la hora de salida objetivo original antes de empujar propuestas no confirmadas para detectar
+      // si faltan <= 60 minutos para salir y el vecino aún no confirmó.
+      const salidaObjetivoOriginalMin =
+        pactadaExactaMin !== null
+          ? Math.max(8 * 60, pactadaExactaMin - minutosViaje)
+          : dispColG.minInicioVentana !== undefined
+          ? Math.max(horaAMinutosDelDia(horaSalida), dispColG.minInicioVentana - minutosViaje)
+          : horaAMinutosDelDia(horaSalida);
+
       // Si es la ruta de HOY y esta parada NO es una cita ya confirmada con hora fija ni ya vencida,
       // dejar brecha prudente de 90 min para confirmación + preparación antes del encuentro (~75 min antes de salir)
       // para darle tiempo a la persona de confirmar y al responsable de alistarse y salir (Puntos 3 y 6).
@@ -605,12 +616,16 @@ export function calcularHojaDeRuta(
         }
       }
 
+      // Punto 7 Calibración: Traslado a pie (promotor hasta 30 min si es más rápido o hay tiempo disponible)
+      // o en Transporte Público directo (1 línea de colectivo / Subte sin combinar múltiples líneas).
       const detalleTransporte =
         trasladoActual.distanciaMetros <= 30
           ? `En el mismo punto de encuentro (${destinoNombre.split(',')[0]})`
           : modoTraslado === 'WALKING'
           ? `A pie (${minutosViaje} min / ${trasladoActual.cuadras} cuadras desde ${origenNombre.split(',')[0]})`
-          : `Transporte Público (~${minutosViaje} min desde ${origenNombre.split(',')[0]} hacia ${c.barrio})`;
+          : trasladoActual.puedeCaminarPromotor30Min
+          ? `Transporte Público directo — 1 línea / Subte (~${minutosViaje} min desde ${origenNombre.split(',')[0]} hacia ${c.barrio}) · o ${trasladoActual.minutosCaminando} min a pie (≤30 min)`
+          : `Transporte Público directo — 1 línea / Subte (~${minutosViaje} min desde ${origenNombre.split(',')[0]} hacia ${c.barrio})`;
 
       let conflictoCalendar: string | undefined;
       let alternativaOptimaSugerida: string | undefined;
@@ -872,6 +887,58 @@ export function calcularHojaDeRuta(
         ? c.alertaVencido?.mensajeDisculpasReprogramacion || mensajeDisculpasPorCompromisoIncumplido
         : undefined;
 
+      // Punto 8 Calibración ("Reservas fantasma"):
+      // Si es para HOY, la persona aún no confirmó (`!confirmado1a1`) y faltan <= 60 min para la hora de salida prevista,
+      // separarla de la ruta firme y ofrecerle el mensaje corto de reconfirmación o pase a mañana.
+      const minutosRestantesParaSalirHoy = salidaObjetivoOriginalMin - minutosActualesBA;
+      const esReservaFantasmaHoy =
+        esRutaDeHoy &&
+        !confirmado1a1 &&
+        !yaPasoHoraParadaHoy &&
+        minutosRestantesParaSalirHoy <= 60 &&
+        minutosRestantesParaSalirHoy >= -15;
+      const mensajeReconfirmacionRapidaHoy = esReservaFantasmaHoy
+        ? `${nombreSaludo} Estoy por salir al recorrido por ${c.barrio} de hoy. ¿Llegás a estar hoy alrededor de las *${horaPactadaExplicita || horaLlegada} hs* o lo pasamos para mañana?`
+        : undefined;
+
+      // Punto 14 Calibración: Citas con hora exacta ("Sólo puedo 17:00 hs") se mantienen como ancla,
+      // pero si mover esa cita <= 30 min hace más eficiente el encadenamiento a pie con la parada previa o un evento, ofrecer la sugerencia.
+      let sugerenciaMover30Min: ParadaRuta['sugerenciaMover30Min'];
+      if (horaPactadaExplicita && pactadaMin !== null) {
+        if (finVisitaParadaAnteriorMin !== null) {
+          const llegadaNaturalDesdePreviaMin = finVisitaParadaAnteriorMin + minutosViaje;
+          const diffMin = llegadaNaturalDesdePreviaMin - pactadaMin;
+          if (Math.abs(diffMin) >= 5 && Math.abs(diffMin) <= 30) {
+            const minSugeridoRedondeado = Math.ceil(llegadaNaturalDesdePreviaMin / 5) * 5;
+            const diffEfectivo = minSugeridoRedondeado - pactadaMin;
+            if (diffEfectivo !== 0 && Math.abs(diffEfectivo) <= 30) {
+              const horaSugerida = sumarMinutosAHora('00:00', minSugeridoRedondeado);
+              const sentidoTxt = diffEfectivo > 0 ? `+${diffEfectivo} min` : `${diffEfectivo} min`;
+              sugerenciaMover30Min = {
+                horaOriginal: horaPactadaExplicita,
+                horaSugerida,
+                diferenciaMinutos: diffEfectivo,
+                motivo:
+                  diffEfectivo > 0
+                    ? `Correr ${sentidoTxt} (${horaPactadaExplicita} → ${horaSugerida} hs) encadena directo a pie tras la parada anterior sin superposición.`
+                    : `Adelantar ${Math.abs(diffEfectivo)} min (${horaPactadaExplicita} → ${horaSugerida} hs) evita ${Math.abs(diffEfectivo)} min de espera muerta en la calle tras la parada previa.`,
+                mensajePropuestaCambio: `${nombreSaludo} Para encadenar el recorrido a pie por ${c.barrio} con otros vecinos de tu cuadra, ¿te quedaría igual de bien si paso 2 minutos por *${destinoNombre}* a las *${horaSugerida} hs* (en vez de las ${horaPactadaExplicita} hs)? Si necesitás que sea puntual a las ${horaPactadaExplicita} hs decime y lo mantengo fijo.`,
+              };
+            }
+          }
+        } else if (llegadaVisitaMin !== pactadaMin && Math.abs(llegadaVisitaMin - pactadaMin) <= 30) {
+          const diffEfectivo = llegadaVisitaMin - pactadaMin;
+          const sentidoTxt = diffEfectivo > 0 ? `+${diffEfectivo} min` : `${diffEfectivo} min`;
+          sugerenciaMover30Min = {
+            horaOriginal: horaPactadaExplicita,
+            horaSugerida: horaLlegada,
+            diferenciaMinutos: diffEfectivo,
+            motivo: `Correr ${sentidoTxt} (${horaPactadaExplicita} → ${horaLlegada} hs) optimiza el empalme de la ruta del bloque.`,
+            mensajePropuestaCambio: `${nombreSaludo} Para organizar mejor el recorrido por ${c.barrio}, ¿te quedaría bien si paso 2 minutos por *${destinoNombre}* a las *${horaLlegada} hs* (en vez de las ${horaPactadaExplicita} hs)? Avisame si te sirve.`,
+          };
+        }
+      }
+
       const paradaObj: ParadaRuta = {
         orden: i + 1,
         contact: c,
@@ -904,6 +971,10 @@ export function calcularHojaDeRuta(
         vencidaSinAdherir: yaPasoHoraParadaHoy,
         motivoVencimiento,
         mensajeDisculpasVencido,
+        reservaFantasmaSinConfirmarHoy: esReservaFantasmaHoy,
+        minutosParaSalidaHoy: esReservaFantasmaHoy ? Math.max(0, minutosRestantesParaSalirHoy) : undefined,
+        mensajeReconfirmacionRapidaHoy,
+        sugerenciaMover30Min,
         urlGoogleMapsTramo,
       };
 
@@ -1154,6 +1225,10 @@ export function generarCorteEstrategicoLocal(
 
   const elegiblesAgendaConLugar = noAdheridosTotales.filter((c) => {
     if (!c.tienePuntoEncuentroDeterminado) return false;
+    // Punto 12 Calibración: Retiro de fichas extra (7. Retiro Fichas / PENDIENTE_RETIRO_FICHAS)
+    // sólo se agenda como parada activa cuando el vecino ya confirmó que las tiene listas;
+    // el resto se sugiere "de paso" en la tarjeta del bloque de ese barrio.
+    if (!esRetiroFichasConfirmadoParaRuta(c)) return false;
     // REGLA FEEDBACK-14: Quienes prefieren pasar por un Punto / Sede (3c. PREFIERE_CAFE_HUB_O_SEDE / PREFIERE_PUNTO)
     // no quieren un encuentro particular y NUNCA deben incluirse en el Planificador & Hoy (salvo reunión sede Chile 1408 de test).
     if (
@@ -1980,7 +2055,9 @@ export function generarCorteEstrategicoLocal(
       Boolean(mejorCafe) &&
       horasFijasDistintasCount <= 1 &&
       mediaMinutosMejorCafe <= 15 &&
-      (contactosOrdenadosCronologicamente.length >= 3 || pidenPuntoCount >= 1);
+      (contactosOrdenadosCronologicamente.length >= 3 ||
+        pidenPuntoCount >= 1 ||
+        Boolean(profile?.modoLluvia));
 
     const modalidadRecomendada: ModalidadEncuentroAgenda = esSede
       ? 'EVENTO_SEDE'
@@ -1993,12 +2070,75 @@ export function generarCorteEstrategicoLocal(
       : contactosOrdenadosCronologicamente.length === 1
       ? `Se aconseja Puerta a Puerta: al ser 1 vecino con punto definido (${contactosOrdenadosCronologicamente[0]?.calleOCruce || barrioPrincipal}) en la franja ${franjaHorariaLimpia}, pasar directo por su ubicación es más rápido y efectivo.`
       : recomiendaCafe
-      ? `Se aconseja Convocar al Café Óptimo (${nombreMejorCafe}, a ~${mediaMinutosMejorCafe} min a pie promedio): los ${contactosOrdenadosCronologicamente.length} vecinos comparten ventana horaria compatible (${franjaHorariaLimpia}) y reunirlos en un único punto ahorra ~${Math.max(12, minutosTrasladoInternoPap)} min de traslados entre calles.`
+      ? `Se aconseja Convocar al Café Óptimo (${nombreMejorCafe}, a ~${mediaMinutosMejorCafe} min a pie promedio)${profile?.modoLluvia ? ' [🌧️ Modo Lluvia activo: prioriza bajo techo desde 2 vecinos]' : ''}: los ${contactosOrdenadosCronologicamente.length} vecinos comparten ventana horaria compatible (${franjaHorariaLimpia}) y reunirlos en un único punto ahorra ~${Math.max(12, minutosTrasladoInternoPap)} min de traslados entre calles.`
       : `Se aconseja Puerta a Puerta (${paradasRutaSugerida.length} paradas encadenadas, ~${minutosTrasladoInternoPap} min de caminata interna entre direcciones): ${
           horasFijasDistintasCount >= 2
             ? 'los vecinos indicaron horarios puntuales escalonados'
             : 'las ubicaciones están próximas en secuencia lineal'
         }, por lo que pasar por cada punto de ${horaInicioReal} a ${horaFinReal} hs maximiza la firma sin hacerlos trasladarse.`;
+
+    // Punto 10 y Punto 12 Calibración:
+    // - Pestaña "Aprovechar viaje: vecinos del mismo barrio sin dirección" (3. Falta Dir/Día)
+    // - Pestaña "Aprovechar viaje: retiros de fichas extra en este barrio" (7. Retiro Fichas sin confirmar aún)
+    const idsIncluidosSet = new Set(contactosOrdenadosCronologicamente.map((c) => c.id));
+    const barrioNormBloque = normalizarBarrioCABA(barrioPrincipal);
+    const refDiaAprovechar =
+      fechaClave === hoyBA.ddmm
+        ? 'Hoy'
+        : fechaClave === manianaBA.ddmm
+        ? 'Mañana'
+        : `El ${diaEtiqueta.toLowerCase()}`;
+
+    const vecinosMismoBarrioSinDireccion = noAdheridosTotales
+      .filter((c) => {
+        if (idsIncluidosSet.has(c.id)) return false;
+        if (c.esCerradoOArchivadoSinDniCaba) return false;
+        if (normalizarBarrioCABA(c.barrio || '') !== barrioNormBloque) return false;
+        const faltaDir =
+          c.estadoFlujo === 'RESPONDIO_FALTA_DNI_O_ZONA' ||
+          (c.rsp === 'Sí' &&
+            c.estadoFlujo !== 'PENDIENTE_RETIRO_FICHAS' &&
+            c.estadoFlujo !== 'PREFIERE_CAFE_HUB_O_SEDE' &&
+            c.estadoFlujo !== 'POSTERGO_SALUD_O_VIAJE' &&
+            (!c.tieneDireccionRealEnComentario || !c.calleOCruce?.trim()));
+        return faltaDir;
+      })
+      .map((c) => {
+        const saludo = c.sinNombre ? 'Hola, ¿cómo estás?' : `Hola, ${c.primerNombre}, ¿cómo estás?`;
+        return {
+          contact: c,
+          tipo: 'SIN_DIRECCION_BARRIO' as const,
+          mensajeWhatsAppSugerido: `${saludo} ${refDiaAprovechar} entre las *${horaInicioReal} y las ${horaFinReal} hs* voy a estar pasando por *${barrioPrincipal}* para las firmas de adhesión. ¿Por qué calle/altura o esquina estás así aprovecho el viaje y paso 2 minutos?`,
+        };
+      });
+
+    const retirosFichasMismoBarrioSugeridos = noAdheridosTotales
+      .filter((c) => {
+        if (idsIncluidosSet.has(c.id)) return false;
+        if (normalizarBarrioCABA(c.barrio || '') !== barrioNormBloque) return false;
+        return (
+          (c.estadoFlujo === 'PENDIENTE_RETIRO_FICHAS' || c.situacion === 'RETIRO_FICHAS') &&
+          !esRetiroFichasConfirmadoParaRuta(c)
+        );
+      })
+      .map((c) => {
+        const saludo = c.sinNombre ? 'Hola, ¿cómo estás?' : `Hola, ${c.primerNombre}, ¿cómo estás?`;
+        const refLugar = c.calleOCruce?.trim() || barrioPrincipal;
+        return {
+          contact: c,
+          tipo: 'RETIRO_FICHAS_BARRIO' as const,
+          mensajeWhatsAppSugerido: `${saludo} ${refDiaAprovechar} entre las *${horaInicioReal} y las ${horaFinReal} hs* voy a estar pasando por *${barrioPrincipal}*. ¿Ya tenés listas las fichas extra firmadas así aprovecho que estoy en el barrio y paso 2 minutos por *${refLugar}* a retirarlas?`,
+        };
+      });
+
+    // Punto 8 Calibración ("Reservas fantasma"):
+    // Contactos en HOY sin confirmar a <= 60 min de la hora de salida del bloque
+    const contactosSinConfirmarATiempoHoy =
+      fechaClave === hoyBA.ddmm
+        ? paradasRutaSugerida
+            .filter((p) => Boolean(p.reservaFantasmaSinConfirmarHoy))
+            .map((p) => p.contact)
+        : [];
 
     return {
       id,
@@ -2028,6 +2168,10 @@ export function generarCorteEstrategicoLocal(
       cafesCandidatosCurados,
       paradasRutaSugerida,
       contactosIncluidos: contactosOrdenadosCronologicamente,
+      vecinosMismoBarrioSinDireccion,
+      retirosFichasMismoBarrioSugeridos,
+      contactosSinConfirmarATiempoHoy,
+      modoLluviaActivo: Boolean(profile?.modoLluvia),
     };
   };
 
@@ -2171,7 +2315,8 @@ export function generarCorteEstrategicoLocal(
         ? false
         : miembrosSub.length < 2
         ? false
-        : convieneCafeDefault && (miembrosSub.length >= 3 || algunoPidioCafeSub);
+        : convieneCafeDefault &&
+          (miembrosSub.length >= 3 || algunoPidioCafeSub || Boolean(profile?.modoLluvia));
 
     // Resolver fecha objetivo priorizando HOY si algún miembro está pautado para HOY
     const fechasMiembros = miembrosSub
@@ -2320,8 +2465,8 @@ export function generarCorteEstrategicoLocal(
     // Separar además en sub-lotes compatibles en horario para nunca mezclar mañana con tarde
     const subLotesCompatibles: Contact[][] = [];
     for (const c of listaRem) {
-      const subExistente = subLotesCompatibles.find(
-        (sub) => sub.length < 5 && sonHorariosCompatiblesEnCircuito(sub, c)
+      const subExistente = subLotesCompatibles.find((sub) =>
+        sonHorariosCompatiblesEnCircuito(sub, c)
       );
       if (subExistente) {
         subExistente.push(c);
@@ -2362,17 +2507,13 @@ export function generarCorteEstrategicoLocal(
   }
 
   // CONSOLIDACIÓN ANTI-SUPERPOSICIÓN POR DÍA, BARRIO Y COMPATIBILIDAD HORARIA REAL:
-  // 1) Si en un mismo día explícito hay múltiples micro-circuitos del mismo barrio y misma modalidad,
-  //    los unificamos si sus ventanas/horas son compatibles.
-  // 2) Si un contacto quedó aislado en un circuito de 1 persona y ya existe otro circuito del mismo barrio
-  //    compatible en día y horario (< 6 personas), lo sumamos a ese grupo barrial para facilitar la recolección.
+  // Punto 13 Calibración: Sin tope artificial de 6 paradas cuando comparten barrio, día y compatibilidad horaria.
   const circuitosParaAgendar: CircuitoParaAgendar[] = [];
 
   for (const circ of circuitosCrudos) {
     const modCirc = circ.modalidadAdaptadaPorConfirmacion || (circ.convieneCafeHub ? 'CAFE_HUB' : 'PUERTA_A_PUERTA');
     const compatibleExistente = circuitosParaAgendar.find((ex) => {
       if (ex.barrio.toLowerCase() !== circ.barrio.toLowerCase()) return false;
-      if (ex.miembros.length + circ.miembros.length > 6) return false;
 
       if (circ.fechaExplicita && ex.fechaExplicita && ex.fechaExplicita !== circ.fechaExplicita) {
         return false;
@@ -2427,12 +2568,11 @@ export function generarCorteEstrategicoLocal(
     circuitosParaAgendar.push(circ);
   }
 
-  // Ordenar circuitos priorizando estrictamente:
-  // 1) Fecha explícita de HOY (ej. 21/10) — prioridad absoluta para nunca desplazar citas pautadas para hoy
-  // 2) Fecha explícita de MAÑANA (ej. 22/10)
-  // 3) Otra fecha explícita de los próximos días operativos (ej. 23/10, 24/10)
-  // 4) Alertas de encuentros vencidos de días anteriores a reprogramar
-  // 5) Hora puntual pactada más temprana en Columna G y ventana horaria más temprana
+  // Punto 11 y Punto 13 Calibración:
+  // Prioridad al competir circuitos para el mismo día/hueco:
+  // 1º Volumen de firmas (donde haya más vecinos juntos)
+  // 2º Fechas que vencen ese día / alertas vencidas
+  // 3º Cercanía al punto anterior / evento físico de Calendar / KM 0
   const fechasOperativasSet = new Set(diasOperativos.map((d) => d.diaBA.ddmm));
   const prioridadFechaCircuito = (c: CircuitoParaAgendar): number => {
     if (c.fechaExplicita === hoyBA.ddmm) return 0;
@@ -2455,22 +2595,70 @@ export function generarCorteEstrategicoLocal(
     return 15 * 60 + 30;
   };
 
+  const calcularDistanciaAlOrigenOEventoCircuito = (c: CircuitoParaAgendar, minRef: number): number => {
+    const diaEvs = c.fechaExplicita
+      ? diasOperativos.find((d) => d.diaBA.ddmm === c.fechaExplicita)?.eventos || []
+      : diasOperativos[0]?.eventos || [];
+    const evFisicoPrevio = diaEvs.find((ev) => {
+      if (esEventoVirtualCalendar(ev)) return false;
+      const tieneDir = Boolean(
+        ev.location && ev.location.trim() && ev.location.trim().toUpperCase() !== 'CABA'
+      );
+      if (!tieneDir) return false;
+      const evFin = horaAMinutosDelDia(ev.endTime);
+      return minRef >= evFin - 30 && minRef <= evFin + 180;
+    });
+    if (evFisicoPrevio) {
+      const geoEv = geocodificarEventoCalendar(evFisicoPrevio, profile);
+      return distanciaHaversineMetros(geoEv.lat, geoEv.lng, c.centroLat, c.centroLng);
+    }
+    return distanciaHaversineMetros(partidaKm0.lat, partidaKm0.lng, c.centroLat, c.centroLng);
+  };
+
   circuitosParaAgendar.sort((a, b) => {
     const pa = prioridadFechaCircuito(a);
     const pb = prioridadFechaCircuito(b);
-    if (pa !== pb) return pa - pb;
+    // Para circuitos sin fecha fija o alertas que compiten por días disponibles (pa >= 3 && pb >= 3),
+    // aplicar 1º Volumen de firmas (más vecinos juntos), 2º Vencimientos, 3º Cercanía.
+    if (pa >= 3 && pb >= 3) {
+      if (b.miembros.length !== a.miembros.length) {
+        return b.miembros.length - a.miembros.length;
+      }
+      if (pa !== pb) return pa - pb;
+    } else if (pa !== pb) {
+      return pa - pb;
+    }
+
     const aConfirmado = a.miembros.some(esContactoConfirmadoEnLista1a1);
     const bConfirmado = b.miembros.some(esContactoConfirmadoEnLista1a1);
     if (aConfirmado !== bConfirmado) return aConfirmado ? -1 : 1;
+
     const minA = minReferenciaOrdenCircuito(a);
     const minB = minReferenciaOrdenCircuito(b);
     const aPuntual = Boolean(a.horaPuntualMasTemprana);
     const bPuntual = Boolean(b.horaPuntualMasTemprana);
-    if (Math.abs(minA - minB) <= 45 && aPuntual !== bPuntual) {
-      return aPuntual ? -1 : 1;
+
+    // Si pertenecen al mismo día explícito y uno tiene hora fija temprana vs otro mucho más tarde (>90 min), mantener orden cronológico del día
+    if (pa <= 2 && Math.abs(minA - minB) > 90 && (aPuntual || bPuntual)) {
+      return minA - minB;
     }
-    if (Math.abs(minA - minB) >= 15) return minA - minB;
-    return b.miembros.length - a.miembros.length;
+
+    // Compitiendo por el mismo día / hueco:
+    // 1º Volumen de firmas (donde haya más vecinos juntos)
+    if (b.miembros.length !== a.miembros.length) {
+      return b.miembros.length - a.miembros.length;
+    }
+    // 2º Fechas que vencen ese día / alertas vencidas
+    if (a.tieneAlertaVencido !== b.tieneAlertaVencido) {
+      return a.tieneAlertaVencido ? -1 : 1;
+    }
+    // 3º Cercanía al punto anterior / evento físico de Calendar / KM 0
+    const distA = calcularDistanciaAlOrigenOEventoCircuito(a, minA);
+    const distB = calcularDistanciaAlOrigenOEventoCircuito(b, minB);
+    if (Math.abs(distA - distB) > 150) {
+      return distA - distB;
+    }
+    return minA - minB;
   });
 
   const agendaSugeridaDias: BloqueAgendaRecomendado[] = [];
