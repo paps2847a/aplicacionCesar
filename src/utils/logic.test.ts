@@ -2768,6 +2768,163 @@ test('Ronda 2 Encuesta Logística (Puntos 7 a 16): caminata promotor <= 30 min, 
   );
 });
 
+test('Feedback-16 Video 214815: 1) Enviar propuesta no autoconfirma cita, 2) Horario puntual (12:12) se agenda antes que ventana amplia (11:00 a 13:00) sin falsa disculpa, 3) Aprovechar viaje especifica zona/calles y café tanto en Sin Dirección como en Retiro Fichas', () => {
+  const ahoraSim = new Date('2026-11-11T15:00:00-03:00').getTime();
+
+  // 1) Enviar propuesta WA ("quería proponerte... ¿Me confirmás si podés acercarte en esa franja?") jamás debe autoconfirmar la cita
+  const rawMartina = {
+    id: '246',
+    nombre: 'Martina Eteltrich',
+    telRaw: '11 5555-0246',
+    barrio: 'Palermo',
+    rsp: 'Sí',
+    adhirio: 'Pendiente',
+    diasEncuentro: '12/11',
+    horarioEncuentro: '11:00 a 13:00',
+    calleOCruce: 'Bulnes y Paraguay',
+    comentario: 'Respondío en WA: Puedo el jueves 12/11 entre las 11 y las 13 por Bulnes y Paraguay',
+  } as const;
+  const martinaProcesada = procesarContacto(rawMartina, DEFAULT_VOICE_PROFILE, ahoraSim);
+  assert.equal(martinaProcesada.estadoFlujo, 'PASO_DATOS_FALTA_CONFIRMAR');
+
+  const msgPropuestaEnviado =
+    'Hola, Martina, ¿cómo estás? Estoy organizando el recorrido por Palermo para MAÑANA (Jueves 12/11) en la franja de 12:15 a 13:02 hs y quería proponerte encontrarnos unos minutos en el café LAB. Training Center & Coffee Shop (Humboldt 1542). ¿Me confirmás si podés acercarte en esa franja?';
+  const resMartinaTrasPropuesta = registrarEnvioMensajeContacto(
+    rawMartina,
+    'auto',
+    '2026-11-11T15:05:00-03:00',
+    msgPropuestaEnviado
+  );
+  const martinaTrasPropuesta = procesarContacto(
+    resMartinaTrasPropuesta.actualizado,
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+  assert.equal(
+    martinaTrasPropuesta.estadoFlujo,
+    'PASO_DATOS_FALTA_CONFIRMAR',
+    'Enviar una propuesta en el planificador NO debe pasar automáticamente a ENCUENTRO_CONFIRMADO hasta que la persona confirme'
+  );
+
+  // 2) En el mismo bloque del 12/11 en Palermo: #246 (11:00 a 13:00) y #203 (12:12 puntual en Soldado De La Independencia y Olleros Av.)
+  const c203Puntual = procesarContacto(
+    {
+      id: '203',
+      nombre: 'Teléfono sin nombre (Consultar en chat)',
+      telRaw: '11 5555-0203',
+      barrio: 'Palermo',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      diasEncuentro: '12/11',
+      horarioEncuentro: '12:12',
+      calleOCruce: 'Soldado De La Independencia y Olleros Av.',
+      comentario: 'Puedo el jueves 12/11 a las 12:12 hs en Soldado De La Independencia y Olleros Av.',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+
+  const vecinoSinDirPalermo = procesarContacto(
+    {
+      id: '910',
+      nombre: 'Vecino Palermo Sin Calle',
+      telRaw: '11 5555-0910',
+      barrio: 'Palermo',
+      rsp: 'Sí',
+      adhirio: 'Pendiente',
+      calleOCruce: '',
+      comentario: 'Respondió que sí pero falta pasar calle',
+      estadoFlujo: 'RESPONDIO_FALTA_DNI_O_ZONA',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+
+  const vecinoRetiroPalermo = procesarContacto(
+    {
+      id: '911',
+      nombre: 'Vecina Retiro Fichas Palermo',
+      telRaw: '11 5555-0911',
+      barrio: 'Palermo',
+      rsp: 'Sí',
+      adhirio: 'Sí',
+      calleOCruce: 'Av. Santa Fe 3400',
+      fichasExtrasCantidad: 'X2',
+      comentario: 'COORDINAR para buscar fichas X2 en Av. Santa Fe 3400',
+      estadoFlujo: 'PENDIENTE_RETIRO_FICHAS',
+    },
+    DEFAULT_VOICE_PROFILE,
+    ahoraSim
+  );
+
+  const corte12Nov = generarCorteEstrategicoLocal(
+    [martinaTrasPropuesta, c203Puntual, vecinoSinDirPalermo, vecinoRetiroPalermo],
+    DEFAULT_VOICE_PROFILE,
+    'Todos',
+    [],
+    ahoraSim
+  );
+
+  const bloque12Nov = corte12Nov.agendaSugeridaDias.find(
+    (b) => b.barrio === 'Palermo' && b.fechaClave === '12/11'
+  );
+  assert.ok(bloque12Nov, 'Debe generarse el bloque de Palermo para MAÑANA 12/11');
+
+  const paradas12Nov = bloque12Nov!.paradasRutaSugerida || [];
+  assert.equal(paradas12Nov.length, 2, 'El bloque del 12/11 debe incluir a #203 y #246');
+  assert.equal(
+    paradas12Nov[0].contact.id,
+    '203',
+    'La cita con hora puntual exacta (#203 a las 12:12) debe visitarse antes que la ventana amplia (#246 de 11:00 a 13:00)'
+  );
+  assert.equal(
+    Boolean(paradas12Nov[0].conflictoCalendar),
+    false,
+    '#203 (12:12) no debe sufrir choque ni atraso falso cuando #246 tiene ventana amplia 11:00 a 13:00'
+  );
+  assert.equal(
+    Boolean(paradas12Nov[1].conflictoCalendar),
+    false,
+    '#246 (11:00 a 13:00) se visita justo después (~12:35 hs) dentro de su ventana sin conflicto'
+  );
+
+  // 3) Aprovechar viaje especifica las calles de la zona y el café tanto para Sin Dirección como para Retiro de Fichas
+  assert.ok(
+    bloque12Nov!.zonaEspecificaBloque &&
+      (bloque12Nov!.zonaEspecificaBloque.includes('Soldado De La Independencia') ||
+        bloque12Nov!.zonaEspecificaBloque.includes('Bulnes')),
+    `zonaEspecificaBloque debe detallar las calles del recorrido (${bloque12Nov!.zonaEspecificaBloque})`
+  );
+
+  const sugSinDir = bloque12Nov!.vecinosMismoBarrioSinDireccion?.find(
+    (x) => x.contact.id === '910'
+  );
+  assert.ok(sugSinDir, 'Debe incluir a #910 en vecinosMismoBarrioSinDireccion');
+  assert.ok(
+    sugSinDir!.mensajeWhatsAppSugerido.includes('zona *') &&
+      (sugSinDir!.mensajeWhatsAppSugerido.includes('Soldado De La Independencia') ||
+        sugSinDir!.mensajeWhatsAppSugerido.includes('Bulnes')),
+    'El mensaje de Aprovechar Viaje (Sin Dirección) debe especificar la zona exacta / calles del recorrido y no sólo "Palermo"'
+  );
+
+  const sugRetiro = bloque12Nov!.retirosFichasMismoBarrioSugeridos?.find(
+    (x) => x.contact.id === '911'
+  );
+  assert.ok(sugRetiro, 'Debe incluir a #911 en retirosFichasMismoBarrioSugeridos');
+  assert.ok(
+    sugRetiro!.mensajeWhatsAppSugerido.includes('zona *') &&
+      (sugRetiro!.mensajeWhatsAppSugerido.includes('Soldado De La Independencia') ||
+        sugRetiro!.mensajeWhatsAppSugerido.includes('Bulnes')),
+    'El mensaje de Aprovechar Viaje (Retiro de Fichas) también debe especificar la zona exacta / calles del recorrido'
+  );
+  assert.equal(
+    typeof sugRetiro!.minutosCaminandoDesdeRuta,
+    'number',
+    'Cada sugerencia de Retiro de Fichas debe incluir los minutos caminando desde la ruta del bloque'
+  );
+});
+
+
 
 
 

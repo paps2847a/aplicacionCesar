@@ -439,14 +439,14 @@ export function tieneVisitaConcretadaConDatosCompletos(params: {
 
   if (!tieneLugarConcreto) return false;
 
-  // Si explícitamente dice "CONFIRMAR Visita" o "por confirmar" y no fue confirmada aún, le falta confirmación
+  // Si explícitamente dice "CONFIRMAR Visita", "por confirmar" o es una respuesta cruda de WA ("Respondió en WA:") que aún no fue confirmada, le falta confirmación
   const pideConfirmarExplicitamente =
-    /\b(confirmar\s+visita|visita\s+por\s+confirmar|falta\s+confirmar|esperando\s+confirmaci[oó]n)\b/i.test(
+    /\b(confirmar\s+visita|visita\s+por\s+confirmar|falta\s+confirmar|esperando\s+confirmaci[oó]n|respond[ií]?[oó]\s+en\s+wa)\b/i.test(
       com
     ) &&
     params.estadoFlujo !== 'ENCUENTRO_CONFIRMADO' &&
     params.estadoFlujo !== 'RECORDATORIO_DIA_ENVIADO' &&
-    !/visita\s+confirmada/i.test(com);
+    !/visita\s+confirmada|\[confirmado/i.test(com);
 
   if (pideConfirmarExplicitamente) return false;
 

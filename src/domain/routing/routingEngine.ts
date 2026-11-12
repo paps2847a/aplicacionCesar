@@ -323,15 +323,15 @@ export function calcularHojaDeRuta(
       const disp = analizarDisponibilidadColumnaG(obtenerTextoHorarioAgendaContacto(cand));
       const esConfirmado1a1 = esContactoConfirmadoEnLista1a1(cand);
       let refMinutos = 15 * 60;
-      let bonusPuntual = esConfirmado1a1 ? -400 : 0;
+      let bonusPuntual = esConfirmado1a1 ? -250 : 0;
       if (disp.horaPuntualPactada && !disp.esVentanaAmplia) {
         refMinutos = horaAMinutosDelDia(disp.horaPuntualPactada);
-        bonusPuntual = esConfirmado1a1 ? -2500 : -500; // Prioridad estricta a quien pactó o confirmó una hora puntual exacta
+        bonusPuntual = esConfirmado1a1 ? -2500 : -1600; // Prioridad estricta a quien pactó o pidió una hora puntual exacta sobre ventanas amplias
       } else if (disp.minInicioVentana !== undefined && disp.minFinVentana !== undefined) {
         refMinutos = Math.round(disp.minInicioVentana * 0.45 + disp.minFinVentana * 0.55);
-        // Priorizar ventanas numéricas explícitas (ej. "entre las 15:30 y las 19:00" o "de 15 a 19") sobre "a la tarde" genérico
+        // Priorizar ventanas numéricas explícitas (ej. "entre las 15:30 y las 19:00" o "de 15 a 19") sobre "a la tarde" genérico, sin pisar citas puntuales
         if (/\b(?:entre\s+(?:las\s+)?\d|de\s+(?:las\s+)?\d{1,2}\s+a\s+\d|\d{1,2}:\d{2}\s*(?:a|-)\s*\d)/i.test(obtenerTextoHorarioAgendaContacto(cand))) {
-          bonusPuntual -= 320;
+          bonusPuntual -= 150;
         }
       } else if (cand.franjaHoraria === 'Mañana') {
         refMinutos = 10 * 60 + 30;
@@ -446,16 +446,20 @@ export function calcularHojaDeRuta(
           ? Math.max(horaAMinutosDelDia(horaSalida), dispColG.minInicioVentana - minutosViaje)
           : horaAMinutosDelDia(horaSalida);
 
-      // Si es la ruta de HOY y esta parada NO es una cita ya confirmada con hora fija ni ya vencida,
+      // Si es la ruta de HOY (en horario diurno activo < 19:30 hs) y esta parada NO es una cita ya confirmada con hora fija ni ya vencida,
       // dejar brecha prudente de 90 min para confirmación + preparación antes del encuentro (~75 min antes de salir)
-      // para darle tiempo a la persona de confirmar y al responsable de alistarse y salir (Puntos 3 y 6).
+      // para darle tiempo a la persona de confirmar y al responsable de alistarse y salir (Puntos 3 y 6), sin desbordar jamás la medianoche.
       const brechaMinimaHoy = esContactoConfirmadoEnLista1a1(c) ? 20 : 75;
-      const minHoraSalidaHoy = Math.max(
-        9 * 60 + 30,
-        Math.ceil((minutosActualesBA + brechaMinimaHoy) / 15) * 15
+      const minHoraSalidaHoy = Math.min(
+        20 * 60,
+        Math.max(
+          9 * 60 + 30,
+          Math.ceil((minutosActualesBA + brechaMinimaHoy) / 15) * 15
+        )
       );
       if (
         esRutaDeHoy &&
+        minutosActualesBA < 19 * 60 + 30 &&
         !citaPuntualYaVencidaHoy &&
         !esConfirmadoConHoraExacta &&
         horaAMinutosDelDia(horaSalida) < minHoraSalidaHoy
@@ -750,9 +754,18 @@ export function calcularHojaDeRuta(
 
               conflictoCalendar = `Horario fijado en Col. G (${horaConflictoTxt} hs) se superpone con el horario/día fijado o confirmado con #${prevP.contact.id} ${prevP.contact.nombreCompletoCorregido} (${prevP.horaLlegada}-${prevP.horaFinVisita} hs en ${lugarPrevio}, ~${trEntreAmbos.minutos} min de traslado). Se sugiere proponer pasar a las ${horaLibrePostVecino} hs${cafeCercano ? ` o en ${cafeCercano.nombre}` : ''}.`;
 
-              mensajeReprogramacionCalendar = cafeCercano
-                ? `${nombreSaludo}\n\nTe pido disculpas porque no voy a llegar a cumplir con nuestro compromiso en *${destinoNombre}* a las ${horaConflictoTxt} hs como teníamos previsto.\n\nQuería proponerte dos opciones para reprogramarlo:\n1. Pasar 2 minutos por *${destinoNombre}* *alrededor de las ${horaLibrePostVecino} hs*.\n2. O bien encontrarnos unos minutos en ${fraseCafeParada}.\n\n¿Cuál te queda más cómoda? Gracias.`
-                : `${nombreSaludo}\n\nTe pido disculpas porque no voy a llegar a cumplir con nuestro compromiso en *${destinoNombre}* a las ${horaConflictoTxt} hs como teníamos previsto. ¿Te queda bien que pase 2 minutos por *${destinoNombre}* *alrededor de las ${horaLibrePostVecino} hs*, o en qué otro horario preferís? Gracias.`;
+              const esCompromisoPrevioOFechaHoy =
+                esContactoConfirmadoEnLista1a1(c) ||
+                Boolean(c.alertaVencido?.activa) ||
+                esRutaDeHoy;
+
+              mensajeReprogramacionCalendar = esCompromisoPrevioOFechaHoy
+                ? cafeCercano
+                  ? `${nombreSaludo}\n\nTe pido disculpas porque no voy a llegar a cumplir con nuestro compromiso en *${destinoNombre}* a las ${horaConflictoTxt} hs como teníamos previsto.\n\nQuería proponerte dos opciones para reprogramarlo:\n1. Pasar 2 minutos por *${destinoNombre}* *alrededor de las ${horaLibrePostVecino} hs*.\n2. O bien encontrarnos unos minutos en ${fraseCafeParada}.\n\n¿Cuál te queda más cómoda? Gracias.`
+                  : `${nombreSaludo}\n\nTe pido disculpas porque no voy a llegar a cumplir con nuestro compromiso en *${destinoNombre}* a las ${horaConflictoTxt} hs como teníamos previsto. ¿Te queda bien que pase 2 minutos por *${destinoNombre}* *alrededor de las ${horaLibrePostVecino} hs*, o en qué otro horario preferís? Gracias.`
+                : cafeCercano
+                ? `${nombreSaludo}\n\nVi que me indicaste a las ${horaConflictoTxt} hs por *${destinoNombre}*. Como en ese horario estoy en otro punto del recorrido por ${c.barrio}, quería proponerte dos alternativas bien cercanas para que calce:\n1. Pasar 2 minutos por *${destinoNombre}* *alrededor de las ${horaLibrePostVecino} hs*.\n2. O bien encontrarnos unos minutos en ${fraseCafeParada}.\n\n¿Cuál te queda más cómoda? Gracias.`
+                : `${nombreSaludo}\n\nVi que me indicaste a las ${horaConflictoTxt} hs por *${destinoNombre}*. Como en ese horario estoy en otro punto del recorrido por ${c.barrio}, ¿te queda bien que pase 2 minutos por *${destinoNombre}* *alrededor de las ${horaLibrePostVecino} hs*, o en qué otro horario preferís? Gracias.`;
               break;
             }
           }
@@ -993,8 +1006,13 @@ export function calcularHojaDeRuta(
 
       // Si esta parada de hoy era una cita puntual que ya venció en el pasado (ej. Laura 10:00 hs siendo las 10:18 hs),
       // la siguiente parada activa parte desde la hora actual (`ahoraSalMin`) y desde la base / ubicación actual.
-      if (esRutaDeHoy && citaPuntualYaVencidaHoy && finVisitaMin < minutosActualesBA) {
-        const salidaAhoraMin = Math.ceil(minutosActualesBA / 5) * 5;
+      if (
+        esRutaDeHoy &&
+        minutosActualesBA < 19 * 60 + 30 &&
+        citaPuntualYaVencidaHoy &&
+        finVisitaMin < minutosActualesBA
+      ) {
+        const salidaAhoraMin = Math.min(20 * 60, Math.ceil(minutosActualesBA / 5) * 5);
         cursorHora = sumarMinutosAHora('00:00', salidaAhoraMin);
         origenNombre = profile.direccionPartida;
         origenDireccionMaps = partidaResuelta.direccionMaps;
@@ -2077,9 +2095,10 @@ export function generarCorteEstrategicoLocal(
             : 'las ubicaciones están próximas en secuencia lineal'
         }, por lo que pasar por cada punto de ${horaInicioReal} a ${horaFinReal} hs maximiza la firma sin hacerlos trasladarse.`;
 
-    // Punto 10 y Punto 12 Calibración:
+    // Punto 10 y Punto 12 Calibración + Ajuste Zona Específica (Feedback-16 Video 214815):
     // - Pestaña "Aprovechar viaje: vecinos del mismo barrio sin dirección" (3. Falta Dir/Día)
     // - Pestaña "Aprovechar viaje: retiros de fichas extra en este barrio" (7. Retiro Fichas sin confirmar aún)
+    // Especificando las calles/esquinas del bloque y/o el Café HUB sugerido para no convocar a ciegas desde el otro extremo de barrios grandes como Palermo.
     const idsIncluidosSet = new Set(contactosOrdenadosCronologicamente.map((c) => c.id));
     const barrioNormBloque = normalizarBarrioCABA(barrioPrincipal);
     const refDiaAprovechar =
@@ -2088,6 +2107,58 @@ export function generarCorteEstrategicoLocal(
         : fechaClave === manianaBA.ddmm
         ? 'Mañana'
         : `El ${diaEtiqueta.toLowerCase()}`;
+
+    const callesUnicasBloque = Array.from(
+      new Set(
+        contactosOrdenadosCronologicamente
+          .map((c) => c.calleOCruce?.trim())
+          .filter((s): s is string => Boolean(s && s.length > 2 && !/^caba$/i.test(s)))
+      )
+    );
+    const resumenCallesBloque =
+      callesUnicasBloque.length > 0 ? callesUnicasBloque.slice(0, 2).join(' y ') : '';
+    const dirCortaCafeBloque = mejorCafe ? mejorCafe.direccion.split(',')[0].trim() : '';
+    const zonaEspecificaBloque = resumenCallesBloque
+      ? mejorCafe
+        ? `zona ${resumenCallesBloque} · Café ${mejorCafe.nombre} (${dirCortaCafeBloque})`
+        : `zona ${resumenCallesBloque}`
+      : mejorCafe
+      ? `zona Café ${mejorCafe.nombre} (${dirCortaCafeBloque})`
+      : barrioPrincipal;
+
+    const puntosReferenciaGeoBloque: Array<{ lat: number; lng: number }> = [
+      ...contactosOrdenadosCronologicamente
+        .filter((c) => typeof c.lat === 'number' && typeof c.lng === 'number')
+        .map((c) => ({ lat: c.lat, lng: c.lng })),
+      ...(mejorCafe && typeof mejorCafe.lat === 'number' && typeof mejorCafe.lng === 'number'
+        ? [{ lat: mejorCafe.lat, lng: mejorCafe.lng }]
+        : []),
+    ];
+
+    const calcularDistanciaMinimaABloque = (lat: number, lng: number) => {
+      if (puntosReferenciaGeoBloque.length === 0) {
+        return { minutosCaminando: 10, cuadrasAprox: 8 };
+      }
+      let mejorMin = Infinity;
+      let mejorCuadras = Infinity;
+      for (const pt of puntosReferenciaGeoBloque) {
+        const est = estimarMinutosCaminandoCABA(lat, lng, pt.lat, pt.lng);
+        if (est.minutosCaminando < mejorMin) {
+          mejorMin = est.minutosCaminando;
+          mejorCuadras = est.cuadrasAprox;
+        }
+      }
+      return {
+        minutosCaminando: Number.isFinite(mejorMin) ? mejorMin : 10,
+        cuadrasAprox: Number.isFinite(mejorCuadras) ? mejorCuadras : 8,
+      };
+    };
+
+    const fraseZonaAprovechar = resumenCallesBloque
+      ? `por *${barrioPrincipal}* (zona *${resumenCallesBloque}*)`
+      : mejorCafe
+      ? `por *${barrioPrincipal}* (zona *${dirCortaCafeBloque}*)`
+      : `por *${barrioPrincipal}*`;
 
     const vecinosMismoBarrioSinDireccion = noAdheridosTotales
       .filter((c) => {
@@ -2105,10 +2176,14 @@ export function generarCorteEstrategicoLocal(
       })
       .map((c) => {
         const saludo = c.sinNombre ? 'Hola, ¿cómo estás?' : `Hola, ${c.primerNombre}, ¿cómo estás?`;
+        const cierreSinDir = mejorCafe
+          ? `Si estás cerca de esa zona paso 2 minutos por tu dirección o podemos vernos en el café *${mejorCafe.nombre}* (*${dirCortaCafeBloque}*); y si estás en otra parte de ${barrioPrincipal}, pasame tu calle/altura o esquina así te sumo en el recorrido por tu cuadra.`
+          : `¿Por qué calle/altura o esquina de ${barrioPrincipal} estás así veo si me queda de paso en esa zona o te agendo en el recorrido por tu cuadra?`;
         return {
           contact: c,
           tipo: 'SIN_DIRECCION_BARRIO' as const,
-          mensajeWhatsAppSugerido: `${saludo} ${refDiaAprovechar} entre las *${horaInicioReal} y las ${horaFinReal} hs* voy a estar pasando por *${barrioPrincipal}* para las firmas de adhesión. ¿Por qué calle/altura o esquina estás así aprovecho el viaje y paso 2 minutos?`,
+          zonaReferencia: zonaEspecificaBloque,
+          mensajeWhatsAppSugerido: `${saludo} ${refDiaAprovechar} entre las *${horaInicioReal} y las ${horaFinReal} hs* voy a estar pasando ${fraseZonaAprovechar} para las firmas de adhesión. ${cierreSinDir}`,
         };
       });
 
@@ -2124,12 +2199,23 @@ export function generarCorteEstrategicoLocal(
       .map((c) => {
         const saludo = c.sinNombre ? 'Hola, ¿cómo estás?' : `Hola, ${c.primerNombre}, ¿cómo estás?`;
         const refLugar = c.calleOCruce?.trim() || barrioPrincipal;
+        const distRuta = calcularDistanciaMinimaABloque(c.lat, c.lng);
+        const cierreRetiro = mejorCafe
+          ? `paso 2 minutos por *${refLugar}* a retirarlas (o si te queda cómodo, vernos en el café *${mejorCafe.nombre}* en *${dirCortaCafeBloque}*)`
+          : `paso 2 minutos por *${refLugar}* a retirarlas`;
         return {
           contact: c,
           tipo: 'RETIRO_FICHAS_BARRIO' as const,
-          mensajeWhatsAppSugerido: `${saludo} ${refDiaAprovechar} entre las *${horaInicioReal} y las ${horaFinReal} hs* voy a estar pasando por *${barrioPrincipal}*. ¿Ya tenés listas las fichas extra firmadas así aprovecho que estoy en el barrio y paso 2 minutos por *${refLugar}* a retirarlas?`,
+          zonaReferencia: zonaEspecificaBloque,
+          minutosCaminandoDesdeRuta: distRuta.minutosCaminando,
+          cuadrasDesdeRuta: distRuta.cuadrasAprox,
+          mensajeWhatsAppSugerido: `${saludo} ${refDiaAprovechar} entre las *${horaInicioReal} y las ${horaFinReal} hs* voy a estar pasando ${fraseZonaAprovechar}. ¿Ya tenés listas las fichas extra firmadas así aprovecho que estoy por esa zona y ${cierreRetiro}?`,
         };
-      });
+      })
+      .sort(
+        (a, b) =>
+          (a.minutosCaminandoDesdeRuta ?? 99) - (b.minutosCaminandoDesdeRuta ?? 99)
+      );
 
     // Punto 8 Calibración ("Reservas fantasma"):
     // Contactos en HOY sin confirmar a <= 60 min de la hora de salida del bloque
@@ -2156,6 +2242,7 @@ export function generarCorteEstrategicoLocal(
       modalidadRecomendada,
       motivoRecomendacionModalidad,
       barrio: etiquetaBarrios,
+      zonaEspecificaBloque,
       puntoEncuentroODireccion,
       puntoCentricoResumen,
       franjaCompartidaResumen,

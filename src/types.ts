@@ -427,6 +427,9 @@ export interface SugerenciaAprovecharViajeItem {
   contact: Contact;
   tipo: 'SIN_DIRECCION_BARRIO' | 'RETIRO_FICHAS_BARRIO';
   mensajeWhatsAppSugerido: string;
+  zonaReferencia?: string;
+  minutosCaminandoDesdeRuta?: number;
+  cuadrasDesdeRuta?: number;
 }
 
 export interface ItemColaCorte {
@@ -481,6 +484,7 @@ export interface BloqueAgendaRecomendado {
   contactosIncluidos: Contact[];
   vecinosMismoBarrioSinDireccion?: SugerenciaAprovecharViajeItem[];
   retirosFichasMismoBarrioSugeridos?: SugerenciaAprovecharViajeItem[];
+  zonaEspecificaBloque?: string;
   contactosSinConfirmarATiempoHoy?: Contact[];
   modoLluviaActivo?: boolean;
 }

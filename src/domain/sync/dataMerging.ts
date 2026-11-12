@@ -1416,17 +1416,17 @@ export function registrarEnvioMensajeContacto(
         : 'PASO_DATOS_FALTA_CONFIRMAR';
     rspNuevo = 'Sí';
   } else if (tplEfectiva === 'confirmacion_visita') {
-    const esPropuestaPidiendoConfirmar =
-      plantillaEnviada === 'auto' &&
-      /confirmanos por ac|te paso la propuesta|¿te queda bien si paso|avisame si te queda bien/i.test(
+    const esMensajeConfirmacionCerrada =
+      plantillaEnviada === 'confirmacion_visita' &&
+      /dejar confirmado|queda confirmado|confirmar nuestro encuentro/i.test(msgLow) &&
+      !/\¿me confirm[aá]s|\¿te queda bien|\¿te queda c[oó]modo|\¿te viene bien|\¿pod[eé]s acercarte|\¿cu[aá]l te queda|quer[ií]a proponerte|te propongo/i.test(
         msgLow
-      ) &&
-      !/dejar confirmado|queda confirmado/i.test(msgLow);
-    estadoNuevo = esPropuestaPidiendoConfirmar
-      ? procActual.estadoFlujo === 'ENCUENTRO_CONFIRMADO'
-        ? 'ENCUENTRO_CONFIRMADO'
-        : 'PASO_DATOS_FALTA_CONFIRMAR'
-      : 'ENCUENTRO_CONFIRMADO';
+      );
+    estadoNuevo = esMensajeConfirmacionCerrada
+      ? 'ENCUENTRO_CONFIRMADO'
+      : procActual.estadoFlujo === 'ENCUENTRO_CONFIRMADO'
+      ? 'ENCUENTRO_CONFIRMADO'
+      : 'PASO_DATOS_FALTA_CONFIRMAR';
     rspNuevo = 'Sí';
   } else if (tplEfectiva === 'convocatoria_cafe_hub') {
     estadoNuevo =

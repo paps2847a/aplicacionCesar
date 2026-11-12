@@ -2079,13 +2079,20 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                   }
                                   className="w-full flex items-center justify-between gap-2 text-left cursor-pointer"
                                 >
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <span className="rounded-lg border border-[#323232] bg-[#FFF06B] px-2 py-0.5 text-[11px] font-black text-[#323232] shrink-0">
-                                      ✨ Aprovechar viaje
-                                    </span>
-                                    <span className="text-xs font-bold font-display text-[#323232] truncate">
-                                      {bloque.vecinosMismoBarrioSinDireccion.length} vecino(s) de {bloque.barrio} sin dirección (3. Falta Dir/Día)
-                                    </span>
+                                  <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 min-w-0">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span className="rounded-lg border border-[#323232] bg-[#FFF06B] px-2 py-0.5 text-[11px] font-black text-[#323232] shrink-0">
+                                        ✨ Aprovechar viaje
+                                      </span>
+                                      <span className="text-xs font-bold font-display text-[#323232] truncate">
+                                        {bloque.vecinosMismoBarrioSinDireccion.length} vecino(s) de {bloque.barrio} sin dirección (3. Falta Dir/Día)
+                                      </span>
+                                    </div>
+                                    {bloque.zonaEspecificaBloque && (
+                                      <span className="rounded-md border border-[#323232]/40 bg-white/90 px-2 py-0.5 text-[10px] font-bold text-[#323232] truncate">
+                                        📍 Recorrido en {bloque.zonaEspecificaBloque}
+                                      </span>
+                                    )}
                                   </div>
                                   <span className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[11px] font-bold text-[#323232] shrink-0">
                                     {openAprovecharSinDir[bloque.id] ? 'Ocultar' : 'Ver y escribir en 1 clic'}
@@ -2172,13 +2179,20 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                   }
                                   className="w-full flex items-center justify-between gap-2 text-left cursor-pointer"
                                 >
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <span className="rounded-lg border border-[#323232] bg-[#323232] px-2 py-0.5 text-[11px] font-black text-[#FFF06B] shrink-0">
-                                      📦 Retiro Fichas de paso
-                                    </span>
-                                    <span className="text-xs font-bold font-display text-[#323232] truncate">
-                                      {bloque.retirosFichasMismoBarrioSugeridos.length} vecino(s) con fichas extra en {bloque.barrio} (sin confirmar si están listas)
-                                    </span>
+                                  <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 min-w-0">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span className="rounded-lg border border-[#323232] bg-[#323232] px-2 py-0.5 text-[11px] font-black text-[#FFF06B] shrink-0">
+                                        📦 Aprovechar viaje · Retiro Fichas
+                                      </span>
+                                      <span className="text-xs font-bold font-display text-[#323232] truncate">
+                                        {bloque.retirosFichasMismoBarrioSugeridos.length} vecino(s) con fichas extra en {bloque.barrio} (sin confirmar si están listas)
+                                      </span>
+                                    </div>
+                                    {bloque.zonaEspecificaBloque && (
+                                      <span className="rounded-md border border-[#323232]/40 bg-white/90 px-2 py-0.5 text-[10px] font-bold text-[#323232] truncate">
+                                        📍 Recorrido en {bloque.zonaEspecificaBloque}
+                                      </span>
+                                    )}
                                   </div>
                                   <span className="inline-flex items-center gap-1 rounded-lg border border-[#323232] bg-white px-2 py-0.5 text-[11px] font-bold text-[#323232] shrink-0">
                                     {openAprovecharFichas[bloque.id] ? 'Ocultar' : 'Ver y consultar'}
@@ -2208,9 +2222,22 @@ export const PlanHoyModernView: React.FC<PlanHoyModernViewProps> = ({
                                             <span className="text-xs font-bold font-display text-[#323232] truncate">
                                               #{v.id} {v.nombreCompletoCorregido || v.nombre} ({v.calleOCruce || v.barrio})
                                             </span>
-                                            <span className="rounded bg-[#FFF06B] px-1.5 py-0.5 text-[10px] font-black text-[#323232] border border-[#323232]">
-                                              {v.fichasExtrasCantidad || 'X2'}
-                                            </span>
+                                            <div className="flex items-center gap-1 shrink-0">
+                                              {item.minutosCaminandoDesdeRuta !== undefined && (
+                                                <span
+                                                  className={`rounded px-1.5 py-0.5 text-[10px] font-bold border border-[#323232] ${
+                                                    item.minutosCaminandoDesdeRuta <= 15
+                                                      ? 'bg-[#D3F9D8] text-[#323232]'
+                                                      : 'bg-[#FFF5EE] text-[#323232]'
+                                                  }`}
+                                                >
+                                                  🚶 ~{item.minutosCaminandoDesdeRuta} min ({item.cuadrasDesdeRuta ?? Math.max(1, Math.round(item.minutosCaminandoDesdeRuta * 0.8))} cuadras)
+                                                </span>
+                                              )}
+                                              <span className="rounded bg-[#FFF06B] px-1.5 py-0.5 text-[10px] font-black text-[#323232] border border-[#323232]">
+                                                {v.fichasExtrasCantidad || 'X2'}
+                                              </span>
+                                            </div>
                                           </div>
                                           <p className="text-[11px] text-[#5A5955] line-clamp-2">
                                             &ldquo;{item.mensajeWhatsAppSugerido}&rdquo;
